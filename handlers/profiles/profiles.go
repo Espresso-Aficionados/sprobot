@@ -3,10 +3,26 @@ package profiles
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/bwmarrin/discordgo"
 )
+
+var (
+	prefix      = "!"
+	setCommands = []string{"set", "setprofile", "editprofile", "editespresso", "setespresso"}
+	getCommands = []string{"get", "getprofile", "getespresso"}
+)
+
+func checkForCommand(toCheck string, commandPrefix string, commands []string) bool {
+	for _, command := range commands {
+		if strings.HasPrefix(commandPrefix+command, toCheck) {
+			return true
+		}
+	}
+	return false
+}
 
 func Setup(ds *discordgo.Session) error {
 	p := &Profiles{
@@ -63,12 +79,7 @@ func (p *Profiles) getChannelForUser(ds *discordgo.Session, userID string) (stri
 	return userChannel.ID, nil
 }
 
-func (p *Profiles) onMessageCreate(ds *discordgo.Session, mc *discordgo.MessageCreate) {
-	// Ignore all messages created by the Bot account itself
-	if mc.Author.ID == ds.State.User.ID {
-		return
-	}
-
+func (p *Profiles) setProfile(ds *discordgo.Session, mc *discordgo.MessageCreate) {
 	userChannel, err := p.getChannelForUser(ds, mc.Author.ID)
 	if err != nil {
 		log.Println("Error creating new user channel: %w", err)
@@ -81,4 +92,29 @@ func (p *Profiles) onMessageCreate(ds *discordgo.Session, mc *discordgo.MessageC
 		return
 	}
 	log.Printf("Sent Message: %+v\n", msg)
+}
+
+func (p *Profiles) getProfile(ds *discordgo.Session, mc *discordgo.MessageCreate) {
+	msg, err := ds.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("Hello, <@%s>", mc.Author.ID))
+	if err != nil {
+		log.Printf("Error while sending message: %v", err)
+		return
+	}
+	log.Printf("Sent Message: %+v\n", msg)
+}
+
+func (p *Profiles) onMessageCreate(ds *discordgo.Session, mc *discordgo.MessageCreate) {
+	// Ignore all messages created by the Bot account itself
+	if mc.Author.ID == ds.State.User.ID {
+		return
+	}
+
+	log.Println(mc.Content)
+
+	// Handle set vs. get
+	if checkForCommand(mc.Content, prefix, setCommands) {
+		go p.setProfile(ds, mc)
+	} else if checkForCommand(mc.Content, prefix, getCommands) {
+		go p.getProfile(ds, mc)
+	}
 }
