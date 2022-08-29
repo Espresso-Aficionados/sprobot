@@ -1,4 +1,0 @@
-services:
-  sut:
-    build: .
-    command: python test/main.py
