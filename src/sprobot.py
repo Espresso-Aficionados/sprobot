@@ -1,10 +1,9 @@
-from dataclasses import dataclass
 import traceback
 
 import discord
 from discord import app_commands
 
-import boto3
+# import boto3
 
 
 # The guild in which this slash command will be registered.
@@ -13,23 +12,6 @@ TEST_GUILD = discord.Object(1013566342345019512)
 
 # client = boto3.client('s3', region_name='us-west-2')
 # client.upload_file('images/image_0.jpg', 'mybucket', 'image_0.jpg')
-
-
-@dataclass
-class Field:
-    Name: str
-    Placeholder: str
-    Style: discord.TextStyle
-    Image: bool
-
-# Images will be a link, users submit it, it gets uploaded to s3, we save that s3 link
-def ImageField(name: str, placeholder, ) -> Field:
-    return Field(name, P
-
-
-@dataclass
-class Template:
-    fields: List[Field]
 
 
 class MyClient(discord.Client):
@@ -122,11 +104,14 @@ async def editprofile(interaction: discord.Interaction):
         )
     )
 
-@client.tree.command(guild=TEST_GUILD, description="View yours or someone elses profile")
+
+@client.tree.command(
+    guild=TEST_GUILD, description="View yours or someone elses profile"
+)
 async def getprofile(interaction: discord.Interaction):
     # TODO: Accept username
     # TODO: ephemeral flag
-    # Build an embed of the profile and send it! Make it ephemeral? 
+    # Build an embed of the profile and send it! Make it ephemeral?
     await interaction.response.send_message()
 
 

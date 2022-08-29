@@ -17,9 +17,27 @@ jobs:
 
       - name: build an image
         run: docker buildx build . --load --tag sprobot-local-test
-      
-      - name: run tests against it
-        run: docker run sprobot-local-test pytest
+
+      - name: run tests+linters against it
+        run: docker run sprobot-local-test testing/run-tests.sh
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: build an image
+        run: docker buildx build . --load --tag sprobot-local-test
+
+      - name: run linters against it
+        run: docker run sprobot-local-test testing/run-linters.sh
 
   build:
     runs-on: ubuntu-latest
