@@ -1,8 +1,7 @@
 import discord
 from discord import app_commands
 
-from templates import ProfileTemplate, RoasterTemplate
-from commands import EditProfile
+from commands import get_commands
 
 # import boto3
 
@@ -36,34 +35,14 @@ class MyClient(discord.Client):
         await self.tree.sync(guild=TEST_GUILD)
 
 
-client = MyClient()
+def main() -> None:
+    client = MyClient()
 
+    for command in get_commands():
+        client.tree.add_command(command, guild=TEST_GUILD)
 
-@client.tree.command(guild=TEST_GUILD, description="Edit or Create your profile")
-async def editprofile(interaction: discord.Interaction) -> None:
-    # Send the modal with an instance of our `Feedback` class
-    # Since modals require an interaction, they cannot be done as a response to a text command.
-    # They can only be done as a response to either an application command or a button press.
-    await interaction.response.send_modal(EditProfile(template=ProfileTemplate))
-
-
-@client.tree.command(guild=TEST_GUILD, description="Edit or Create your profile")
-async def editroaster(interaction: discord.Interaction) -> None:
-    # Send the modal with an instance of our `Feedback` class
-    # Since modals require an interaction, they cannot be done as a response to a text command.
-    # They can only be done as a response to either an application command or a button press.
-    await interaction.response.send_modal(EditProfile(template=RoasterTemplate))
-
-
-@client.tree.command(
-    guild=TEST_GUILD, description="View yours or someone elses profile"
-)
-async def getprofile(interaction: discord.Interaction) -> None:
-    # TODO: Accept username
-    # TODO: ephemeral flag
-    # Build an embed of the profile and send it! Make it ephemeral?
-    await interaction.response.send_message()
+    client.run("NzY5MjkwMzU1NTcyODY3MDgy.GsMyp1.I6AVYxNbUIgDx5UCouLQeoHgBV-vtxsUEGrqAY")
 
 
 if __name__ == "__main__":
-    client.run("NzY5MjkwMzU1NTcyODY3MDgy.GsMyp1.I6AVYxNbUIgDx5UCouLQeoHgBV-vtxsUEGrqAY")
+    main()

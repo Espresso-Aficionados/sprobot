@@ -15,11 +15,15 @@ class Field:
 @dataclass
 class Template:
     Name: str
+    ShortName: str
+    Description: str
     Fields: List[Field]
 
 
 ProfileTemplate = Template(
     Name="Coffee Setup",
+    ShortName="profile",
+    Description="Edit or Create your profile",
     Fields=[
         Field(
             "Machine",
@@ -56,6 +60,8 @@ ProfileTemplate = Template(
 
 RoasterTemplate = Template(
     Name="Roasting Setup",
+    ShortName="roaster",
+    Description="Edit or Create your profile",
     Fields=[
         Field(
             "Roaster",
@@ -71,3 +77,5 @@ RoasterTemplate = Template(
         ),
     ],
 )
+
+all_templates = [ProfileTemplate, RoasterTemplate]

@@ -1,11 +1,12 @@
 import traceback
 import json
 import typing
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 import discord
+from discord import app_commands
 
-from templates import Template
+from templates import Template, all_templates
 from util import build_embed_for_template
 
 
@@ -36,6 +37,7 @@ class EditProfile(discord.ui.Modal):
             if type(child) == discord.ui.TextInput:
                 built_profile[child.label] = child.value
 
+        # Save the profile? Download the image, verify with filetype, save to s3, then save the new URL in the profile
         print(json.dumps(built_profile))
 
         await interaction.response.send_message(
@@ -53,3 +55,29 @@ class EditProfile(discord.ui.Modal):
 
         # Make sure we know what the error actually is
         traceback.print_tb(error.__traceback__)
+
+
+def get_commands() -> List[discord.app_commands.Command[Any, Any, Any]]:
+    results = []
+    for template in all_templates:
+
+        def geteditfunc(
+            template: Template,
+        ) -> discord.app_commands.Command[Any, Any, Any]:
+            async def editfunc(interaction: discord.Interaction) -> None:
+                await interaction.response.send_modal(EditProfile(template=template))
+
+            return (
+                app_commands.command(
+                    name="edit" + template.ShortName,
+                    description=template.Description,
+                )
+            )(editfunc)
+
+        def getgetfunc(template: Template) -> None:
+            # TODO: fetch profiles too
+            pass
+
+        results.append(geteditfunc(template))
+
+    return results
