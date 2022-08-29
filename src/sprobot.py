@@ -1,12 +1,8 @@
-import traceback
-import json
-import typing
-from typing import Dict
-
 import discord
 from discord import app_commands
 
-from templates import Template, ProfileTemplate, RoasterTemplate
+from templates import ProfileTemplate, RoasterTemplate
+from commands import EditProfile
 
 # import boto3
 
@@ -31,8 +27,8 @@ class MyClient(discord.Client):
         # to register application commands (slash commands in this case)
         self.tree = app_commands.CommandTree(self)
 
-    async def on_ready(self):
-        print(f"Logged in as {self.user} (ID: {self.user.id})")
+    async def on_ready(self) -> None:
+        print(f"Logged in as {self.user}")
         print("------")
 
     async def setup_hook(self) -> None:
@@ -40,67 +36,11 @@ class MyClient(discord.Client):
         await self.tree.sync(guild=TEST_GUILD)
 
 
-def build_embed_for_template(template: Template, profile: dict):
-    embed = discord.Embed(title=template.Name)
-    for field in template.Fields:
-        field_content = profile.get(field.Name, None)
-        if not field_content:
-            continue
-        embed.add_field(name=field.Name, value=field_content)
-    return embed
-
-
-class EditProfile(discord.ui.Modal):
-    # Our modal classes MUST subclass `discord.ui.Modal`,
-    # but the title can be whatever you want.
-
-    def __init__(self, template, *args, **kwargs):
-        # This must come before adding the children
-        super().__init__(title="Edit Profile", *args, **kwargs)
-
-        self.template = template
-
-        for field in template.Fields:
-            self.add_item(
-                discord.ui.TextInput(
-                    label=field.Name,
-                    placeholder=field.Placeholder,
-                    style=field.Style,
-                    max_length=1024,
-                    required=False,
-                )
-            )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        built_profile: Dict[str, str] = {}
-        for child in self.children:
-            if type(child) == discord.ui.TextInput:
-                built_profile[child.label] = child.value
-
-        print(json.dumps(built_profile))
-
-        await interaction.response.send_message(
-            embed=build_embed_for_template(self.template, built_profile),
-            ephemeral=True,
-        )
-
-    @typing.no_type_check  # on_error from Modal doesnt match the type signature of it's parent
-    async def on_error(
-        self, interaction: discord.Interaction, error: Exception
-    ) -> None:
-        await interaction.response.send_message(
-            "Oops! Something went wrong.", ephemeral=True
-        )
-
-        # Make sure we know what the error actually is
-        traceback.print_tb(error.__traceback__)
-
-
 client = MyClient()
 
 
 @client.tree.command(guild=TEST_GUILD, description="Edit or Create your profile")
-async def editprofile(interaction: discord.Interaction):
+async def editprofile(interaction: discord.Interaction) -> None:
     # Send the modal with an instance of our `Feedback` class
     # Since modals require an interaction, they cannot be done as a response to a text command.
     # They can only be done as a response to either an application command or a button press.
@@ -108,7 +48,7 @@ async def editprofile(interaction: discord.Interaction):
 
 
 @client.tree.command(guild=TEST_GUILD, description="Edit or Create your profile")
-async def editroaster(interaction: discord.Interaction):
+async def editroaster(interaction: discord.Interaction) -> None:
     # Send the modal with an instance of our `Feedback` class
     # Since modals require an interaction, they cannot be done as a response to a text command.
     # They can only be done as a response to either an application command or a button press.
@@ -118,7 +58,7 @@ async def editroaster(interaction: discord.Interaction):
 @client.tree.command(
     guild=TEST_GUILD, description="View yours or someone elses profile"
 )
-async def getprofile(interaction: discord.Interaction):
+async def getprofile(interaction: discord.Interaction) -> None:
     # TODO: Accept username
     # TODO: ephemeral flag
     # Build an embed of the profile and send it! Make it ephemeral?
