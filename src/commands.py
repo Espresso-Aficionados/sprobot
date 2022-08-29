@@ -6,6 +6,7 @@ from typing import Dict, Any, List
 import discord
 from discord import app_commands
 
+import backend
 from templates import Template, all_templates
 from util import build_embed_for_template
 
@@ -34,8 +35,11 @@ class EditProfile(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         built_profile: Dict[str, str] = {}
         for child in self.children:
-            if type(child) == discord.ui.TextInput:
-                built_profile[child.label] = child.value
+            if type(child) != discord.ui.TextInput:
+                continue
+            built_profile[child.label] = child.value
+
+        backend.save_profile(self.template, built_profile)
 
         # Save the profile? Download the image, verify with filetype, save to s3, then save the new URL in the profile
         print(json.dumps(built_profile))
