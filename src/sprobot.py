@@ -1,7 +1,12 @@
 import traceback
+import json
+import typing
+from typing import Dict
 
 import discord
 from discord import app_commands
+
+from templates import Template, ProfileTemplate, RoasterTemplate
 
 # import boto3
 
@@ -35,50 +40,51 @@ class MyClient(discord.Client):
         await self.tree.sync(guild=TEST_GUILD)
 
 
+def build_embed_for_template(template: Template, profile: dict):
+    embed = discord.Embed(title=template.Name)
+    for field in template.Fields:
+        field_content = profile.get(field.Name, None)
+        if not field_content:
+            continue
+        embed.add_field(name=field.Name, value=field_content)
+    return embed
+
+
 class EditProfile(discord.ui.Modal):
     # Our modal classes MUST subclass `discord.ui.Modal`,
     # but the title can be whatever you want.
 
-    def __init__(self, formFill, title="Edit Profile", *args, **kwargs):
+    def __init__(self, template, *args, **kwargs):
         # This must come before adding the children
-        super().__init__(title=title, *args, **kwargs)
+        super().__init__(title="Edit Profile", *args, **kwargs)
 
-        # This will be a short input, where the user can enter their name
-        # It will also have a placeholder, as denoted by the `placeholder` kwarg.
-        # By default, it is required and is a short-style input which is exactly
-        # what we want.
-        self.add_item(
-            discord.ui.TextInput(
-                label="Name",
-                placeholder="Your name here...",
-            )
-        )
+        self.template = template
 
-        # This is a longer, paragraph style input, where user can submit feedback
-        # Unlike the name, it is not required. If filled out, however, it will
-        # only accept a maximum of 300 characters, as denoted by the
-        # `max_length=300` kwarg.
-        self.add_item(
-            discord.ui.TextInput(
-                label="What do you think of this new feature?",
-                style=discord.TextStyle.long,
-                placeholder="Type your feedback here...",
-                required=False,
-                default="This is a big test?",
-                max_length=300,
+        for field in template.Fields:
+            self.add_item(
+                discord.ui.TextInput(
+                    label=field.Name,
+                    placeholder=field.Placeholder,
+                    style=field.Style,
+                    max_length=1024,
+                    required=False,
+                )
             )
-        )
 
     async def on_submit(self, interaction: discord.Interaction):
+        built_profile: Dict[str, str] = {}
         for child in self.children:
-            print(child.label, child.value)
+            if type(child) == discord.ui.TextInput:
+                built_profile[child.label] = child.value
 
-        # TODO: Use the same tools to send the profile back to them, make it ephemeral
+        print(json.dumps(built_profile))
+
         await interaction.response.send_message(
-            f"Thanks for your feedback, {interaction.user.name}!",
+            embed=build_embed_for_template(self.template, built_profile),
             ephemeral=True,
         )
 
+    @typing.no_type_check  # on_error from Modal doesnt match the type signature of it's parent
     async def on_error(
         self, interaction: discord.Interaction, error: Exception
     ) -> None:
@@ -98,11 +104,15 @@ async def editprofile(interaction: discord.Interaction):
     # Send the modal with an instance of our `Feedback` class
     # Since modals require an interaction, they cannot be done as a response to a text command.
     # They can only be done as a response to either an application command or a button press.
-    await interaction.response.send_modal(
-        EditProfile(
-            formFill=f"{interaction.user.name}#{interaction.user.discriminator}",
-        )
-    )
+    await interaction.response.send_modal(EditProfile(template=ProfileTemplate))
+
+
+@client.tree.command(guild=TEST_GUILD, description="Edit or Create your profile")
+async def editroaster(interaction: discord.Interaction):
+    # Send the modal with an instance of our `Feedback` class
+    # Since modals require an interaction, they cannot be done as a response to a text command.
+    # They can only be done as a response to either an application command or a button press.
+    await interaction.response.send_modal(EditProfile(template=RoasterTemplate))
 
 
 @client.tree.command(
