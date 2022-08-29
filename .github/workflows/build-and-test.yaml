@@ -1,10 +1,6 @@
 name: sprobot build & test
 
-on:
-  push:
-    branches:
-      - main
-      - 'releases/**'
+on: [push]
 
 jobs:
   test:
