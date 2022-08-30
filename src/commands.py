@@ -1,15 +1,28 @@
 import traceback
 import json
 import typing
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
 import discord
 from discord import app_commands
 from fuzzywuzzy import process
+import cachetools
 
 import backend
 from templates import Template, all_templates
 from util import build_embed_for_template
+
+AUTOCOMPLETE_CACHE_TTL = 5
+AUTOCOMPLETE_CACHE_SIZE = 500
+
+AUTOCOMPLETE_CACHE = cachetools.TLRUCache(
+    maxsize=AUTOCOMPLETE_CACHE_SIZE,
+    ttu=lambda _, v, n: n + timedelta(minutes=AUTOCOMPLETE_CACHE_TTL),
+    timer=datetime.now,
+)
+
+GET_USERS_CACHE = cachetools.TTLCache(maxsize=500, ttl=60)
 
 
 class EditProfile(discord.ui.Modal):
@@ -68,20 +81,45 @@ async def member_autocomplete(
 ) -> List[app_commands.Choice[str]]:
     if current == "":
         return []
+
+    return _filter_users(interaction, current)
+
+
+def _autocomplete_cache_key(interaction: discord.Interaction, current: str):
+    return cachetools.keys.hashkey(current)
+
+
+@cachetools.cached(cache=AUTOCOMPLETE_CACHE, key=_autocomplete_cache_key)
+def _filter_users(
+    interaction: discord.Interaction, current: str
+) -> List[app_commands.Choice[str]]:
+    return [
+        app_commands.Choice(name=name[0], value=name[0])
+        for name in process.extract(current, _get_users(interaction), limit=10)
+    ]
+
+
+def _get_users_key(interaction: discord.Interaction):
+    if interaction.guild:
+        return cachetools.keys.hashkey(interaction.guild.id)
+    else:
+        return cachetools.keys.hashkey(None)
+
+
+@cachetools.cached(cache=GET_USERS_CACHE, key=_get_users_key)
+def _get_users(
+    interaction: discord.Interaction,
+) -> List[str]:
     if not interaction.guild:
         return []
 
-    # This should probably be cached somewhere, or disabled, especially for big guilds
     choices = []
     for member in interaction.guild.members:
         if member.nick:
             choices.append(member.nick + "#" + member.discriminator)
         choices.append(member.name + "#" + member.discriminator)
 
-    return [
-        app_commands.Choice(name=name[0], value=name[0])
-        for name in process.extract(current, choices, limit=5)
-    ]
+    return choices
 
 
 def get_commands() -> List[discord.app_commands.Command[Any, Any, Any]]:
