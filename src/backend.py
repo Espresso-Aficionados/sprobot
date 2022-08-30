@@ -7,6 +7,10 @@ from templates import Template
 import requests
 import filetype  # type: ignore
 
+# import boto3
+# client = boto3.client('s3', region_name='us-west-2')
+# client.upload_file('images/image_0.jpg', 'mybucket', 'image_0.jpg')
+
 
 def save_profile(template: Template, profile: Dict[str, str]) -> None:
     for field in template.Fields:

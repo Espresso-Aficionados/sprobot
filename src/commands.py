@@ -1,10 +1,11 @@
 import traceback
 import json
 import typing
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import discord
 from discord import app_commands
+from fuzzywuzzy import process
 
 import backend
 from templates import Template, all_templates
@@ -61,6 +62,28 @@ class EditProfile(discord.ui.Modal):
         traceback.print_tb(error.__traceback__)
 
 
+async def member_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> List[app_commands.Choice[str]]:
+    if current == "":
+        return []
+    if not interaction.guild:
+        return []
+
+    # This should probably be cached somewhere, or disabled, especially for big guilds
+    choices = []
+    for member in interaction.guild.members:
+        if member.nick:
+            choices.append(member.nick + "#" + member.discriminator)
+        choices.append(member.name + "#" + member.discriminator)
+
+    return [
+        app_commands.Choice(name=name[0], value=name[0])
+        for name in process.extract(current, choices, limit=5)
+    ]
+
+
 def get_commands() -> List[discord.app_commands.Command[Any, Any, Any]]:
     results = []
     for template in all_templates:
@@ -78,10 +101,26 @@ def get_commands() -> List[discord.app_commands.Command[Any, Any, Any]]:
                 )
             )(editfunc)
 
-        def getgetfunc(template: Template) -> None:
-            # TODO: fetch profiles too
-            pass
-
         results.append(geteditfunc(template))
+
+        def getgetfunc(
+            template: Template,
+        ) -> discord.app_commands.Command[Any, Any, Any]:
+            @app_commands.autocomplete(name=member_autocomplete)
+            async def editfunc(
+                interaction: discord.Interaction, name: Optional[str]
+            ) -> None:
+                await interaction.response.send_modal(
+                    EditProfile(template=template)
+                )  # TODO: this should be GetProfile
+
+            return (
+                app_commands.command(
+                    name="get" + template.ShortName,
+                    description=template.Description,
+                )
+            )(editfunc)
+
+        results.append(getgetfunc(template))
 
     return results

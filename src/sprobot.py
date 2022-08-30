@@ -3,15 +3,7 @@ from discord import app_commands
 
 from commands import get_commands
 
-# import boto3
-
-
-# The guild in which this slash command will be registered.
-# It is recommended to have a test guild to separate from your "production" bot
 TEST_GUILD = discord.Object(1013566342345019512)
-
-# client = boto3.client('s3', region_name='us-west-2')
-# client.upload_file('images/image_0.jpg', 'mybucket', 'image_0.jpg')
 
 
 class MyClient(discord.Client):
