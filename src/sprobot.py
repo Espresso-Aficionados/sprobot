@@ -12,6 +12,7 @@ class MyClient(discord.Client):
         # We don't need a `commands.Bot` instance because we are not
         # creating text-based commands.
         intents = discord.Intents.default()
+        intents.members = True
         super().__init__(intents=intents)
 
         # We need an `discord.app_commands.CommandTree` instance
