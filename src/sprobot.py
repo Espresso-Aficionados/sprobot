@@ -1,9 +1,9 @@
+import os
+
 import discord
 from discord import app_commands
 
 from commands import get_commands
-
-TEST_GUILD = discord.Object(1013566342345019512)
 
 
 class MyClient(discord.Client):
@@ -32,7 +32,7 @@ class MyClient(discord.Client):
 
 def main() -> None:
     client = MyClient()
-    client.run("NzY5MjkwMzU1NTcyODY3MDgy.GsMyp1.I6AVYxNbUIgDx5UCouLQeoHgBV-vtxsUEGrqAY")
+    client.run(os.environ.get("SPROBOT_DISCORD_TOKEN"))
 
 
 if __name__ == "__main__":
