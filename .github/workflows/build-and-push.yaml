@@ -29,5 +29,6 @@ jobs:
         run: |
           docker buildx build --push \
             --tag sadbox/sprobot:latest \
+            --target prod \
             --platform linux/amd64,linux/arm64 .
 

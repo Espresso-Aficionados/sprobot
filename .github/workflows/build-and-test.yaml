@@ -16,10 +16,10 @@ jobs:
         uses: docker/setup-buildx-action@v2
 
       - name: build an image
-        run: docker buildx build . --load --tag sprobot-local-test
+        run: docker buildx build . --target test --load --tag sprobot-local-test
 
       - name: run tests+linters against it
-        run: docker run sprobot-local-test testing/run-tests.sh
+        run: docker run sprobot-local-test
 
   lint:
     runs-on: ubuntu-latest
@@ -34,7 +34,7 @@ jobs:
         uses: docker/setup-buildx-action@v2
 
       - name: build an image
-        run: docker buildx build . --load --tag sprobot-local-test
+        run: docker buildx build . --target lint --load --tag sprobot-local-lint
 
       - name: run linters against it
-        run: docker run sprobot-local-test testing/run-linters.sh
+        run: docker run sprobot-local-lint
