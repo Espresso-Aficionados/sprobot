@@ -87,7 +87,10 @@ async def member_autocomplete(
 
 
 def _autocomplete_cache_key(interaction: discord.Interaction, current: str):
-    return cachetools.keys.hashkey(current)
+    if interaction.guild:
+        return cachetools.keys.hashkey(interaction.guild.id, current)
+    else:
+        return cachetools.keys.hashkey(current)
 
 
 @cachetools.cached(cache=AUTOCOMPLETE_CACHE, key=_autocomplete_cache_key)
