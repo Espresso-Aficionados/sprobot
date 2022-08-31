@@ -3,7 +3,6 @@
 
 Espresso Discord Profile Bot
 
-## For Contributors:
 
 ## Quickstart:
 
@@ -14,6 +13,8 @@ Run the container itself by using `./run.sh`. This should automatically build an
 multiarch deployments are automatically built and pushed to dockerhub at [sadbox/sprobot](https://hub.docker.com/repository/docker/sadbox/sprobot) once a commit makes it to main. 
 
 Keep dev/test-only dependencies in requirements-dev.txt, and production-necessary dependencies in requirements.txt. 
+
+## For Contributors:
 
 ### Style:
 This repository uses the [Black](https://github.com/psf/black) automatic formatter. 
