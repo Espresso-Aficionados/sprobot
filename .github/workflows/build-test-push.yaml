@@ -1,4 +1,4 @@
-name: sprobot build & test
+name: sprobot build, test, and maybe push
 
 on:
   push:
