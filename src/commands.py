@@ -3,6 +3,7 @@ import json
 import typing
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
+from collections import defaultdict
 
 import discord
 from discord import app_commands
@@ -122,43 +123,46 @@ def _get_users(
     return choices
 
 
-def get_commands() -> List[discord.app_commands.Command[Any, Any, Any]]:
-    results = []
-    for template in all_templates:
+def get_commands() -> Dict[int, List[discord.app_commands.Command[Any, Any, Any]]]:
+    results = defaultdict(list)
+    for guild_id, templates in all_templates.items():
+        for template in templates:
 
-        def geteditfunc(
-            template: Template,
-        ) -> discord.app_commands.Command[Any, Any, Any]:
-            async def editfunc(interaction: discord.Interaction) -> None:
-                await interaction.response.send_modal(EditProfile(template=template))
+            def geteditfunc(
+                template: Template,
+            ) -> discord.app_commands.Command[Any, Any, Any]:
+                async def editfunc(interaction: discord.Interaction) -> None:
+                    await interaction.response.send_modal(
+                        EditProfile(template=template)
+                    )
 
-            return (
-                app_commands.command(
-                    name="edit" + template.ShortName,
-                    description=template.Description,
-                )
-            )(editfunc)
+                return (
+                    app_commands.command(
+                        name="edit" + template.ShortName,
+                        description=template.Description,
+                    )
+                )(editfunc)
 
-        results.append(geteditfunc(template))
+            results[guild_id].append(geteditfunc(template))
 
-        def getgetfunc(
-            template: Template,
-        ) -> discord.app_commands.Command[Any, Any, Any]:
-            @app_commands.autocomplete(name=member_autocomplete)
-            async def editfunc(
-                interaction: discord.Interaction, name: Optional[str]
-            ) -> None:
-                await interaction.response.send_modal(
-                    EditProfile(template=template)
-                )  # TODO: this should be GetProfile
+            def getgetfunc(
+                template: Template,
+            ) -> discord.app_commands.Command[Any, Any, Any]:
+                @app_commands.autocomplete(name=member_autocomplete)
+                async def editfunc(
+                    interaction: discord.Interaction, name: Optional[str]
+                ) -> None:
+                    await interaction.response.send_modal(
+                        EditProfile(template=template)
+                    )  # TODO: this should be GetProfile
 
-            return (
-                app_commands.command(
-                    name="get" + template.ShortName,
-                    description=template.Description,
-                )
-            )(editfunc)
+                return (
+                    app_commands.command(
+                        name="get" + template.ShortName,
+                        description=template.Description,
+                    )
+                )(editfunc)
 
-        results.append(getgetfunc(template))
+            results[guild_id].append(getgetfunc(template))
 
     return results

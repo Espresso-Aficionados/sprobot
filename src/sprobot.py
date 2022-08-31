@@ -23,16 +23,15 @@ class MyClient(discord.Client):
         print("------")
 
     async def setup_hook(self) -> None:
-        # Sync the application command with Discord.
-        await self.tree.sync(guild=TEST_GUILD)
+        for guild_id, commands in get_commands().items():
+            guild = discord.Object(guild_id)
+            for command in commands:
+                self.tree.add_command(command, guild=guild)
+            await self.tree.sync(guild=guild)
 
 
 def main() -> None:
     client = MyClient()
-
-    for command in get_commands():
-        client.tree.add_command(command, guild=TEST_GUILD)
-
     client.run("NzY5MjkwMzU1NTcyODY3MDgy.GsMyp1.I6AVYxNbUIgDx5UCouLQeoHgBV-vtxsUEGrqAY")
 
 
