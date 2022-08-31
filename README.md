@@ -1,5 +1,5 @@
 # sprobot
-[![sprobot build & test](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/build-and-test.yaml/badge.svg)](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/build-and-test.yaml)
+[![sprobot build, test, and maybe push](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/build-test-push.yaml/badge.svg?branch=main)](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/build-test-push.yaml)
 
 Espresso Discord Profile Bot
 
