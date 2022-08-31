@@ -1,12 +1,8 @@
 discord.py==2.0.1
 boto3==1.24.61
-pytest==7.1.2
-flake8==5.0.4
-flake8-black==0.3.3
 requests==2.28.1
 types-requests==2.28.9
 filetype==1.1.0
 fuzzywuzzy[speedup]==0.18.0
-pytype==2022.8.23
 cachetools==5.2.0
 types-cachetools==5.2.0
