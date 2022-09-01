@@ -1,7 +1,6 @@
 from typing import Dict, Optional
 import tempfile
 import json
-import shutil
 import os.path
 from urllib.parse import urljoin, quote
 
@@ -40,7 +39,7 @@ def fetch_profile(
         )
 
         return json.loads(obj["Body"].read())
-    except S3_CLIENT.exceptions.NoSuchKey as e:
+    except S3_CLIENT.exceptions.NoSuchKey:
         # Normalize this to a simple KeyError
         raise KeyError("User profile not found")
 

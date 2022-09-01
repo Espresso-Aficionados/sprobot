@@ -39,11 +39,14 @@ class EditProfile(discord.ui.Modal):
 
         self.template = template
 
-        user_profile = dict()
+        user_profile = None
         try:
             user_profile = backend.fetch_profile(template, guild_id, user_id)
         except KeyError:  # It's ok if we don't get anything
             pass
+
+        if not user_profile:  # use an empty one if we didn't find one
+            user_profile = dict()
 
         for field in template.Fields:
             self.add_item(
@@ -199,7 +202,7 @@ def get_commands() -> Dict[int, List[discord.app_commands.Command[Any, Any, Any]
                         if not user_id:
                             if not name:
                                 await interaction.response.send_message(
-                                    f"Whoops! Unable to find a profile for you.",
+                                    "Whoops! Unable to find a profile for you.",
                                     ephemeral=True,
                                 )
                             else:
@@ -219,7 +222,7 @@ def get_commands() -> Dict[int, List[discord.app_commands.Command[Any, Any, Any]
                             f"Whoops! Unable to find a profile for {name}.",
                             ephemeral=True,
                         )
-                    except Exception as error:
+                    except Exception:
                         await interaction.response.send_message(
                             "Oops! Something went wrong.", ephemeral=True
                         )
