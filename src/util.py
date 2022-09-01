@@ -13,6 +13,8 @@ def build_embed_for_template(
         field_content = profile.get(field.Name, None)
         if not field_content:
             continue
-        embed.add_field(name=field.Name, value=field_content)
-    embed.set_image(url="https://i.imgur.com/uwl3sj9.jpeg")
+        if field.Image:
+            embed.set_image(url=field_content)
+        else:
+            embed.add_field(name=field.Name, value=field_content)
     return embed
