@@ -2,6 +2,7 @@ import os
 
 import discord
 from discord import app_commands
+import structlog
 
 from commands import get_commands
 
@@ -20,8 +21,8 @@ class MyClient(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def on_ready(self) -> None:
-        print(f"Logged in as {self.user}")
-        print("------")
+        log = structlog.get_logger()
+        log.info(f"Logged in as {self.user}", user=self.user)
 
     async def setup_hook(self) -> None:
         for guild_id, commands in get_commands().items():

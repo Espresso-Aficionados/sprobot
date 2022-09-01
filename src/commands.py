@@ -8,12 +8,13 @@ from collections import defaultdict
 
 import discord
 from discord import app_commands
-from fuzzywuzzy import process
+from thefuzz import process
+import structlog
 import cachetools
 
 import backend
 from templates import Template, all_templates
-from util import build_embed_for_template
+from util import build_embed_for_template, get_nick_or_name
 
 AUTOCOMPLETE_CACHE_TTL = 5
 AUTOCOMPLETE_CACHE_SIZE = 500
@@ -59,21 +60,41 @@ class EditProfile(discord.ui.Modal):
             )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        log = structlog.get_logger()
         built_profile: Dict[str, str] = {}
         for child in self.children:
             if type(child) != discord.ui.TextInput:
+                log.info(
+                    "Unused Child",
+                    child=child,
+                    child_type=type(child),
+                    user_id=interaction.user.id,
+                    template=self.template.Name,
+                    guild_id=interaction.guild.id,
+                )
                 continue
             built_profile[child.label] = child.value
 
-        await backend.save_profile(
+        log.info(
+            "Raw profile",
+            profile=json.dumps(built_profile),
+            user_id=interaction.user.id,
+            template=self.template.Name,
+            guild_id=interaction.guild.id,
+        )
+
+        weburl, error = await backend.save_profile(
             self.template, interaction.guild.id, interaction.user.id, built_profile
         )
 
-        # Save the profile? Download the image, verify with filetype, save to s3, then save the new URL in the profile
-        print(json.dumps(built_profile))
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
 
         await interaction.response.send_message(
-            embed=build_embed_for_template(self.template, built_profile)
+            embed=build_embed_for_template(
+                self.template, get_nick_or_name(interaction.user), built_profile
+            )
         )
 
     @typing.no_type_check  # on_error from Modal doesnt match the type signature of it's parent
@@ -155,8 +176,17 @@ def _getgetfunc(
     )
     @app_commands.autocomplete(name=member_autocomplete)
     async def getfunc(interaction: discord.Interaction, name: Optional[str]) -> None:
+        log = structlog.get_logger()
+        log.info(
+            "Processing saveimage",
+            nick=f"{get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
+            user_id=interaction.user.id,
+            template=template.Name,
+            guild_id=interaction.guild.id,
+        )
         try:
             user_id = None
+            user_name = None
             if name:
                 possible_name_and_discrim = get_single_user(interaction, name)
                 (
@@ -170,9 +200,11 @@ def _getgetfunc(
                 )
                 if possible_member:
                     user_id = possible_member.id
+                    user_name = get_nick_or_name(possible_member)
 
             else:
                 user_id = interaction.user.id
+                user_name = get_nick_or_name(interaction.user)
 
             if not user_id:
                 if not name:
@@ -190,7 +222,7 @@ def _getgetfunc(
                 template, interaction.guild.id, user_id
             )
             await interaction.response.send_message(
-                embed=build_embed_for_template(template, user_profile),
+                embed=build_embed_for_template(template, user_name, user_profile),
             )
         except KeyError:
             await interaction.response.send_message(
@@ -214,6 +246,14 @@ def _geteditfunc(
         description=template.Description,
     )
     async def editfunc(interaction: discord.Interaction) -> None:
+        log = structlog.get_logger()
+        log.info(
+            "Processing edit",
+            nick=f"{get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
+            user_id=interaction.user.id,
+            template=template.Name,
+            guild_id=interaction.guild.id,
+        )
         user_profile = None
         try:
             user_profile = await backend.fetch_profile(
@@ -227,11 +267,111 @@ def _geteditfunc(
     return editfunc
 
 
+def _getsavemenu(
+    guild_id: int, template: Template
+) -> discord.app_commands.Command[Any, Any, Any]:
+    @app_commands.context_menu(
+        name=f"Save as {template.Name} Image",
+    )
+    async def saveimage(
+        interaction: discord.Interaction, message: discord.Message
+    ) -> None:
+        try:
+            log = structlog.get_logger()
+            log.info(
+                "Processing saveimage",
+                nick=f"{get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
+                user_id=interaction.user.id,
+                template=template.Name,
+                guild_id=interaction.guild.id,
+            )
+
+            user_profile = None
+            try:
+                user_profile = await backend.fetch_profile(
+                    template, guild_id, interaction.user.id
+                )
+            except KeyError:  # It's ok if we don't get anything
+                pass
+            if not user_profile:
+                user_profile = dict()
+
+            found_attachment = False
+            found_video_error = ""
+            for attachment in message.attachments:
+                if attachment.content_type.startswith("image/"):
+                    log.info(
+                        "Found image in attachments",
+                        image_url=attachment.proxy_url,
+                        user_id=interaction.user.id,
+                        template=template.Name,
+                        guild_id=interaction.guild.id,
+                    )
+                    for field in template.Fields:
+                        if field.Image:
+                            user_profile[field.Name] = attachment.proxy_url
+                elif attachment.content_type.startswith("video/"):
+                    found_video_error = (
+                        f"It looks like that attachment was a "
+                        f"video ({attachment.content_type}), "
+                        "we can only use images."
+                    )
+
+            for embed in message.embeds:
+                if embed.image:
+                    if embed.image.proxy_url:
+                        for field in template.Fields:
+                            if field.Image:
+                                user_profile[field.Name] = embed.image.proxy_url
+                                log.info(
+                                    "Found image in embeds",
+                                    image_url=embed.image.proxy_url,
+                                    user_id=interaction.user.id,
+                                    template=template.Name,
+                                    guild_id=interaction.guild.id,
+                                )
+
+            if found_video_error and not found_attachment:
+                await interaction.response.send_message(
+                    found_video_error, ephemeral=True
+                )
+                return
+
+            if not found_attachment:
+                await interaction.response.send_message(
+                    "I didn't find an image to save in that post :(", ephemeral=True
+                )
+                return
+
+            web_url, error = await backend.save_profile(
+                template, interaction.guild.id, interaction.user.id, user_profile
+            )
+
+            if error:
+                await interaction.response.send_message(error, ephemeral=True)
+                return
+
+            await interaction.response.send_message(
+                embed=build_embed_for_template(
+                    template, get_nick_or_name(interaction.user), user_profile
+                ),
+            )
+
+        except Exception:
+            await interaction.response.send_message(
+                "Oops! Something went wrong.", ephemeral=True
+            )
+            traceback.print_exception(*sys.exc_info())
+
+    return saveimage
+
+
 def get_commands() -> Dict[int, List[discord.app_commands.Command[Any, Any, Any]]]:
     results = defaultdict(list)
     for guild_id, templates in all_templates.items():
         for template in templates:
             results[guild_id].append(_geteditfunc(guild_id, template))
             results[guild_id].append(_getgetfunc(template))
+            results[guild_id].append(_getsavemenu(guild_id, template))
 
     return results
