@@ -32,21 +32,19 @@ class EditProfile(discord.ui.Modal):
     # but the title can be whatever you want.
 
     def __init__(
-        self, guild_id: int, user_id: int, template: Template, *args: Any, **kwargs: Any
+        self,
+        template: Template,
+        profile: Optional[Dict[str, str]],
+        *args: Any,
+        **kwargs: Any,
     ):
         # This must come before adding the children
         super().__init__(title="Edit Profile", *args, **kwargs)
 
         self.template = template
 
-        user_profile = None
-        try:
-            user_profile = backend.fetch_profile(template, guild_id, user_id)
-        except KeyError:  # It's ok if we don't get anything
-            pass
-
-        if not user_profile:  # use an empty one if we didn't find one
-            user_profile = dict()
+        if not profile:  # use an empty one if we didn't find one
+            profile = dict()
 
         for field in template.Fields:
             self.add_item(
@@ -56,7 +54,7 @@ class EditProfile(discord.ui.Modal):
                     style=field.Style,
                     max_length=1024,
                     required=False,
-                    default=user_profile.get(field.Name),
+                    default=profile.get(field.Name),
                 )
             )
 
@@ -75,8 +73,7 @@ class EditProfile(discord.ui.Modal):
         print(json.dumps(built_profile))
 
         await interaction.response.send_message(
-            embed=build_embed_for_template(self.template, built_profile),
-            ephemeral=True,
+            embed=build_embed_for_template(self.template, built_profile)
         )
 
     @typing.no_type_check  # on_error from Modal doesnt match the type signature of it's parent
@@ -149,92 +146,92 @@ def _get_users(
     return choices
 
 
+def _getgetfunc(
+    template: Template,
+) -> discord.app_commands.Command[Any, Any, Any]:
+    @app_commands.command(
+        name="get" + template.ShortName,
+        description=template.Description,
+    )
+    @app_commands.autocomplete(name=member_autocomplete)
+    async def getfunc(interaction: discord.Interaction, name: Optional[str]) -> None:
+        try:
+            user_id = None
+            if name:
+                possible_name_and_discrim = get_single_user(interaction, name)
+                (
+                    possible_name,
+                    possible_discrim,
+                ) = possible_name_and_discrim.rsplit("#", 1)
+                possible_member = discord.utils.get(
+                    interaction.guild.members,
+                    name=possible_name,
+                    discriminator=possible_discrim,
+                )
+                if possible_member:
+                    user_id = possible_member.id
+
+            else:
+                user_id = interaction.user.id
+
+            if not user_id:
+                if not name:
+                    await interaction.response.send_message(
+                        "Whoops! Unable to find a profile for you.",
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.response.send_message(
+                        f"Whoops! Unable to find a id for {name}.",
+                        ephemeral=True,
+                    )
+
+            user_profile = await backend.fetch_profile(
+                template, interaction.guild.id, user_id
+            )
+            await interaction.response.send_message(
+                embed=build_embed_for_template(template, user_profile),
+            )
+        except KeyError:
+            await interaction.response.send_message(
+                f"Whoops! Unable to find a profile for {name}.",
+                ephemeral=True,
+            )
+        except Exception:
+            await interaction.response.send_message(
+                "Oops! Something went wrong.", ephemeral=True
+            )
+            traceback.print_exception(*sys.exc_info())
+
+    return getfunc
+
+
+def _geteditfunc(
+    guild_id: int, template: Template
+) -> discord.app_commands.Command[Any, Any, Any]:
+    @app_commands.command(
+        name="edit" + template.ShortName,
+        description=template.Description,
+    )
+    async def editfunc(interaction: discord.Interaction) -> None:
+        user_profile = None
+        try:
+            user_profile = await backend.fetch_profile(
+                template, guild_id, interaction.user.id
+            )
+        except KeyError:  # It's ok if we don't get anything
+            pass
+
+        await interaction.response.send_modal(EditProfile(template, user_profile))
+
+    return editfunc
+
+
 def get_commands() -> Dict[int, List[discord.app_commands.Command[Any, Any, Any]]]:
     results = defaultdict(list)
     for guild_id, templates in all_templates.items():
         for template in templates:
-
-            def geteditfunc(
-                template: Template,
-            ) -> discord.app_commands.Command[Any, Any, Any]:
-                async def editfunc(interaction: discord.Interaction) -> None:
-                    await interaction.response.send_modal(
-                        EditProfile(guild_id, interaction.user.id, template=template)
-                    )
-
-                return (
-                    app_commands.command(
-                        name="edit" + template.ShortName,
-                        description=template.Description,
-                    )
-                )(editfunc)
-
-            results[guild_id].append(geteditfunc(template))
-
-            def getgetfunc(
-                template: Template,
-            ) -> discord.app_commands.Command[Any, Any, Any]:
-                @app_commands.autocomplete(name=member_autocomplete)
-                async def getfunc(
-                    interaction: discord.Interaction, name: Optional[str]
-                ) -> None:
-                    try:
-                        user_id = None
-                        if name:
-                            possible_name_and_discrim = get_single_user(
-                                interaction, name
-                            )
-                            (
-                                possible_name,
-                                possible_discrim,
-                            ) = possible_name_and_discrim.rsplit("#", 1)
-                            possible_member = discord.utils.get(
-                                interaction.guild.members,
-                                name=possible_name,
-                                discriminator=possible_discrim,
-                            )
-                            if possible_member:
-                                user_id = possible_member.id
-
-                        else:
-                            user_id = interaction.user.id
-
-                        if not user_id:
-                            if not name:
-                                await interaction.response.send_message(
-                                    "Whoops! Unable to find a profile for you.",
-                                    ephemeral=True,
-                                )
-                            else:
-                                await interaction.response.send_message(
-                                    f"Whoops! Unable to find a id for {name}.",
-                                    ephemeral=True,
-                                )
-
-                        user_profile = backend.fetch_profile(
-                            template, interaction.guild.id, user_id
-                        )
-                        await interaction.response.send_message(
-                            embed=build_embed_for_template(template, user_profile),
-                        )
-                    except KeyError:
-                        await interaction.response.send_message(
-                            f"Whoops! Unable to find a profile for {name}.",
-                            ephemeral=True,
-                        )
-                    except Exception:
-                        await interaction.response.send_message(
-                            "Oops! Something went wrong.", ephemeral=True
-                        )
-                        traceback.print_exception(*sys.exc_info())
-
-                return (
-                    app_commands.command(
-                        name="get" + template.ShortName,
-                        description=template.Description,
-                    )
-                )(getfunc)
-
-            results[guild_id].append(getgetfunc(template))
+            results[guild_id].append(_geteditfunc(guild_id, template))
+            results[guild_id].append(_getgetfunc(template))
 
     return results
