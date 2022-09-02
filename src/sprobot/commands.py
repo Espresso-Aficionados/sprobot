@@ -178,7 +178,7 @@ def _getgetfunc(
     async def getfunc(interaction: discord.Interaction, name: Optional[str]) -> None:
         log = structlog.get_logger()
         log.info(
-            "Processing saveimage",
+            "Processing getprofile",
             nick=f"{get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
             user_id=interaction.user.id,
             template=template.Name,

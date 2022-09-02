@@ -11,6 +11,7 @@ from templates import Template
 
 import httpx
 import filetype  # type: ignore
+import cachetools
 import aioboto3
 import structlog
 
@@ -19,6 +20,8 @@ SPROBOT_S3_SECRET = os.environ.get("SPROBOT_S3_SECRET")
 SPROBOT_S3_ENDPOINT = os.environ.get("SPROBOT_S3_ENDPOINT")
 
 SPROBOT_WEB_ENDPOINT = "http://173.255.193.219/"
+
+PROFILE_CACHE = cachetools.LRUCache(maxsize=500)
 
 
 async def fetch_profile(
@@ -32,6 +35,18 @@ async def fetch_profile(
         template=template.Name,
         guild_id=guild_id,
     )
+
+    cache_key = cachetools.keys.hashkey(template.Name, guild_id, user_id)
+    profile = PROFILE_CACHE.get(cache_key)
+    if profile:
+        log.info(
+            "Returning cached profile",
+            user_id=user_id,
+            template=template.Name,
+            guild_id=guild_id,
+            profile=profile,
+        )
+        return profile
 
     s3_path = os.path.join(
         "profiles",
@@ -61,6 +76,7 @@ async def fetch_profile(
                 template=template.Name,
                 guild_id=guild_id,
             )
+            profile = PROFILE_CACHE[cache_key] = res
             return res
         except s3.exceptions.NoSuchKey:
             # Normalize this to a simple KeyError
@@ -174,6 +190,7 @@ async def save_profile(
         template.Name,
         f"{user_id}.json",
     )
+    start = time.time()
     session = aioboto3.Session()
     async with session.client(
         "s3",
@@ -186,6 +203,16 @@ async def save_profile(
             Bucket="profile-bot",
             Key=s3_path,
         )
+    log.info(
+        f"s3 write time: {(time.time() - start) * 10**3}ms",
+        user_id=user_id,
+        template=template.Name,
+        guild_id=guild_id,
+    )
+
+    cache_key = cachetools.keys.hashkey(template.Name, guild_id, user_id)
+    profile = PROFILE_CACHE[cache_key] = profile
+
     web_url = urljoin(SPROBOT_WEB_ENDPOINT, urljoin("profile-bot/", quote(s3_path)))
     log.info(
         "Profile Saved",
