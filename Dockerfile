@@ -14,7 +14,7 @@ FROM base as prod
 ENV SPROBOT_ENV=prod
 # copy the content of the local src directory to the working directory
 COPY src/ .
-CMD [ "python", "./sprobot.py" ]
+CMD [ "python", "./sprobot/main.py" ]
 
 
 # Dev stuff below here
@@ -27,7 +27,7 @@ COPY src/ .
 COPY testing/ ./testing
 
 from devbase as dev
-CMD [ "python", "./sprobot.py" ]
+CMD [ "python", "./sprobot/main.py" ]
 
 FROM devbase as test
 CMD ["/code/testing/run-tests.sh"]
