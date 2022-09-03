@@ -14,7 +14,6 @@ from templates import Template
 
 AUTOCOMPLETE_CACHE_TTL = 5
 AUTOCOMPLETE_CACHE_SIZE = 500
-
 AUTOCOMPLETE_CACHE = cachetools.TLRUCache(
     maxsize=AUTOCOMPLETE_CACHE_SIZE,
     ttu=lambda _, v, n: n + timedelta(minutes=AUTOCOMPLETE_CACHE_TTL),
