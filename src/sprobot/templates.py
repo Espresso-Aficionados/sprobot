@@ -102,4 +102,7 @@ RoasterTemplate = Template(
     ],
 )
 
-all_templates = {1013566342345019512: [ProfileTemplate, RoasterTemplate]}
+all_templates = {
+    1013566342345019512: [ProfileTemplate, RoasterTemplate],
+    726985544038612993: [ProfileTemplate, RoasterTemplate],
+}
