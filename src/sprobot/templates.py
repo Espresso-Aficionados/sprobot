@@ -50,12 +50,6 @@ ProfileTemplate = Template(
             False,
         ),
         Field(
-            "Location",
-            "What are you located?",
-            discord.TextStyle.short,
-            False,
-        ),
-        Field(
             "Gear Picture",
             "Please put a link to an image of your machine here!",
             discord.TextStyle.short,
