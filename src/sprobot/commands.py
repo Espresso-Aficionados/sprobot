@@ -2,7 +2,7 @@ import traceback
 import json
 import typing
 import sys
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from collections import defaultdict
 
 import discord
@@ -197,13 +197,11 @@ def _geteditfunc(
 
 def _getgetmenu(
     guild_id: int, template: Template
-) -> discord.app_commands.Command[Any, Any, Any]:
-    @app_commands.context_menu(
-        name=f"Get {template.Name} Profile",
-    )
-    async def getprofile(
-        interaction: discord.Interaction, message: discord.Message
-    ) -> None:
+) -> List[discord.app_commands.Command[Any, Any, Any]]:
+    async def _getprofileint(
+        interaction: discord.Interaction,
+        author: Union[discord.Member, discord.User],
+    ):
         log = structlog.get_logger()
         log.info(
             "Processing getprofile context menu",
@@ -213,23 +211,41 @@ def _getgetmenu(
             guild_id=interaction.guild.id,
         )
 
+        print(author.name, author.id)
+
         try:
-            user_profile = await backend.fetch_profile(
-                template, guild_id, message.author.id
-            )
+            user_profile = await backend.fetch_profile(template, guild_id, author.id)
 
             await interaction.response.send_message(
                 embed=util.build_embed_for_template(
-                    template, util.get_nick_or_name(message.author), user_profile
+                    template, util.get_nick_or_name(author), user_profile
                 ),
             )
         except KeyError:
             await interaction.response.send_message(
-                f"Whoops! Unable to find a {template.Name} profile for {util.get_nick_or_name(message.author)}.",
+                f"Whoops! Unable to find a {template.Name} profile for {util.get_nick_or_name(author)}.",
                 ephemeral=True,
             )
 
-    return getprofile
+    @app_commands.context_menu(
+        name=f"Get {template.Name} Profile",
+    )
+    async def getprofilemessage(
+        interaction: discord.Interaction,
+        message: discord.Message,
+    ) -> None:
+        await _getprofileint(interaction, message.author)
+
+    @app_commands.context_menu(
+        name=f"Get {template.Name} Profile",
+    )
+    async def getprofileuser(
+        interaction: discord.Interaction,
+        user: Union[discord.Member, discord.User],
+    ) -> None:
+        await _getprofileint(interaction, user)
+
+    return [getprofilemessage, getprofileuser]
 
 
 def _getsavemenu(
@@ -339,7 +355,8 @@ def get_commands() -> Dict[int, List[discord.app_commands.Command[Any, Any, Any]
         for template in templates:
             results[guild_id].append(_geteditfunc(guild_id, template))
             results[guild_id].append(_getgetfunc(template))
-            results[guild_id].append(_getgetmenu(guild_id, template))
+            for cmd in _getgetmenu(guild_id, template):
+                results[guild_id].append(cmd)
             results[guild_id].append(_getsavemenu(guild_id, template))
 
     return results
