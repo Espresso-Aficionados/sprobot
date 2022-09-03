@@ -39,7 +39,7 @@ def build_embed_for_template(
     # TODO: Make this a link to a little webpage for the profile
     embed = discord.Embed(
         title=f"{template.Name} for {username}",
-        url="https://github.com/Espresso-Aficionados/sprobot",
+        url="http://bot.espressoaf.com/",
     )
     for field in template.Fields:
         field_content = profile.get(field.Name, None)

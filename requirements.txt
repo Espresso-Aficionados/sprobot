@@ -7,3 +7,5 @@ filetype==1.1.0
 thefuzz[speedup]==0.19.0
 cachetools==5.2.0
 types-cachetools==5.2.0
+flask==2.2.2
+uWSGI==2.0.20

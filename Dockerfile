@@ -29,6 +29,10 @@ COPY testing/ ./testing
 from devbase as dev
 CMD [ "python", "./sprobot/main.py" ]
 
+from devbase as devweb
+WORKDIR /code/sprobot-web
+CMD [ "uwsgi", "--ini", "uwsgi.ini", "--http", "0.0.0.0:80" ]
+
 FROM devbase as test
 CMD ["/code/testing/run-tests.sh"]
 
