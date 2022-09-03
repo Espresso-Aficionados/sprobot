@@ -2,30 +2,16 @@ import traceback
 import json
 import typing
 import sys
-from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from collections import defaultdict
 
 import discord
 from discord import app_commands
-from thefuzz import process
 import structlog
-import cachetools
 
 import backend
+import util
 from templates import Template, all_templates
-from util import build_embed_for_template, get_nick_or_name
-
-AUTOCOMPLETE_CACHE_TTL = 5
-AUTOCOMPLETE_CACHE_SIZE = 500
-
-AUTOCOMPLETE_CACHE = cachetools.TLRUCache(
-    maxsize=AUTOCOMPLETE_CACHE_SIZE,
-    ttu=lambda _, v, n: n + timedelta(minutes=AUTOCOMPLETE_CACHE_TTL),
-    timer=datetime.now,
-)
-
-GET_USERS_CACHE = cachetools.TTLCache(maxsize=500, ttl=60)
 
 
 class EditProfile(discord.ui.Modal):
@@ -92,8 +78,8 @@ class EditProfile(discord.ui.Modal):
             return
 
         await interaction.response.send_message(
-            embed=build_embed_for_template(
-                self.template, get_nick_or_name(interaction.user), built_profile
+            embed=util.build_embed_for_template(
+                self.template, util.get_nick_or_name(interaction.user), built_profile
             )
         )
 
@@ -109,62 +95,14 @@ class EditProfile(discord.ui.Modal):
         traceback.print_exception(*sys.exc_info())
 
 
-async def member_autocomplete(
+async def _member_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> List[app_commands.Choice[str]]:
     if current == "":
         return []
 
-    return _filter_users(interaction, current)
-
-
-def _autocomplete_cache_key(interaction: discord.Interaction, current: str):
-    if interaction.guild:
-        return cachetools.keys.hashkey(interaction.guild.id, current)
-    else:
-        return cachetools.keys.hashkey(current)
-
-
-@cachetools.cached(cache=AUTOCOMPLETE_CACHE, key=_autocomplete_cache_key)
-def _filter_users(
-    interaction: discord.Interaction, current: str
-) -> List[app_commands.Choice[str]]:
-    return [
-        app_commands.Choice(name=name[0], value=name[0])
-        for name in process.extract(current, _get_users(interaction), limit=10)
-    ]
-
-
-def get_single_user(interaction: discord.Interaction, name: str) -> Optional[str]:
-    res = process.extractOne(name, _get_users(interaction), score_cutoff=90)
-    if res:
-        return res[0]
-    else:
-        return None
-
-
-def _get_users_key(interaction: discord.Interaction):
-    if interaction.guild:
-        return cachetools.keys.hashkey(interaction.guild.id)
-    else:
-        return cachetools.keys.hashkey(None)
-
-
-@cachetools.cached(cache=GET_USERS_CACHE, key=_get_users_key)
-def _get_users(
-    interaction: discord.Interaction,
-) -> List[str]:
-    if not interaction.guild:
-        return []
-
-    choices = []
-    for member in interaction.guild.members:
-        if member.nick:
-            choices.append(member.nick + "#" + member.discriminator)
-        choices.append(member.name + "#" + member.discriminator)
-
-    return choices
+    return util.filter_users(interaction, current)
 
 
 def _getgetfunc(
@@ -174,12 +112,12 @@ def _getgetfunc(
         name="get" + template.ShortName,
         description=template.Description,
     )
-    @app_commands.autocomplete(name=member_autocomplete)
+    @app_commands.autocomplete(name=_member_autocomplete)
     async def getfunc(interaction: discord.Interaction, name: Optional[str]) -> None:
         log = structlog.get_logger()
         log.info(
             "Processing getprofile",
-            nick=f"{get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
+            nick=f"{util.get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
             user_id=interaction.user.id,
             template=template.Name,
             guild_id=interaction.guild.id,
@@ -188,23 +126,13 @@ def _getgetfunc(
             user_id = None
             user_name = None
             if name:
-                possible_name_and_discrim = get_single_user(interaction, name)
-                (
-                    possible_name,
-                    possible_discrim,
-                ) = possible_name_and_discrim.rsplit("#", 1)
-                possible_member = discord.utils.get(
-                    interaction.guild.members,
-                    name=possible_name,
-                    discriminator=possible_discrim,
-                )
+                possible_member = util.get_single_user(interaction, name)
                 if possible_member:
-                    user_id = possible_member.id
-                    user_name = get_nick_or_name(possible_member)
-
+                    user_id = possible_member.Id
+                    user_name = possible_member.Name
             else:
                 user_id = interaction.user.id
-                user_name = get_nick_or_name(interaction.user)
+                user_name = util.get_nick_or_name(interaction.user)
 
             if not user_id:
                 if not name:
@@ -222,7 +150,7 @@ def _getgetfunc(
                 template, interaction.guild.id, user_id
             )
             await interaction.response.send_message(
-                embed=build_embed_for_template(template, user_name, user_profile),
+                embed=util.build_embed_for_template(template, user_name, user_profile),
             )
         except KeyError:
             await interaction.response.send_message(
@@ -249,7 +177,7 @@ def _geteditfunc(
         log = structlog.get_logger()
         log.info(
             "Processing edit",
-            nick=f"{get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
+            nick=f"{util.get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
             user_id=interaction.user.id,
             template=template.Name,
             guild_id=interaction.guild.id,
@@ -280,7 +208,7 @@ def _getsavemenu(
             log = structlog.get_logger()
             log.info(
                 "Processing saveimage",
-                nick=f"{get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
+                nick=f"{util.get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
                 user_id=interaction.user.id,
                 template=template.Name,
                 guild_id=interaction.guild.id,
@@ -309,6 +237,7 @@ def _getsavemenu(
                     )
                     for field in template.Fields:
                         if field.Image:
+                            found_attachment = True
                             user_profile[field.Name] = attachment.proxy_url
                 elif attachment.content_type.startswith("video/"):
                     found_video_error = (
@@ -322,6 +251,7 @@ def _getsavemenu(
                     if embed.image.proxy_url:
                         for field in template.Fields:
                             if field.Image:
+                                found_attachment = True
                                 user_profile[field.Name] = embed.image.proxy_url
                                 log.info(
                                     "Found image in embeds",
@@ -352,8 +282,8 @@ def _getsavemenu(
                 return
 
             await interaction.response.send_message(
-                embed=build_embed_for_template(
-                    template, get_nick_or_name(interaction.user), user_profile
+                embed=util.build_embed_for_template(
+                    template, util.get_nick_or_name(interaction.user), user_profile
                 ),
             )
 
