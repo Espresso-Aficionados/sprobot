@@ -50,6 +50,12 @@ ProfileTemplate = Template(
             False,
         ),
         Field(
+            "Location",
+            "What are you located?",
+            discord.TextStyle.short,
+            False,
+        ),
+        Field(
             "Gear Picture",
             "Please put a link to an image of your machine here!",
             discord.TextStyle.short,
@@ -64,9 +70,27 @@ RoasterTemplate = Template(
     Description="Edit or Create your profile",
     Fields=[
         Field(
-            "Roaster",
+            "Roasting Machine",
             "A description of your machine(s).",
             discord.TextStyle.long,
+            False,
+        ),
+        Field(
+            "Favorite Greens",
+            "What are your favorite greens to work with?",
+            discord.TextStyle.long,
+            False,
+        ),
+        Field(
+            "Website",
+            "Link to your website.",
+            discord.TextStyle.short,
+            False,
+        ),
+        Field(
+            "Location",
+            "What are you located?",
+            discord.TextStyle.short,
             False,
         ),
         Field(

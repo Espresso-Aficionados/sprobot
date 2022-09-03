@@ -16,6 +16,9 @@ ENV SPROBOT_ENV=prod
 COPY src/ .
 CMD [ "python", "./sprobot/main.py" ]
 
+from base as prodweb
+WORKDIR /code/sprobot-web
+CMD [ "uwsgi", "--ini", "uwsgi.ini", "--http", "0.0.0.0:80" ]
 
 # Dev stuff below here
 FROM base as devbase
