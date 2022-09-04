@@ -30,13 +30,10 @@ class EditProfile(discord.ui.Modal):
 
         self.template = template
 
-        if profile:
-            self.saved_image_url = profile[template.Image.Name]
-        else:
-            self.saved_image_url = None
-
         if not profile:  # use an empty one if we didn't find one
             profile = dict()
+
+        self.saved_image_url = profile.get(template.Image.Name)
 
         for field in template.Fields:
             self.add_item(
