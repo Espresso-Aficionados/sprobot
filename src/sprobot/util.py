@@ -45,17 +45,17 @@ def build_embed_for_template(
         field_content = profile.get(field.Name, None)
         if not field_content:
             continue
+        embed.add_field(name=field.Name, value=field_content)
+
+    if profile.get(template.Image.Name):
         # This is a hack to get around discord caching the URL when people change their profile pic
-        if field.Image:
-            embed.set_image(
-                url=(
-                    field_content
-                    + "?"
-                    + "".join(random.choice(string.ascii_letters) for i in range(10))
-                )
+        embed.set_image(
+            url=(
+                profile.get(template.Image.Name)
+                + "?"
+                + "".join(random.choice(string.ascii_letters) for i in range(10))
             )
-        else:
-            embed.add_field(name=field.Name, value=field_content)
+        )
 
     embed.set_footer(
         text="sprobot",

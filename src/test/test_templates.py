@@ -18,6 +18,7 @@ def test_no_duplicates():
             for field in template.Fields:
                 assert field.Name not in unique_fields
                 unique_fields.add(field.Name)
+            assert template.Image.Name not in unique_fields
 
 
 def test_all_forms_filled():
@@ -29,13 +30,5 @@ def test_all_forms_filled():
             for field in template.Fields:
                 assert field.Name != ""
                 assert field.Placeholder != ""
-
-
-def test_single_image():
-    for guild_id, templates in all_templates.items():
-        for template in templates:
-            image_count = 0
-            for field in template.Fields:
-                if field.Image:
-                    image_count += 1
-            assert image_count == 1
+            assert template.Image.Name != ""
+            assert template.Image.Placeholder != ""

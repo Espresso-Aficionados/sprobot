@@ -30,6 +30,11 @@ class EditProfile(discord.ui.Modal):
 
         self.template = template
 
+        if profile:
+            self.saved_image_url = profile[template.Image.Name]
+        else:
+            self.saved_image_url = None
+
         if not profile:  # use an empty one if we didn't find one
             profile = dict()
 
@@ -60,6 +65,9 @@ class EditProfile(discord.ui.Modal):
                 )
                 continue
             built_profile[child.label] = child.value
+
+        if self.saved_image_url:
+            built_profile[self.template.Image.Name] = self.saved_image_url
 
         log.info(
             "Raw profile",
@@ -288,10 +296,8 @@ def _getsavemenu(
                         template=template.Name,
                         guild_id=interaction.guild.id,
                     )
-                    for field in template.Fields:
-                        if field.Image:
-                            found_attachment = True
-                            user_profile[field.Name] = attachment.proxy_url
+                    found_attachment = True
+                    user_profile[template.Image.Name] = attachment.proxy_url
                 elif attachment.content_type.startswith("video/"):
                     found_video_error = (
                         f"It looks like that attachment was a "
@@ -302,17 +308,15 @@ def _getsavemenu(
             for embed in message.embeds:
                 if embed.image:
                     if embed.image.proxy_url:
-                        for field in template.Fields:
-                            if field.Image:
-                                found_attachment = True
-                                user_profile[field.Name] = embed.image.proxy_url
-                                log.info(
-                                    "Found image in embeds",
-                                    image_url=embed.image.proxy_url,
-                                    user_id=interaction.user.id,
-                                    template=template.Name,
-                                    guild_id=interaction.guild.id,
-                                )
+                        found_attachment = True
+                        user_profile[template.Image.Name] = embed.image.proxy_url
+                        log.info(
+                            "Found image in embeds",
+                            image_url=embed.image.proxy_url,
+                            user_id=interaction.user.id,
+                            template=template.Name,
+                            guild_id=interaction.guild.id,
+                        )
 
             if found_video_error and not found_attachment:
                 await interaction.response.send_message(

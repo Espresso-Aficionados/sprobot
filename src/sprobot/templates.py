@@ -9,7 +9,6 @@ class Field:
     Name: str
     Placeholder: str
     Style: discord.TextStyle
-    Image: bool
 
 
 @dataclass
@@ -18,6 +17,7 @@ class Template:
     ShortName: str
     Description: str
     Fields: List[Field]
+    Image: Field
 
 
 ProfileTemplate = Template(
@@ -29,33 +29,33 @@ ProfileTemplate = Template(
             "Machine",
             "A description of your machine(s).",
             discord.TextStyle.long,
-            False,
         ),
         Field(
             "Grinder",
             "A description of your grinder(s).",
             discord.TextStyle.long,
-            False,
         ),
         Field(
             "Favorite Beans",
             "What are your favorite beans / roasts?",
             discord.TextStyle.long,
-            False,
         ),
         Field(
             "Pronouns",
             "What are your preferred pronouns?",
             discord.TextStyle.short,
-            False,
         ),
         Field(
-            "Gear Picture",
-            "Please put a link to an image of your machine here!",
+            "Location",
+            "Where are you located?",
             discord.TextStyle.short,
-            True,
         ),
     ],
+    Image=Field(
+        "Gear Picture",
+        "Please put a link to an image of your machine here!",
+        discord.TextStyle.short,
+    ),
 )
 
 RoasterTemplate = Template(
@@ -67,33 +67,28 @@ RoasterTemplate = Template(
             "Roasting Machine",
             "A description of your machine(s).",
             discord.TextStyle.long,
-            False,
         ),
         Field(
             "Favorite Greens",
             "What are your favorite greens to work with?",
             discord.TextStyle.long,
-            False,
         ),
         Field(
             "Website",
             "Link to your website.",
             discord.TextStyle.short,
-            False,
         ),
         Field(
             "Location",
             "What are you located?",
             discord.TextStyle.short,
-            False,
-        ),
-        Field(
-            "Gear Picture",
-            "Please put a link to an image of your machine here!",
-            discord.TextStyle.short,
-            True,
         ),
     ],
+    Image=Field(
+        "Gear Picture",
+        "Please put a link to an image of your machine here!",
+        discord.TextStyle.short,
+    ),
 )
 
 all_templates = {
