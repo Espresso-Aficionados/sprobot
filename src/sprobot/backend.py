@@ -187,7 +187,9 @@ async def save_profile(
     error_for_user, image_url = await _get_image_s3_url(
         template, guild_id, user_id, profile
     )
-    if not image_url:
+    if image_url:
+        profile[template.Image.Name] = image_url
+    else:
         try:
             del profile[template.Image.Name]
         except KeyError:
