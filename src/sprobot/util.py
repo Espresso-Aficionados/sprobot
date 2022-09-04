@@ -56,6 +56,14 @@ def build_embed_for_template(
                 + "".join(random.choice(string.ascii_letters) for i in range(10))
             )
         )
+    else:
+        embed.add_field(
+            name="Want to add a profile image?",
+            value=(
+                "Check out the guide at https://espressoaf.com/"
+                "guides/sprobot.html#saving-a-profile-image-via-right-click"
+            ),
+        )
 
     embed.set_footer(
         text="sprobot",
