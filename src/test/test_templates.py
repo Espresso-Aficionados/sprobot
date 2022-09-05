@@ -2,13 +2,13 @@ from sprobot.templates import all_templates
 
 
 def test_max_fields():
-    for guild_id, templates in all_templates.items():
+    for guild_id, templates in all_templates().items():
         for template in templates:
             assert len(template.Fields) <= 5
 
 
 def test_no_duplicates():
-    for guild_id, templates in all_templates.items():
+    for guild_id, templates in all_templates().items():
         unique_templates = set()
         for template in templates:
             assert template.Name not in unique_templates
@@ -22,7 +22,7 @@ def test_no_duplicates():
 
 
 def test_all_forms_filled():
-    for guild_id, templates in all_templates.items():
+    for guild_id, templates in all_templates().items():
         for template in templates:
             assert template.Name != ""
             assert template.ShortName != ""

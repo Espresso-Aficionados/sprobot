@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from typing import List
 
@@ -91,7 +92,16 @@ RoasterTemplate = Template(
     ),
 )
 
-all_templates = {
-    1013566342345019512: [ProfileTemplate, RoasterTemplate],
-    726985544038612993: [ProfileTemplate, RoasterTemplate],
-}
+
+def all_templates():
+    env = os.environ.get("SPROBOT_ENV")
+    if env == "dev":
+        return {
+            1013566342345019512: [ProfileTemplate, RoasterTemplate],
+        }
+    elif env == "prod":
+        return {
+            726985544038612993: [ProfileTemplate, RoasterTemplate],
+        }
+    else:
+        return {}
