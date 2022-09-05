@@ -232,7 +232,8 @@ class EditProfile(discord.ui.Modal):
         await interaction.response.send_message(
             embed=util.build_embed_for_template(
                 self.template, util.get_nick_or_name(interaction.user), built_profile
-            )
+            ),
+            ephemeral=True,
         )
 
     @typing.no_type_check  # on_error from Modal doesnt match the type signature of it's parent
@@ -488,6 +489,7 @@ def _getsavemenu(
                 embed=util.build_embed_for_template(
                     template, util.get_nick_or_name(interaction.user), user_profile
                 ),
+                ephemeral=True,
             )
 
         except Exception:
