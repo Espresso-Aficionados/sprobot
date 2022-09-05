@@ -449,7 +449,8 @@ def _getsavemenu(
                     found_video_error = (
                         f"It looks like that attachment was a "
                         f"video ({attachment.content_type}), "
-                        "we can only use images."
+                        "we can only use images. Discord often "
+                        "uses mp4s instead of gifs."
                     )
 
             for embed in message.embeds:
@@ -464,6 +465,12 @@ def _getsavemenu(
                             template=template.Name,
                             guild_id=interaction.guild.id,
                         )
+                elif embed.video:
+                    found_video_error = (
+                        "It looks like that attachment was a "
+                        "video, unfortunately we can only use images. "
+                        "Discord will often use a mp4 instead of a gif."
+                    )
 
             if found_video_error and not found_attachment:
                 await interaction.response.send_message(

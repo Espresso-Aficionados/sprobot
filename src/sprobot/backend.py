@@ -123,7 +123,8 @@ async def _get_image_s3_url(
         if not kind.mime.startswith("image/"):
             error_for_user = (
                 f"It looks like you uploaded a {kind.mime}, but we can only use images. "
-                "The rest of your profile has been saved."
+                "The rest of your profile has been saved. If this looked like a gif, discord probably "
+                "used a mp4."
             )
             return error_for_user, None
 
