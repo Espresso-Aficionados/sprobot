@@ -1,19 +1,21 @@
-from typing import Dict, Optional, Tuple
-import tempfile
+from __future__ import annotations
+
 import json
-import time
 import os.path
 import sys
+import tempfile
+import time
 import traceback
-from urllib.parse import urljoin, quote
+import typing
+from typing import Dict, Optional, Tuple
+from urllib.parse import quote, urljoin
 
-from templates import Template
-
-import httpx
-import filetype  # type: ignore
+import aioboto3  # type: ignore
 import cachetools
-import aioboto3
+import filetype  # type: ignore
+import httpx
 import structlog
+from templates import Template
 
 SPROBOT_S3_KEY = os.environ.get("SPROBOT_S3_KEY")
 SPROBOT_S3_SECRET = os.environ.get("SPROBOT_S3_SECRET")
@@ -22,12 +24,12 @@ SPROBOT_S3_BUCKET = os.environ.get("SPROBOT_S3_BUCKET")
 
 SPROBOT_WEB_ENDPOINT = "http://173.255.193.219/"
 
-PROFILE_CACHE = cachetools.LRUCache(maxsize=500)
+PROFILE_CACHE = cachetools.LRUCache(maxsize=500)  # type: ignore
 
 
 async def fetch_profile(
     template: Template, guild_id: int, user_id: int
-) -> Optional[Dict[str, str]]:
+) -> Dict[str, str]:
 
     log = structlog.get_logger()
     log.info(
@@ -39,7 +41,7 @@ async def fetch_profile(
 
     cache_key = cachetools.keys.hashkey(template.Name, guild_id, user_id)
     profile = PROFILE_CACHE.get(cache_key)
-    if profile:
+    if profile and type(profile) == dict:
         log.info(
             "Returning cached profile",
             user_id=user_id,
@@ -77,11 +79,14 @@ async def fetch_profile(
                 template=template.Name,
                 guild_id=guild_id,
             )
-            profile = PROFILE_CACHE[cache_key] = res
-            return res
+            PROFILE_CACHE[cache_key] = res
+            if type(res) == dict:
+                return res
         except s3.exceptions.NoSuchKey:
             # Normalize this to a simple KeyError
             raise KeyError("User profile not found")
+
+    raise KeyError("User profile not found")
 
 
 async def _get_image_s3_url(
@@ -92,6 +97,9 @@ async def _get_image_s3_url(
     maybeURL = profile.get(template.Image.Name, None)
     if not maybeURL:
         return "", None
+
+    if not SPROBOT_S3_ENDPOINT:
+        raise KeyError("SPROBOT_S3_ENDPOINT is undefined!")
 
     if maybeURL.startswith(SPROBOT_S3_ENDPOINT):
         return "", maybeURL

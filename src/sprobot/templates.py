@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import os
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List
 
 import discord
 
@@ -93,7 +95,7 @@ RoasterTemplate = Template(
 )
 
 
-def all_templates():
+def all_templates() -> Dict[int, List[Template]]:
     env = os.environ.get("SPROBOT_ENV")
     if env == "dev":
         return {

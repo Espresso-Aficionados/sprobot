@@ -1,10 +1,9 @@
 import os
 
 import discord
-from discord import app_commands
 import structlog
-
 from commands import get_commands
+from discord import app_commands
 
 
 class MyClient(discord.Client):
@@ -34,7 +33,10 @@ class MyClient(discord.Client):
 
 def main() -> None:
     client = MyClient()
-    client.run(os.environ.get("SPROBOT_DISCORD_TOKEN"))
+    bot_token = os.environ.get("SPROBOT_DISCORD_TOKEN")
+    if not bot_token:
+        raise ValueError("Missing bot token: SPROBOT_DISCORD_TOKEN")
+    client.run(bot_token)
 
 
 if __name__ == "__main__":

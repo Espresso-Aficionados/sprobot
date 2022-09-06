@@ -1,17 +1,18 @@
-import traceback
-import json
-import typing
-import sys
-from typing import Dict, Any, List, Optional, Union
-from enum import Enum
-from collections import defaultdict
+from __future__ import annotations
 
-import discord
-from discord import app_commands
-import structlog
+import json
+import sys
+import traceback
+import typing
+from collections import defaultdict
+from enum import Enum
+from typing import Any, Dict, List, Optional, Union
 
 import backend
+import discord
+import structlog
 import util
+from discord import app_commands
 from templates import Template, all_templates
 
 
@@ -21,6 +22,8 @@ def _getdeletefunc(template: Template) -> discord.app_commands.Command[Any, Any,
         description="Delete profile or profile image",
     )
     async def deletefunc(interaction: discord.Interaction) -> None:
+        if not interaction.guild:
+            return
         view = DeleteProfile(template)
         log = structlog.get_logger()
         log.info(
@@ -47,8 +50,8 @@ class DeleteState(Enum):
 
 
 class DeleteProfile(discord.ui.View):
-    def __init__(self, template: Template, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, template: Template) -> None:
+        super().__init__()
         self._state = DeleteState.Called
         self._template = template
         self.log = structlog.get_logger()
@@ -57,39 +60,39 @@ class DeleteProfile(discord.ui.View):
             style=discord.ButtonStyle.primary,
             label="Delete Entire Profile",
             custom_id="delete_profile",
-        )
-        delete_full_profile_button.callback = self.delete_entire_profile
+        )  # type: ignore
+        delete_full_profile_button.callback = self.delete_entire_profile  # type: ignore
         self.add_item(delete_full_profile_button)
 
         delete_profile_image_button = discord.ui.Button(
             style=discord.ButtonStyle.primary,
             label="Delete Profile Picture",
             custom_id="delete_image",
-        )
-        delete_profile_image_button.callback = self.delete_profile_image
+        )  # type: ignore
+        delete_profile_image_button.callback = self.delete_profile_image  # type: ignore
         self.add_item(delete_profile_image_button)
 
         cancel_button = discord.ui.Button(
             label="Cancel", style=discord.ButtonStyle.grey, custom_id="cancel"
-        )
-        cancel_button.callback = self.cancel
+        )  # type: ignore
+        cancel_button.callback = self.cancel  # type: ignore
         self.add_item(cancel_button)
 
-    async def _update_message(self, interaction: discord.Interaction):
+    async def _update_message(self, interaction: discord.Interaction) -> None:
         self.clear_items()
         if self._state == DeleteState.WaitForConfirm:
             confirm_button = discord.ui.Button(
                 label="Confirm",
                 style=discord.ButtonStyle.danger,
                 custom_id="confirm",
-            )
-            confirm_button.callback = self.confirm
+            )  # type: ignore
+            confirm_button.callback = self.confirm  # type: ignore
             self.add_item(confirm_button)
 
             cancel_button = discord.ui.Button(
                 label="Cancel", style=discord.ButtonStyle.grey, custom_id="cancel"
-            )
-            cancel_button.callback = self.cancel
+            )  # type: ignore
+            cancel_button.callback = self.cancel  # type: ignore
             self.add_item(cancel_button)
 
             await interaction.response.edit_message(content="Are you sure?", view=self)
@@ -106,15 +109,19 @@ class DeleteProfile(discord.ui.View):
             await interaction.response.edit_message(content=self._error, view=self)
             self.stop()
 
-    async def cancel(self, interaction: discord.Interaction):
+    async def cancel(self, interaction: discord.Interaction) -> None:
         self._state = DeleteState.Cancelled
         await self._update_message(interaction)
 
-    async def confirm(self, interaction: discord.Interaction):
+    async def confirm(self, interaction: discord.Interaction) -> None:
         self._state = DeleteState.Confirmed
         await self._next(interaction)
 
-    async def delete_entire_profile(self, interaction: discord.Interaction):
+    async def delete_entire_profile(self, interaction: discord.Interaction) -> None:
+        if not interaction.guild:
+            raise TypeError("No Guild Found")
+        if not interaction.user:
+            raise TypeError("No User Found")
         if self._state == DeleteState.Called:
             self._state = DeleteState.WaitForConfirm
             self._next = self.delete_entire_profile
@@ -128,7 +135,11 @@ class DeleteProfile(discord.ui.View):
             self._state = DeleteState.Deleted
             await self._update_message(interaction)
 
-    async def delete_profile_image(self, interaction: discord.Interaction):
+    async def delete_profile_image(self, interaction: discord.Interaction) -> None:
+        if not interaction.guild:
+            raise TypeError("No Guild Found")
+        if not interaction.user:
+            raise TypeError("No User Found")
         if self._state == DeleteState.Called:
             self._state = DeleteState.WaitForConfirm
             self._next = self.delete_profile_image
@@ -148,14 +159,25 @@ class DeleteProfile(discord.ui.View):
                 if self._template.Image.Name in user_profile:
                     del user_profile[self._template.Image.Name]
 
-            _, self._error = await backend.save_profile(
-                self._template, interaction.guild.id, interaction.user.id, user_profile
-            )
+            # This might have been the only field
+            if user_profile:
+                _, self._error = await backend.save_profile(
+                    self._template,
+                    interaction.guild.id,
+                    interaction.user.id,
+                    user_profile,
+                )
 
-            if self._error:
-                self._state = DeleteState.Error
-                self._update_message(interaction)
-                return
+                if self._error:
+                    self._state = DeleteState.Error
+                    await self._update_message(interaction)
+                    return
+            else:
+                await backend.delete_profile(
+                    self._template,
+                    interaction.guild.id,
+                    interaction.user.id,
+                )
 
             self._state = DeleteState.Deleted
             await self._update_message(interaction)
@@ -195,6 +217,10 @@ class EditProfile(discord.ui.Modal):
             )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not interaction.guild:
+            raise TypeError("No Guild Found")
+        if not interaction.user:
+            raise TypeError("No User Found")
         log = structlog.get_logger()
         built_profile: Dict[str, str] = {}
         for child in self.children:
@@ -267,6 +293,10 @@ def _getgetfunc(
     )
     @app_commands.autocomplete(name=_member_autocomplete)
     async def getfunc(interaction: discord.Interaction, name: Optional[str]) -> None:
+        if not interaction.guild:
+            raise TypeError("No Guild Found")
+        if not interaction.user:
+            raise TypeError("No User Found")
         log = structlog.get_logger()
         log.info(
             "Processing getprofile",
@@ -277,7 +307,7 @@ def _getgetfunc(
         )
         try:
             user_id = None
-            user_name = None
+            user_name = ""
             if name:
                 possible_member = util.get_single_user(interaction, name)
                 if possible_member:
@@ -293,11 +323,13 @@ def _getgetfunc(
                         "Whoops! Unable to find a profile for you.",
                         ephemeral=True,
                     )
+                    return
                 else:
                     await interaction.response.send_message(
                         f"Whoops! Unable to find a id for {name}.",
                         ephemeral=True,
                     )
+                    return
 
             user_profile = await backend.fetch_profile(
                 template, interaction.guild.id, user_id
@@ -329,6 +361,10 @@ def _geteditfunc(
         description=template.Description,
     )
     async def editfunc(interaction: discord.Interaction) -> None:
+        if not interaction.guild:
+            raise TypeError("No Guild Found")
+        if not interaction.user:
+            raise TypeError("No User Found")
         log = structlog.get_logger()
         log.info(
             "Processing edit",
@@ -352,11 +388,15 @@ def _geteditfunc(
 
 def _getgetmenu(
     guild_id: int, template: Template
-) -> List[discord.app_commands.Command[Any, Any, Any]]:
+) -> List[discord.app_commands.ContextMenu]:
     async def _getprofileint(
         interaction: discord.Interaction,
         author: Union[discord.Member, discord.User],
-    ):
+    ) -> None:
+        if not interaction.guild:
+            raise TypeError("No Guild Found")
+        if not interaction.user:
+            raise TypeError("No User Found")
         log = structlog.get_logger()
         log.info(
             "Processing getprofile context menu",
@@ -403,15 +443,17 @@ def _getgetmenu(
     return [getprofilemessage, getprofileuser]
 
 
-def _getsavemenu(
-    guild_id: int, template: Template
-) -> discord.app_commands.Command[Any, Any, Any]:
+def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.ContextMenu:
     @app_commands.context_menu(
         name=f"Save as {template.Name} Image",
     )
     async def saveimage(
         interaction: discord.Interaction, message: discord.Message
     ) -> None:
+        if not interaction.guild:
+            raise TypeError("No Guild Found")
+        if not interaction.user:
+            raise TypeError("No User Found")
         try:
             log = structlog.get_logger()
             log.info(
@@ -435,7 +477,9 @@ def _getsavemenu(
             found_attachment = False
             found_video_error = ""
             for attachment in message.attachments:
-                if attachment.content_type.startswith("image/"):
+                if attachment.content_type and attachment.content_type.startswith(
+                    "image/"
+                ):
                     log.info(
                         "Found image in attachments",
                         image_url=attachment.proxy_url,
@@ -445,7 +489,9 @@ def _getsavemenu(
                     )
                     found_attachment = True
                     user_profile[template.Image.Name] = attachment.proxy_url
-                elif attachment.content_type.startswith("video/"):
+                elif attachment.content_type and attachment.content_type.startswith(
+                    "video/"
+                ):
                     found_video_error = (
                         f"It looks like that attachment was a "
                         f"video ({attachment.content_type}), "
@@ -508,9 +554,26 @@ def _getsavemenu(
     return saveimage
 
 
-def get_commands() -> Dict[int, List[discord.app_commands.Command[Any, Any, Any]]]:
-    results = defaultdict(list)
+def get_commands() -> Dict[
+    int,
+    List[
+        Union[
+            discord.app_commands.ContextMenu,
+            discord.app_commands.Command[Any, Any, Any],
+        ]
+    ],
+]:
+    results: Dict[
+        int,
+        List[
+            Union[
+                discord.app_commands.ContextMenu,
+                discord.app_commands.Command[Any, Any, Any],
+            ]
+        ],
+    ] = dict()
     for guild_id, templates in all_templates().items():
+        results[guild_id] = []
         for template in templates:
             results[guild_id].append(_geteditfunc(guild_id, template))
             results[guild_id].append(_getgetfunc(template))

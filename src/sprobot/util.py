@@ -1,28 +1,34 @@
+from __future__ import annotations
+
 import random
 import string
-from typing import Dict, Union, List, Optional
+import typing
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Union
 
+import cachetools
+import cachetools.keys
 import discord
 from discord import app_commands
-from thefuzz import process
-import cachetools
-
 from templates import Template
+from thefuzz import process  # type: ignore
 
 
-AUTOCOMPLETE_CACHE_TTL = 5
+def _compute_ttl(key: Any, value: Any, now: float) -> float:
+    return now + (AUTOCOMPLETE_CACHE_TTL_MINUTES * 60)
+
+
+AUTOCOMPLETE_CACHE_TTL_MINUTES = 60
 AUTOCOMPLETE_CACHE_SIZE = 500
 AUTOCOMPLETE_CACHE = cachetools.TLRUCache(
     maxsize=AUTOCOMPLETE_CACHE_SIZE,
-    ttu=lambda _, v, n: n + timedelta(minutes=AUTOCOMPLETE_CACHE_TTL),
-    timer=datetime.now,
+    ttu=_compute_ttl,
 )
 
-GET_USERS_CACHE = cachetools.TTLCache(maxsize=500, ttl=60)
+GET_USERS_CACHE = cachetools.TTLCache(maxsize=500, ttl=60)  # type: ignore
 
-SINGLE_USER_CACHE = cachetools.LRUCache(maxsize=500)
+SINGLE_USER_CACHE = cachetools.LRUCache(maxsize=500)  # type: ignore
 
 
 @dataclass
@@ -40,18 +46,20 @@ def build_embed_for_template(
     embed = discord.Embed(
         title=f"{template.Name} for {username}",
         url="http://bot.espressoaf.com/",
+        color=discord.Colour.from_rgb(103, 71, 54),
     )
     for field in template.Fields:
         field_content = profile.get(field.Name, None)
         if not field_content:
             continue
-        embed.add_field(name=field.Name, value=field_content)
+        embed.add_field(name=field.Name, value=field_content, inline=False)
 
-    if profile.get(template.Image.Name):
+    maybeimage = profile.get(template.Image.Name)
+    if maybeimage:
         # This is a hack to get around discord caching the URL when people change their profile pic
         embed.set_image(
             url=(
-                profile.get(template.Image.Name)
+                maybeimage
                 + "?"
                 + "".join(random.choice(string.ascii_letters) for i in range(10))
             )
@@ -79,13 +87,14 @@ def get_nick_or_name(person: Union[discord.Member, discord.User]) -> str:
     return person.name
 
 
-def _autocomplete_cache_key(interaction: discord.Interaction, current: str):
+def _autocomplete_cache_key(interaction: discord.Interaction, current: str) -> Any:
     if interaction.guild:
         return cachetools.keys.hashkey(interaction.guild.id, current)
     else:
         return cachetools.keys.hashkey(current)
 
 
+@typing.no_type_check_decorator
 @cachetools.cached(cache=AUTOCOMPLETE_CACHE, key=_autocomplete_cache_key)
 def filter_users(
     interaction: discord.Interaction, current: str
@@ -99,32 +108,40 @@ def filter_users(
 def get_single_user(interaction: discord.Interaction, name: str) -> Optional[User]:
     users = _get_users(interaction)
     if name in users:
-        return users[name]
+        maybeuser = users[name]
+        if maybeuser == None or type(maybeuser) == User:
+            return maybeuser
 
     maybecache = SINGLE_USER_CACHE.get(name)
-    if maybecache:
+    if maybecache and type(maybecache) == User:
         return maybecache
 
     res = process.extractOne(name, users.keys(), score_cutoff=90)
     if res:
         SINGLE_USER_CACHE[name] = users[res[0]]
-        return res[0]
+        maybeuser = res[0]
+        if type(maybeuser) == User:
+            return maybeuser
+        else:
+            return None
     else:
         return None
 
 
-def _get_users_key(interaction: discord.Interaction):
+# Unexposed return type
+def _get_users_key(interaction: discord.Interaction) -> Any:
     if interaction.guild:
         return cachetools.keys.hashkey(interaction.guild.id)
     else:
         return cachetools.keys.hashkey(None)
 
 
+@typing.no_type_check_decorator
 @cachetools.cached(cache=GET_USERS_CACHE, key=_get_users_key)
 def _get_users(
     interaction: discord.Interaction,
 ) -> Dict[str, User]:
-    choices = dict()
+    choices: Dict[str, User] = dict()
 
     if not interaction.guild:
         return choices

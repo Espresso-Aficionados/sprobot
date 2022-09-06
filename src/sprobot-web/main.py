@@ -4,5 +4,5 @@ app = Flask(__name__)
 
 
 @app.route("/")
-def show_profile():
+def show_profile() -> str:
     return "Online profiles coming soon!"
