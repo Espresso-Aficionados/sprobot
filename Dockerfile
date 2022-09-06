@@ -7,6 +7,9 @@ WORKDIR /code
 # copy the dependencies file to the working directory
 COPY requirements.txt .
 
+RUN apt update
+RUN apt install -y uwsgi uwsgi-plugins-all
+
 # install dependencies
 RUN pip install -r requirements.txt
 
@@ -18,7 +21,7 @@ CMD [ "python", "./sprobot/main.py" ]
 
 from base as prodweb
 WORKDIR /code/sprobot-web
-CMD [ "uwsgi", "--ini", "uwsgi.ini", "--http", "0.0.0.0:80" ]
+CMD [ "uwsgi_python3", "--ini", "uwsgi.ini", "--http-socket", "0.0.0.0:80", "--pythonpath", "/usr/local/lib/python3.10/site-packages/"]
 
 # Dev stuff below here
 FROM base as devbase
@@ -34,7 +37,7 @@ CMD [ "python", "./sprobot/main.py" ]
 
 from devbase as devweb
 WORKDIR /code/sprobot-web
-CMD [ "uwsgi", "--ini", "uwsgi.ini", "--http", "0.0.0.0:80" ]
+CMD [ "uwsgi_python3", "--ini", "uwsgi.ini", "--http-socket", "0.0.0.0:80", "--pythonpath", "/usr/local/lib/python3.10/site-packages/"]
 
 FROM devbase as test
 CMD ["/code/testing/run-tests.sh"]
