@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import random
 import string
-import typing
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
@@ -93,7 +92,6 @@ def _autocomplete_cache_key(interaction: discord.Interaction, current: str) -> A
         return cachetools.keys.hashkey(current)
 
 
-@typing.no_type_check_decorator
 @cachetools.cached(cache=AUTOCOMPLETE_CACHE, key=_autocomplete_cache_key)
 def filter_users(
     interaction: discord.Interaction, current: str
@@ -135,7 +133,6 @@ def _get_users_key(interaction: discord.Interaction) -> Any:
         return cachetools.keys.hashkey(None)
 
 
-@typing.no_type_check_decorator
 @cachetools.cached(cache=GET_USERS_CACHE, key=_get_users_key)
 def _get_users(
     interaction: discord.Interaction,
