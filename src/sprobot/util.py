@@ -4,7 +4,6 @@ import random
 import string
 import typing
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 
 import cachetools
@@ -109,7 +108,7 @@ def get_single_user(interaction: discord.Interaction, name: str) -> Optional[Use
     users = _get_users(interaction)
     if name in users:
         maybeuser = users[name]
-        if maybeuser == None or type(maybeuser) == User:
+        if maybeuser is None or type(maybeuser) == User:
             return maybeuser
 
     maybecache = SINGLE_USER_CACHE.get(name)

@@ -6,7 +6,6 @@ import sys
 import tempfile
 import time
 import traceback
-import typing
 from typing import Dict, Optional, Tuple
 from urllib.parse import quote, urljoin
 

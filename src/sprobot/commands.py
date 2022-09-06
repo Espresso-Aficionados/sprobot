@@ -4,7 +4,6 @@ import json
 import sys
 import traceback
 import typing
-from collections import defaultdict
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
