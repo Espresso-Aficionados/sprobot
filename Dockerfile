@@ -4,11 +4,11 @@ FROM python:3.10.6 as base
 # set the working directory in the container
 WORKDIR /code
 
-# copy the dependencies file to the working directory
-COPY requirements.txt .
-
 RUN apt update
 RUN apt install -y uwsgi uwsgi-plugins-all
+
+# copy the dependencies file to the working directory
+COPY requirements.txt .
 
 # install dependencies
 RUN pip install -r requirements.txt

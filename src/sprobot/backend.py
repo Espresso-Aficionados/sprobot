@@ -11,6 +11,7 @@ from urllib.parse import quote, urljoin
 
 import aioboto3  # type: ignore
 import cachetools
+import cachetools.keys
 import filetype  # type: ignore
 import httpx
 import structlog

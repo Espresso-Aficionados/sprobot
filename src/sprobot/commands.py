@@ -273,16 +273,6 @@ class EditProfile(discord.ui.Modal):
         traceback.print_exception(*sys.exc_info())
 
 
-async def _member_autocomplete(
-    interaction: discord.Interaction,
-    current: str,
-) -> List[app_commands.Choice[str]]:
-    if current == "":
-        return []
-
-    return util.filter_users(interaction, current)
-
-
 def _getgetfunc(
     template: Template,
 ) -> discord.app_commands.Command[Any, Any, Any]:
@@ -290,12 +280,14 @@ def _getgetfunc(
         name="get" + template.ShortName,
         description=template.Description,
     )
-    @app_commands.autocomplete(name=_member_autocomplete)
-    async def getfunc(interaction: discord.Interaction, name: Optional[str]) -> None:
+    async def getfunc(
+        interaction: discord.Interaction, name: Optional[discord.Member]
+    ) -> None:
         if not interaction.guild:
             raise TypeError("No Guild Found")
         if not interaction.user:
             raise TypeError("No User Found")
+
         log = structlog.get_logger()
         log.info(
             "Processing getprofile",
@@ -305,30 +297,15 @@ def _getgetfunc(
             guild_id=interaction.guild.id,
         )
         try:
-            user_id = None
-            user_name = ""
+            user_id: int = 0
+            user_name: str = ""
+
             if name:
-                possible_member = util.get_single_user(interaction, name)
-                if possible_member:
-                    user_id = possible_member.Id
-                    user_name = possible_member.Name
+                user_id = name.id
+                user_name = util.get_nick_or_name(name)
             else:
                 user_id = interaction.user.id
                 user_name = util.get_nick_or_name(interaction.user)
-
-            if not user_id:
-                if not name:
-                    await interaction.response.send_message(
-                        "Whoops! Unable to find a profile for you.",
-                        ephemeral=True,
-                    )
-                    return
-                else:
-                    await interaction.response.send_message(
-                        f"Whoops! Unable to find a id for {name}.",
-                        ephemeral=True,
-                    )
-                    return
 
             user_profile = await backend.fetch_profile(
                 template, interaction.guild.id, user_id
@@ -336,11 +313,14 @@ def _getgetfunc(
             await interaction.response.send_message(
                 embed=util.build_embed_for_template(template, user_name, user_profile),
             )
+
         except KeyError:
-            if not name:
-                name = util.get_nick_or_name(interaction.user)
+            if name:
+                user_name = util.get_nick_or_name(name)
+            else:
+                user_name = "you"
             await interaction.response.send_message(
-                f"Whoops! Unable to find a profile for {name}.",
+                f"Whoops! Unable to find a profile for {user_name}.",
                 ephemeral=True,
             )
         except Exception:
