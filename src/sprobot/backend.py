@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os.path
 import sys
@@ -68,10 +69,7 @@ class S3Backend:
             cache_max_size=self.profile_cache.maxsize,
         )
 
-        if profile:
-            return profile.copy()
-
-        return None
+        return copy.deepcopy(profile)
 
     async def fetch_profile(
         self, template: Template, guild_id: int, user_id: int
