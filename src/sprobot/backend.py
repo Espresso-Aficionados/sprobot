@@ -68,7 +68,10 @@ class S3Backend:
             cache_max_size=self.profile_cache.maxsize,
         )
 
-        return profile
+        if profile:
+            return profile.copy()
+
+        return None
 
     async def fetch_profile(
         self, template: Template, guild_id: int, user_id: int
