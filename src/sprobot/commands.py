@@ -126,7 +126,7 @@ class DeleteProfile(discord.ui.View):
             self._next = self.delete_entire_profile
             await self._update_message(interaction)
         elif self._state == DeleteState.Confirmed:
-            await backend.delete_profile(
+            await backend.s3_backend.delete_profile(
                 self._template,
                 interaction.guild.id,
                 interaction.user.id,
@@ -146,7 +146,7 @@ class DeleteProfile(discord.ui.View):
         elif self._state == DeleteState.Confirmed:
             user_profile = None
             try:
-                user_profile = await backend.fetch_profile(
+                user_profile = await backend.s3_backend.fetch_profile(
                     self._template, interaction.guild.id, interaction.user.id
                 )
             except KeyError:
@@ -160,7 +160,7 @@ class DeleteProfile(discord.ui.View):
 
             # This might have been the only field
             if user_profile:
-                _, self._error = await backend.save_profile(
+                _, self._error = await backend.s3_backend.save_profile(
                     self._template,
                     interaction.guild.id,
                     interaction.user.id,
@@ -172,7 +172,7 @@ class DeleteProfile(discord.ui.View):
                     await self._update_message(interaction)
                     return
             else:
-                await backend.delete_profile(
+                await backend.s3_backend.delete_profile(
                     self._template,
                     interaction.guild.id,
                     interaction.user.id,
@@ -246,7 +246,7 @@ class EditProfile(discord.ui.Modal):
             guild_id=interaction.guild.id,
         )
 
-        weburl, error = await backend.save_profile(
+        weburl, error = await backend.s3_backend.save_profile(
             self.template, interaction.guild.id, interaction.user.id, built_profile
         )
 
@@ -307,7 +307,7 @@ def _getgetfunc(
                 user_id = interaction.user.id
                 user_name = util.get_nick_or_name(interaction.user)
 
-            user_profile = await backend.fetch_profile(
+            user_profile = await backend.s3_backend.fetch_profile(
                 template, interaction.guild.id, user_id
             )
             await interaction.response.send_message(
@@ -317,10 +317,14 @@ def _getgetfunc(
         except KeyError:
             if name:
                 user_name = util.get_nick_or_name(name)
+                message = f"Whoops! Unable to find a profile for {user_name}."
             else:
-                user_name = "you"
+                message = (
+                    "Whoops! Unable to find a profile for you. "
+                    f"To set one up run /edit{template.ShortName}"
+                )
             await interaction.response.send_message(
-                f"Whoops! Unable to find a profile for {user_name}.",
+                message,
                 ephemeral=True,
             )
         except Exception:
@@ -354,7 +358,7 @@ def _geteditfunc(
         )
         user_profile = None
         try:
-            user_profile = await backend.fetch_profile(
+            user_profile = await backend.s3_backend.fetch_profile(
                 template, guild_id, interaction.user.id
             )
         except KeyError:  # It's ok if we don't get anything
@@ -385,10 +389,10 @@ def _getgetmenu(
             guild_id=interaction.guild.id,
         )
 
-        print(author.name, author.id)
-
         try:
-            user_profile = await backend.fetch_profile(template, guild_id, author.id)
+            user_profile = await backend.s3_backend.fetch_profile(
+                template, guild_id, author.id
+            )
 
             await interaction.response.send_message(
                 embed=util.build_embed_for_template(
@@ -396,10 +400,16 @@ def _getgetmenu(
                 ),
             )
         except KeyError:
-            await interaction.response.send_message(
-                f"Whoops! Unable to find a {template.Name} profile for {util.get_nick_or_name(author)}.",
-                ephemeral=True,
-            )
+            if author.id == interaction.user.id:
+                await interaction.response.send_message(
+                    f"Whoops! Unable to find a profile for you. To set one up run /edit{template.ShortName}",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    f"Whoops! Unable to find a {template.Name} profile for {util.get_nick_or_name(author)}.",
+                    ephemeral=True,
+                )
 
     @app_commands.context_menu(
         name=f"Get {template.Name} Profile",
@@ -445,7 +455,7 @@ def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.Cont
 
             user_profile = None
             try:
-                user_profile = await backend.fetch_profile(
+                user_profile = await backend.s3_backend.fetch_profile(
                     template, guild_id, interaction.user.id
                 )
             except KeyError:  # It's ok if we don't get anything
@@ -509,7 +519,7 @@ def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.Cont
                 )
                 return
 
-            web_url, error = await backend.save_profile(
+            web_url, error = await backend.s3_backend.save_profile(
                 template, interaction.guild.id, interaction.user.id, user_profile
             )
 
