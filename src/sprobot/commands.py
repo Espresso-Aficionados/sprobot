@@ -463,7 +463,7 @@ def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.Cont
             if not user_profile:
                 user_profile = dict()
 
-            found_attachment = False
+            found_attachments = 0
             found_video_error = ""
             for attachment in message.attachments:
                 if attachment.content_type and attachment.content_type.startswith(
@@ -476,7 +476,7 @@ def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.Cont
                         template=template.Name,
                         guild_id=interaction.guild.id,
                     )
-                    found_attachment = True
+                    found_attachments += 1
                     user_profile[template.Image.Name] = attachment.proxy_url
                 elif attachment.content_type and attachment.content_type.startswith(
                     "video/"
@@ -491,7 +491,7 @@ def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.Cont
             for embed in message.embeds:
                 if embed.image:
                     if embed.image.proxy_url:
-                        found_attachment = True
+                        found_attachments += 1
                         user_profile[template.Image.Name] = embed.image.proxy_url
                         log.info(
                             "Found image in embeds",
@@ -507,13 +507,23 @@ def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.Cont
                         "Discord will often use a mp4 instead of a gif."
                     )
 
-            if found_video_error and not found_attachment:
+            if found_video_error and found_attachments == 0:
                 await interaction.response.send_message(
                     found_video_error, ephemeral=True
                 )
                 return
 
-            if not found_attachment:
+            if found_attachments > 1:
+                await interaction.response.send_message(
+                    (
+                        f"I found {found_attachments} images in that post, but I'm not sure which one to use! "
+                        "Please make a post with just a single image."
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            if found_attachments == 0:
                 await interaction.response.send_message(
                     "I didn't find an image to save in that post :(", ephemeral=True
                 )
