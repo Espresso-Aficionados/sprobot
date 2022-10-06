@@ -42,10 +42,9 @@ jobs:
           path: |
             /tmp/sprobot-mypy-cache
             /tmp/sprobot-web-mypy-cache
-          key: mypy-cache-${{ hashFiles('**/*.json') }}
+          key: mypy-cache-${{ runner.os }}-${{ github.run_id }} # This is a hack to update the cache every run
           restore-keys: |
-            mypy-cache-${{ hashFiles('**/*.json') }}
-            mypy-cache-
+            mypy-cache-${{ runner.os }}
 
       # Just in case we didn't get anything from the cache
       - name: Create folder
