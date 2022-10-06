@@ -29,8 +29,8 @@ jobs:
           tags: sprobot-local-lint
           target: lint
           platforms: ${{ matrix.platform }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
       - name: Cache mypy
         id: cache-primes
@@ -78,8 +78,8 @@ jobs:
           tags: sprobot-local-test
           target: test
           platforms: ${{ matrix.platform }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
       - name: run tests+linters against it
         run: docker run --platform ${{ matrix.platform }} sprobot-local-test
