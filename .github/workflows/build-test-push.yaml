@@ -2,6 +2,8 @@ name: sprobot build, test, and maybe push
 
 on:
   push:
+    branches-ignore: # Dependabot branches get ran through pull_request
+      - 'dependabot/**'
   pull_request:
 
 jobs:
