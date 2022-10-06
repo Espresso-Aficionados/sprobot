@@ -44,6 +44,12 @@ jobs:
             mypy-cache-${{ hashFiles('**/*.json') }}
             mypy-cache-
 
+      # Just in case we didn't get anything from the cache
+      - name: Create folder
+        run: |
+          mkdir -p /tmp/sprobot-mypy-cache || true
+          mkdir -p /tmp/sprobot-web-mypy-cache || true
+
       - name: run linters against it
         run: docker run --platform ${{ matrix.platform }} --mount type=bind,source=/tmp/sprobot-mypy-cache,target=/code/sprobot/.mypy_cache --mount type=bind,source=/tmp/sprobot-web-mypy-cache,target=/code/sprobot-web/.mypy_cache sprobot-local-lint
         
