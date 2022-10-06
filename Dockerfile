@@ -4,14 +4,16 @@ FROM python:3.10.7 as base
 # set the working directory in the container
 WORKDIR /code
 
-RUN apt update
-RUN apt install -y uwsgi uwsgi-plugins-all
+RUN rm -f /etc/apt/apt.conf.d/docker-clean; echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+ARG DEBIAN_FRONTEND=noninteractive
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt update 
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt install -y uwsgi uwsgi-plugins-all
 
 # copy the dependencies file to the working directory
 COPY requirements.txt .
 
 # install dependencies
-RUN pip install -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache pip install -r requirements.txt
 
 FROM base as prod
 ENV SPROBOT_ENV=prod
@@ -27,7 +29,7 @@ CMD [ "uwsgi_python3", "--ini", "uwsgi.ini", "--http-socket", "0.0.0.0:80", "--p
 FROM base as devbase
 ENV SPROBOT_ENV=dev
 COPY requirements-dev.txt .
-RUN pip install -r requirements-dev.txt
+RUN --mount=type=cache,target=/root/.cache pip install -r requirements-dev.txt
 # copy our test runner
 COPY src/ .
 COPY testing/ ./testing

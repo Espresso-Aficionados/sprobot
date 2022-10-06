@@ -343,7 +343,9 @@ def _geteditfunc(
         name="edit" + template.ShortName,
         description=template.Description,
     )
-    async def editfunc(interaction: discord.Interaction) -> None:
+    async def editfunc(
+        interaction: discord.Interaction, image: Optional[discord.Attachment]
+    ) -> None:
         if not interaction.guild:
             raise TypeError("No Guild Found")
         if not interaction.user:
@@ -356,13 +358,16 @@ def _geteditfunc(
             template=template.Name,
             guild_id=interaction.guild.id,
         )
-        user_profile = None
+        user_profile = dict()
         try:
             user_profile = await backend.s3_backend.fetch_profile(
                 template, guild_id, interaction.user.id
             )
         except KeyError:  # It's ok if we don't get anything
             pass
+
+        if image:
+            user_profile[template.Image.Name] = image.proxy_url
 
         await interaction.response.send_modal(EditProfile(template, user_profile))
 
@@ -430,6 +435,49 @@ def _getgetmenu(
         await _getprofileint(interaction, user)
 
     return [getprofilemessage, getprofileuser]
+
+
+def _getsavecommand(template: Template) -> discord.app_commands.Command[Any, Any, Any]:
+    @app_commands.command(
+        name="save" + template.ShortName + "image",
+        description=f"Add a profile image to {template.Name}",
+    )
+    async def saveimage(
+        interaction: discord.Interaction, image: discord.Attachment
+    ) -> None:
+        if not interaction.guild:
+            raise TypeError("No Guild Found")
+        if not interaction.user:
+            raise TypeError("No User Found")
+
+        user_profile = None
+        try:
+            user_profile = await backend.s3_backend.fetch_profile(
+                template, interaction.guild.id, interaction.user.id
+            )
+        except KeyError:  # It's ok if we don't get anything
+            pass
+        if not user_profile:
+            user_profile = dict()
+
+        user_profile[template.Image.Name] = image.proxy_url
+
+        web_url, error = await backend.s3_backend.save_profile(
+            template, interaction.guild.id, interaction.user.id, user_profile
+        )
+
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            embed=util.build_embed_for_template(
+                template, util.get_nick_or_name(interaction.user), user_profile
+            ),
+            ephemeral=True,
+        )
+
+    return saveimage
 
 
 def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.ContextMenu:
@@ -579,6 +627,7 @@ def get_commands() -> Dict[
             for cmd in _getgetmenu(guild_id, template):
                 results[guild_id].append(cmd)
             results[guild_id].append(_getsavemenu(guild_id, template))
+            results[guild_id].append(_getsavecommand(template))
             results[guild_id].append(_getdeletefunc(template))
 
     return results
