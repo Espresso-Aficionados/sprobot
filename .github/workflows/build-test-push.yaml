@@ -10,6 +10,9 @@ jobs:
     strategy:
       matrix:
         platform: [linux/amd64, linux/arm64]
+      fail-fast: true
+      max-parallel: 1 # mypy is extremely slow, but we cache, let amd64 run first
+
     steps:
       - name: checkout code
         uses: actions/checkout@v3
