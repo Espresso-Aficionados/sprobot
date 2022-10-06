@@ -5,24 +5,6 @@ on:
   pull_request:
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: build an image
-        run: docker buildx build . --target test --load --tag sprobot-local-test
-
-      - name: run tests+linters against it
-        run: docker run sprobot-local-test
-
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -35,11 +17,49 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      - name: build an image
-        run: docker buildx build . --target lint --load --tag sprobot-local-lint
+      - name: Build and don't push
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: false
+          load: true
+          tags: sprobot-local-lint
+          target: lint
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: run linters against it
         run: docker run sprobot-local-lint
+        
+  test:
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and don't push
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: false
+          load: true
+          tags: sprobot-local-test
+          target: lint
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: run tests+linters against it
+        run: docker run sprobot-local-test
+
 
   publish-latest:
     needs: [test, lint]
@@ -61,9 +81,13 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: build and push the multiarch image
-        run: |
-          docker buildx build --push \
-            --tag sadbox/sprobot:latest \
-            --target prod \
-            --platform linux/amd64,linux/arm64 .
+      - name: Build and push
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: true
+          tags: sadbox/sprobot:latest
+          target: prod
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
