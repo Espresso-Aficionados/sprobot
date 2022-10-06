@@ -32,8 +32,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Cache mypy
+        id: cache-primes
+        uses: actions/cache@v3
+        with:
+          path: |
+            /tmp/sprobot-mypy-cache
+            /tmp/sprobot-web-mypy-cache
+          key: mypy-cache-${{ hashFiles('**/*.json') }}
+          restore-keys: |
+            mypy-cache-${{ hashFiles('**/*.json') }}
+            mypy-cache-
+
       - name: run linters against it
-        run: docker run sprobot-local-lint
+        run: docker run --platform ${{ matrix.platform }} --mount type=bind,source=/tmp/sprobot-mypy-cache,target=/code/sprobot/.mypy_cache --mount type=bind,source=/tmp/sprobot-web-mypy-cache,target=/code/sprobot-web/.mypy_cache sprobot-local-lint
         
   test:
     needs: [lint]
@@ -64,7 +76,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: run tests+linters against it
-        run: docker run sprobot-local-test
+        run: docker run --platform ${{ matrix.platform }} sprobot-local-test
 
 
   publish-latest:
