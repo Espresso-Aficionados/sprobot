@@ -119,5 +119,5 @@ jobs:
           tags: sadbox/sprobot:latest
           target: prod
           platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=linux/amd64
+          cache-from: type=gha,scope=linux/arm64
