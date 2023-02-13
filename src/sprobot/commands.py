@@ -601,15 +601,17 @@ def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.Cont
     return saveimage
 
 
-def get_commands() -> Dict[
-    int,
-    List[
-        Union[
-            discord.app_commands.ContextMenu,
-            discord.app_commands.Command[Any, Any, Any],
-        ]
-    ],
-]:
+def get_commands() -> (
+    Dict[
+        int,
+        List[
+            Union[
+                discord.app_commands.ContextMenu,
+                discord.app_commands.Command[Any, Any, Any],
+            ]
+        ],
+    ]
+):
     results: Dict[
         int,
         List[

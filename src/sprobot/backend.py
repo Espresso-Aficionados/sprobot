@@ -74,7 +74,6 @@ class S3Backend:
     async def fetch_profile(
         self, template: Template, guild_id: int, user_id: int
     ) -> Dict[str, str]:
-
         self.log.info(
             "Fetching profile",
             user_id=user_id,
@@ -189,7 +188,6 @@ class S3Backend:
                 aws_secret_access_key=self.sprobot_s3_secret,
                 endpoint_url=self.sprobot_s3_endpoint,
             ) as s3:
-
                 await s3.upload_fileobj(
                     buf,
                     self.sprobot_s3_bucket,
