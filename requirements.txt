@@ -2,7 +2,7 @@ discord.py==2.1.0
 aioboto3==11.1.0
 httpx==0.23.3
 types-requests==2.29.0.0
-structlog==22.3.0
+structlog==23.1.0
 filetype==1.2.0
 cachetools==5.2.1
 types-cachetools==5.2.1
