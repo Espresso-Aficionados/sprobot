@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import sys
 import traceback
 import typing
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
@@ -13,6 +16,21 @@ import structlog
 import util
 from discord import app_commands
 from templates import Template, all_templates
+
+
+@dataclass
+class ModLogInfo:
+    channel_id: int
+
+
+def get_mod_log_config() -> Optional[ModLogInfo]:
+    env = os.environ.get("SPROBOT_ENV")
+    if env == "prod":
+        return ModLogInfo(channel_id=1141477354129080361)
+    elif env == "dev":
+        return ModLogInfo(channel_id=1142519200682876938)
+    else:
+        return None
 
 
 def _getdeletefunc(template: Template) -> discord.app_commands.Command[Any, Any, Any]:
@@ -601,6 +619,127 @@ def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.Cont
     return saveimage
 
 
+def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
+    @app_commands.context_menu(
+        name="Save message to mod log",
+    )
+    @app_commands.default_permissions(manage_messages=True)
+    async def savepost(
+        interaction: discord.Interaction, message: discord.Message
+    ) -> None:
+        if not interaction.guild:
+            raise TypeError("No Guild Found")
+        if not interaction.user:
+            raise TypeError("No User Found")
+        try:
+            log = structlog.get_logger()
+            log.info(
+                "Processing save message to mod log",
+                nick=f"{util.get_nick_or_name(interaction.user)}#{interaction.user.discriminator}",
+                user_id=interaction.user.id,
+                guild_id=interaction.guild.id,
+            )
+
+            saved_message_embed = discord.Embed(
+                title=f"Link to message {str(message.author)} sent to {str(message.channel)}",
+                url=message.jump_url,
+            )
+
+            avatar_url = None
+            if message.author.avatar:
+                message.author.avatar.url
+
+            saved_message_embed.set_author(
+                name=str(message.author),
+                icon_url=avatar_url,
+            )
+
+            if message.content:
+                saved_message_embed.add_field(
+                    name="Message", value=message.content, inline=False
+                )
+
+            if message.attachments:
+                fetch_links = []
+                for attachment in message.attachments:
+                    fetch_links.append(
+                        backend.s3_backend.save_mod_image(
+                            guild_id, attachment.proxy_url
+                        )
+                    )
+                perm_links = await asyncio.gather(*fetch_links)
+
+                saved_message_embed.add_field(
+                    name="Attachments", value=" ".join(perm_links), inline=False
+                )
+
+            mod_log_config = get_mod_log_config()
+            if not mod_log_config:
+                log.info("No mod log config found")
+                return
+
+            mod_log_channel = interaction.client.get_channel(mod_log_config.channel_id)  # type: ignore
+            if not mod_log_channel:
+                log.info(
+                    "Unknown channel to save mod log in",
+                    channel_id=mod_log_config.channel_id,
+                )
+                return
+
+            if type(mod_log_channel) != discord.ForumChannel:
+                log.info(
+                    f"Channel {mod_log_config.channel_id} is not a ForumChannel, it is a {type(mod_log_channel)}",
+                    channel_id=mod_log_config.channel_id,
+                    channel_type=str(type(mod_log_channel)),
+                )
+                return
+
+            found_thread = None
+            for search_term in [str(message.author.id), str(message.author)]:
+                if found_thread:
+                    break
+
+                if not found_thread:
+                    for thread in mod_log_channel.threads:
+                        if search_term in thread.name:
+                            found_thread = thread
+                            break
+
+                if not found_thread:
+                    async for thread in mod_log_channel.archived_threads(limit=None):
+                        if search_term in thread.name:
+                            found_thread = thread
+                            break
+
+            if not found_thread:
+                found_thread, _ = await mod_log_channel.create_thread(
+                    name=f"{str(message.author)} - {message.author.id}",
+                    content=f"Thread for discussing {str(message.author)}",
+                )
+
+            sent_message = await found_thread.send(
+                embed=saved_message_embed,
+            )
+
+            notification_embed = discord.Embed(
+                title=f"Saved message to from {str(message.author)} in #{mod_log_channel.name}/{found_thread.name}",
+                url=sent_message.jump_url,
+            )
+
+            await interaction.response.send_message(
+                embed=notification_embed,
+                ephemeral=True,
+            )
+
+        except Exception:
+            await interaction.response.send_message(
+                "Oops! Something went wrong.", ephemeral=True
+            )
+            traceback.print_exception(*sys.exc_info())
+
+    return savepost
+
+
 def get_commands() -> (
     Dict[
         int,
@@ -631,5 +770,6 @@ def get_commands() -> (
             results[guild_id].append(_getsavemenu(guild_id, template))
             results[guild_id].append(_getsavecommand(template))
             results[guild_id].append(_getdeletefunc(template))
+        results[guild_id].append(_getsavetomodlog(guild_id))
 
     return results

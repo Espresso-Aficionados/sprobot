@@ -3,12 +3,14 @@ from __future__ import annotations
 import copy
 import json
 import os.path
+import random
+import string
 import sys
 import tempfile
 import time
 import traceback
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 
 import aioboto3  # type: ignore
 import cachetools
@@ -268,6 +270,71 @@ class S3Backend:
             template=template.Name,
             guild_id=guild_id,
         )
+
+    # Returns permalink to file/image
+    async def save_mod_image(self, guild_id: int, url: str) -> str:
+        self.log.info(
+            "Saving file to mod log",
+            guild_id=guild_id,
+        )
+
+        with tempfile.NamedTemporaryFile() as buf:
+            # Save the (possible) image to a temp file
+            try:
+                async with httpx.AsyncClient() as httpclient:
+                    async with httpclient.stream("GET", url) as resp:
+                        async for chunk in resp.aiter_bytes():
+                            buf.write(chunk)
+            except Exception:
+                self.log.info("Unable to fetch from the link provided", url=url)
+                traceback.print_exception(*sys.exc_info())
+                return url
+
+            random_id = "".join(
+                random.choices(string.ascii_letters + string.digits, k=30)
+            )
+            url_path = urlparse(url).path
+            extension = os.path.splitext(url_path)[1]
+            s3_path = os.path.join(
+                "mod_files",
+                str(guild_id),
+                f"{random_id}.{extension}",
+            )
+
+            buf.seek(0)
+            session = aioboto3.Session()
+            async with session.client(
+                "s3",
+                aws_access_key_id=self.sprobot_s3_key,
+                aws_secret_access_key=self.sprobot_s3_secret,
+                endpoint_url=self.sprobot_s3_endpoint,
+            ) as s3:
+                await s3.upload_fileobj(
+                    buf,
+                    self.sprobot_s3_bucket,
+                    s3_path,
+                    ExtraArgs={"ACL": "public-read"},
+                )
+
+                await s3.put_object_acl(
+                    ACL="public-read",
+                    Bucket=self.sprobot_s3_bucket,
+                    Key=s3_path,
+                )
+
+            s3_final_url = urljoin(
+                self.sprobot_s3_endpoint,
+                urljoin(f"{self.sprobot_s3_bucket}/", quote(s3_path)),
+            )
+
+            self.log.info(
+                "Mod Image Saved",
+                guild_id=guild_id,
+                s3_url=s3_final_url,
+            )
+
+            # Now we replace the original one with our new hosted URL
+            return s3_final_url
 
     async def save_profile(
         self, template: Template, guild_id: int, user_id: int, profile: Dict[str, str]
