@@ -7,6 +7,7 @@ import sys
 import traceback
 import typing
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
@@ -641,7 +642,7 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
             )
 
             saved_message_embed = discord.Embed(
-                title=f"Archive of message from {str(message.author)} sent to #{str(message.channel)}",
+                title=f"Archive of message from @{str(message.author)} to #{str(message.channel)}",
             )
 
             avatar_url = None
@@ -684,6 +685,16 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
             saved_message_embed.add_field(
                 name="Link to Message",
                 value=f"[Click here]({message.jump_url})",
+                inline=False,
+            )
+
+            timestamp_field = f"Created: {str(message.created_at)} UTC\n"
+            if message.edited_at:
+                timestamp_field += f"Edited: {str(message.edited_at)} UTC\n"
+            timestamp_field += f"Archived: {str(datetime.utcnow())} UTC"
+            saved_message_embed.add_field(
+                name="Timestamps",
+                value=timestamp_field,
                 inline=False,
             )
 
