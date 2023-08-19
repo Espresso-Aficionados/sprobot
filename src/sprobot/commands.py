@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import os
 import sys
@@ -17,6 +18,8 @@ import structlog
 import util
 from discord import app_commands
 from templates import Template, all_templates
+
+EMBED_SPLIT_SIZE = 1024
 
 
 @dataclass
@@ -642,7 +645,7 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
             )
 
             saved_message_embed = discord.Embed(
-                title=f"Archive of message from @{str(message.author)} to #{str(message.channel)}",
+                title=f"Message from @{str(message.author)} to #{str(message.channel)}",
             )
 
             avatar_url = None
@@ -664,9 +667,15 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
             )
 
             if message.content:
-                saved_message_embed.add_field(
-                    name="Content", value=message.content, inline=False
-                )
+                for i in itertools.count():
+                    buf_loc = i * EMBED_SPLIT_SIZE
+                    if buf_loc > len(message.content):
+                        break
+                    saved_message_embed.add_field(
+                        name="",
+                        value=message.content[buf_loc : buf_loc + EMBED_SPLIT_SIZE],
+                        inline=False,
+                    )
 
             if message.attachments:
                 fetch_links = []
