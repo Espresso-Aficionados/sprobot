@@ -641,8 +641,7 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
             )
 
             saved_message_embed = discord.Embed(
-                title=f"Link to message {str(message.author)} sent to {str(message.channel)}",
-                url=message.jump_url,
+                title=f"Archive of message from {str(message.author)} sent to #{str(message.channel)}",
             )
 
             avatar_url = None
@@ -654,9 +653,18 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
                 icon_url=avatar_url,
             )
 
+            requestor_avatar_url = None
+            if interaction.user.avatar:
+                requestor_avatar_url = interaction.user.avatar.url
+
+            saved_message_embed.set_footer(
+                text=f"archived on behalf of @{str(interaction.user)}",
+                icon_url=requestor_avatar_url,
+            )
+
             if message.content:
                 saved_message_embed.add_field(
-                    name="Message", value=message.content, inline=False
+                    name="Content", value=message.content, inline=False
                 )
 
             if message.attachments:
@@ -672,6 +680,12 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
                 saved_message_embed.add_field(
                     name="Attachments", value=" ".join(perm_links), inline=False
                 )
+
+            saved_message_embed.add_field(
+                name="Link to Message",
+                value=f"[Click here]({message.jump_url})",
+                inline=False,
+            )
 
             mod_log_config = get_mod_log_config()
             if not mod_log_config:
