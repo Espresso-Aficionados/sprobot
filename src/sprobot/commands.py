@@ -647,7 +647,7 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
 
             avatar_url = None
             if message.author.avatar:
-                message.author.avatar.url
+                avatar_url = message.author.avatar.url
 
             saved_message_embed.set_author(
                 name=str(message.author),
@@ -694,8 +694,9 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
                 )
                 return
 
+            ideal_thread_name = f"{str(message.author)} - {message.author.id}"
             found_thread = None
-            for search_term in [str(message.author.id), str(message.author)]:
+            for search_term in [f"- {message.author.id}", str(message.author)]:
                 if found_thread:
                     break
 
@@ -710,6 +711,14 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
                         if search_term in thread.name:
                             found_thread = thread
                             break
+
+            if found_thread and found_thread.name != ideal_thread_name:
+                log.info(
+                    "Thread has wrong name",
+                    original_name=found_thread.name,
+                    new_name=ideal_thread_name,
+                )
+                await found_thread.edit(name=ideal_thread_name)
 
             if not found_thread:
                 found_thread, _ = await mod_log_channel.create_thread(
