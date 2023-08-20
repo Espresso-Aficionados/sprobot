@@ -32,17 +32,20 @@ COPY requirements-dev.txt .
 RUN --mount=type=cache,target=/root/.cache pip install -r requirements-dev.txt
 # copy our test runner
 COPY src/ .
-COPY testing/ ./testing
+COPY testing/ /testing
 
 from devbase as dev
 CMD [ "python", "./sprobot/main.py" ]
+
+from devbase as autoformat
+CMD ["/testing/autoformat.sh"]
 
 from devbase as devweb
 WORKDIR /code/sprobot-web
 CMD [ "uwsgi_python3", "--ini", "uwsgi.ini", "--http-socket", "0.0.0.0:80", "--pythonpath", "/usr/local/lib/python3.10/site-packages/"]
 
 FROM devbase as test
-CMD ["/code/testing/run-tests.sh"]
+CMD ["/testing/run-tests.sh"]
 
 FROM devbase as lint
-CMD ["/code/testing/run-linters.sh"]
+CMD ["/testing/run-linters.sh"]

@@ -12,4 +12,4 @@ echo "RUNNING isort"
 isort --profile=black --check --diff .
 
 echo "RUNNING flake8"
-flake8 -v --config=/code/testing/flake8.ini
+flake8 -v --config=/testing/flake8.ini
