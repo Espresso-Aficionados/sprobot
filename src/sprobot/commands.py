@@ -623,6 +623,235 @@ def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.Cont
     return saveimage
 
 
+class ModLogMessage(discord.ui.Modal):
+    # Our modal classes MUST subclass `discord.ui.Modal`,
+    # but the title can be whatever you want.
+
+    def __init__(
+        self,
+        client: discord.Client,
+        message: discord.Message,
+        thread: Optional[discord.Thread],
+        starter_message: Optional[discord.Message],
+        *args: Any,
+        **kwargs: Any,
+    ):
+        # This must come before adding the children
+        super().__init__(
+            title=f"Save Message from {message.author} to Mod Logs", *args, **kwargs
+        )
+        self.log = structlog.get_logger()
+
+        self.TOPIC_LABEL = "Thread Topic"
+        self.MOD_NOTE_LABEL = "Mod Note about message"
+
+        self.message = message
+        self.thread = thread
+        self.starter_message = starter_message
+        self.can_edit_topic = False
+
+        orig_topic = None
+        self.log.info(
+            "thread and starter message",
+            thread=self.thread,
+            starter_message=self.starter_message,
+        )
+        if self.starter_message:
+            if self.starter_message.author.id == client.application_id:
+                self.can_edit_topic = True
+                orig_topic = self.starter_message.content
+            else:
+                self.log.info(
+                    "Unable to edit original message",
+                    thread_user_id=self.starter_message.author.id,
+                    bot_user_id=client.application_id,
+                )
+
+        if not thread:
+            self.can_edit_topic = True
+
+        if self.can_edit_topic:
+            default_text = f"Thread to discuss @{self.message.author}"
+            if orig_topic:
+                default_text = orig_topic
+
+            self.add_item(
+                discord.ui.TextInput(
+                    label=self.TOPIC_LABEL,
+                    placeholder=f"Topic for thread about @{self.message.author}.",
+                    style=discord.TextStyle.paragraph,
+                    max_length=1024,
+                    required=True,
+                    default=default_text,
+                )
+            )
+
+        self.add_item(
+            discord.ui.TextInput(
+                label=self.MOD_NOTE_LABEL,
+                placeholder="Context for why we're saving this",
+                style=discord.TextStyle.paragraph,
+                max_length=1024,
+                required=False,
+            )
+        )
+
+    def _get_form_value(self, key: str) -> Optional[str]:
+        for child in self.children:
+            if type(child) != discord.ui.TextInput:
+                continue
+            if child.label == key:
+                return child.value
+        return None
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not interaction.guild:
+            raise TypeError("No Guild Found")
+
+        saved_message_embed = discord.Embed(
+            title=f"Message from @{str(self.message.author)} to #{str(self.message.channel)}",
+        )
+
+        avatar_url = None
+        if self.message.author.avatar:
+            avatar_url = self.message.author.avatar.url
+
+        saved_message_embed.set_author(
+            name=str(self.message.author),
+            icon_url=avatar_url,
+        )
+
+        requestor_avatar_url = None
+        if interaction.user.avatar:
+            requestor_avatar_url = interaction.user.avatar.url
+
+        saved_message_embed.set_footer(
+            text=f"archived on behalf of @{str(interaction.user)}",
+            icon_url=requestor_avatar_url,
+        )
+
+        if self.message.content:
+            for i in itertools.count():
+                buf_loc = i * EMBED_SPLIT_SIZE
+                if buf_loc > len(self.message.content):
+                    break
+                saved_message_embed.add_field(
+                    name="",
+                    value=self.message.content[buf_loc : buf_loc + EMBED_SPLIT_SIZE],
+                    inline=False,
+                )
+
+        if self.message.attachments:
+            fetch_links = []
+            for attachment in self.message.attachments:
+                fetch_links.append(
+                    backend.s3_backend.save_mod_image(
+                        interaction.guild.id, attachment.proxy_url
+                    )
+                )
+            perm_links = await asyncio.gather(*fetch_links)
+
+            saved_message_embed.add_field(
+                name="Attachments", value=" ".join(perm_links), inline=False
+            )
+
+        saved_message_embed.add_field(
+            name="Link to Message",
+            value=f"[Click here]({self.message.jump_url})",
+            inline=False,
+        )
+
+        timestamp_field = f"Created: {str(self.message.created_at)} UTC\n"
+        if self.message.edited_at:
+            timestamp_field += f"Edited: {str(self.message.edited_at)} UTC\n"
+        timestamp_field += f"Archived: {str(datetime.utcnow())} UTC"
+        saved_message_embed.add_field(
+            name="Timestamps",
+            value=timestamp_field,
+            inline=False,
+        )
+
+        mod_note = self._get_form_value(self.MOD_NOTE_LABEL)
+        if mod_note:
+            saved_message_embed.add_field(
+                name="Mod Note",
+                value=mod_note,
+                inline=False,
+            )
+
+        mod_log_config = get_mod_log_config()
+        if not mod_log_config:
+            self.log.info("No mod log config found")
+            return
+
+        mod_log_channel = interaction.client.get_channel(mod_log_config.channel_id)  # type: ignore
+        if not mod_log_channel:
+            self.log.info(
+                "Unknown channel to save mod log in",
+                channel_id=mod_log_config.channel_id,
+            )
+            return
+
+        if type(mod_log_channel) != discord.ForumChannel:
+            self.log.info(
+                f"Channel {mod_log_config.channel_id} is not a ForumChannel, it is a {type(mod_log_channel)}",
+                channel_id=mod_log_config.channel_id,
+                channel_type=str(type(mod_log_channel)),
+            )
+            return
+
+        ideal_thread_name = f"{str(self.message.author)} - {self.message.author.id}"
+        ideal_thread_topic = self._get_form_value(self.TOPIC_LABEL)
+
+        edited_by_embed = discord.Embed()
+        edited_by_embed.description = f"Last edited by @{str(interaction.user)}"
+
+        if self.thread:
+            if self.thread.name != ideal_thread_name:
+                self.log.info(
+                    "Thread has wrong name",
+                    original_name=self.thread.name,
+                    new_name=ideal_thread_name,
+                )
+                await self.thread.edit(name=ideal_thread_name)
+            if self.can_edit_topic:
+                if ideal_thread_topic and self.starter_message:
+                    await self.starter_message.edit(
+                        content=ideal_thread_topic, embed=edited_by_embed
+                    )
+        else:
+            self.thread, _ = await mod_log_channel.create_thread(
+                name=ideal_thread_name,
+                content=ideal_thread_topic,
+                embed=edited_by_embed,
+            )
+
+        sent_message = await self.thread.send(
+            embed=saved_message_embed,
+        )
+
+        notification_embed = discord.Embed(
+            title=f"Saved message to from {str(self.message.author)} in #{mod_log_channel.name}/{self.thread.name}",
+            url=sent_message.jump_url,
+        )
+
+        await interaction.response.send_message(
+            embed=notification_embed,
+            ephemeral=True,
+        )
+
+    @typing.no_type_check  # on_error from Modal doesnt match the type signature of it's parent
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception
+    ) -> None:
+        await interaction.response.send_message(
+            "Oops! Something went wrong.", ephemeral=True
+        )
+
+        # Make sure we know what the error actually is
+        traceback.print_exception(*sys.exc_info())
+
+
 def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
     @app_commands.context_menu(
         name="Save message to mod log",
@@ -644,93 +873,19 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
                 guild_id=interaction.guild.id,
             )
 
-            saved_message_embed = discord.Embed(
-                title=f"Message from @{str(message.author)} to #{str(message.channel)}",
-            )
-
-            avatar_url = None
-            if message.author.avatar:
-                avatar_url = message.author.avatar.url
-
-            saved_message_embed.set_author(
-                name=str(message.author),
-                icon_url=avatar_url,
-            )
-
-            requestor_avatar_url = None
-            if interaction.user.avatar:
-                requestor_avatar_url = interaction.user.avatar.url
-
-            saved_message_embed.set_footer(
-                text=f"archived on behalf of @{str(interaction.user)}",
-                icon_url=requestor_avatar_url,
-            )
-
-            if message.content:
-                for i in itertools.count():
-                    buf_loc = i * EMBED_SPLIT_SIZE
-                    if buf_loc > len(message.content):
-                        break
-                    saved_message_embed.add_field(
-                        name="",
-                        value=message.content[buf_loc : buf_loc + EMBED_SPLIT_SIZE],
-                        inline=False,
-                    )
-
-            if message.attachments:
-                fetch_links = []
-                for attachment in message.attachments:
-                    fetch_links.append(
-                        backend.s3_backend.save_mod_image(
-                            guild_id, attachment.proxy_url
-                        )
-                    )
-                perm_links = await asyncio.gather(*fetch_links)
-
-                saved_message_embed.add_field(
-                    name="Attachments", value=" ".join(perm_links), inline=False
-                )
-
-            saved_message_embed.add_field(
-                name="Link to Message",
-                value=f"[Click here]({message.jump_url})",
-                inline=False,
-            )
-
-            timestamp_field = f"Created: {str(message.created_at)} UTC\n"
-            if message.edited_at:
-                timestamp_field += f"Edited: {str(message.edited_at)} UTC\n"
-            timestamp_field += f"Archived: {str(datetime.utcnow())} UTC"
-            saved_message_embed.add_field(
-                name="Timestamps",
-                value=timestamp_field,
-                inline=False,
-            )
-
             mod_log_config = get_mod_log_config()
             if not mod_log_config:
                 log.info("No mod log config found")
                 return
 
             mod_log_channel = interaction.client.get_channel(mod_log_config.channel_id)  # type: ignore
-            if not mod_log_channel:
-                log.info(
-                    "Unknown channel to save mod log in",
-                    channel_id=mod_log_config.channel_id,
-                )
-                return
 
-            if type(mod_log_channel) != discord.ForumChannel:
-                log.info(
-                    f"Channel {mod_log_config.channel_id} is not a ForumChannel, it is a {type(mod_log_channel)}",
-                    channel_id=mod_log_config.channel_id,
-                    channel_type=str(type(mod_log_channel)),
-                )
-                return
-
-            ideal_thread_name = f"{str(message.author)} - {message.author.id}"
             found_thread = None
-            for search_term in [f"- {message.author.id}", str(message.author)]:
+            starter_message = None
+            for search_term in [
+                f"- {message.author.id}",
+                str(message.author),
+            ]:
                 if found_thread:
                     break
 
@@ -746,32 +901,13 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
                             found_thread = thread
                             break
 
-            if found_thread and found_thread.name != ideal_thread_name:
-                log.info(
-                    "Thread has wrong name",
-                    original_name=found_thread.name,
-                    new_name=ideal_thread_name,
+            if found_thread:
+                starter_message = await found_thread.fetch_message(found_thread.id)
+
+            await interaction.response.send_modal(
+                ModLogMessage(
+                    interaction.client, message, found_thread, starter_message
                 )
-                await found_thread.edit(name=ideal_thread_name)
-
-            if not found_thread:
-                found_thread, _ = await mod_log_channel.create_thread(
-                    name=f"{str(message.author)} - {message.author.id}",
-                    content=f"Thread for discussing {str(message.author)}",
-                )
-
-            sent_message = await found_thread.send(
-                embed=saved_message_embed,
-            )
-
-            notification_embed = discord.Embed(
-                title=f"Saved message to from {str(message.author)} in #{mod_log_channel.name}/{found_thread.name}",
-                url=sent_message.jump_url,
-            )
-
-            await interaction.response.send_message(
-                embed=notification_embed,
-                ephemeral=True,
             )
 
         except Exception:
