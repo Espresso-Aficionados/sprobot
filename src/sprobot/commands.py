@@ -637,9 +637,7 @@ class ModLogMessage(discord.ui.Modal):
         **kwargs: Any,
     ):
         # This must come before adding the children
-        super().__init__(
-            title=f"Save Message from {message.author} to Mod Logs", *args, **kwargs
-        )
+        super().__init__(title="Save Message to Mod Logs", *args, **kwargs)
         self.log = structlog.get_logger()
 
         self.TOPIC_LABEL = "Thread Topic"
