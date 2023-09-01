@@ -50,7 +50,7 @@ def build_embed_for_template(
 
 
 def get_nick_or_name(person: Union[discord.Member, discord.User]) -> str:
-    if type(person) == discord.Member:
+    if type(person) is discord.Member:
         if person.nick:
             return person.nick
     return person.name

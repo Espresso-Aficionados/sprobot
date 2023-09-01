@@ -92,7 +92,7 @@ class MyClient(discord.Client):
                     )
                     continue
 
-                if type(channel) != discord.ForumChannel:
+                if type(channel) is not discord.ForumChannel:
                     log.info(
                         f"Channel {channel_id} is not a ForumChannel, it is a {type(channel)}"
                     )
