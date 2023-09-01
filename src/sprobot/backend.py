@@ -85,7 +85,7 @@ class S3Backend:
 
         cache_key = cachetools.keys.hashkey(template.Name, guild_id, user_id)
         profile = self._get_from_cache(cache_key)
-        if profile and type(profile) == dict:
+        if profile and type(profile) is dict:
             self.log.info(
                 "Returning cached profile",
                 user_id=user_id,
@@ -125,7 +125,7 @@ class S3Backend:
                 )
                 cache_key = cachetools.keys.hashkey(template.Name, guild_id, user_id)
                 self.profile_cache[cache_key] = res
-                if type(res) == dict:
+                if type(res) is dict:
                     return res
             except s3.exceptions.NoSuchKey:
                 # Normalize this to a simple KeyError

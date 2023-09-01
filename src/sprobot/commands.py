@@ -245,7 +245,7 @@ class EditProfile(discord.ui.Modal):
         log = structlog.get_logger()
         built_profile: Dict[str, str] = {}
         for child in self.children:
-            if type(child) != discord.ui.TextInput:
+            if type(child) is not discord.ui.TextInput:
                 log.info(
                     "Unused Child",
                     child=child,
@@ -696,7 +696,7 @@ class ModLogMessage(discord.ui.Modal):
 
     def _get_form_value(self, key: str) -> Optional[str]:
         for child in self.children:
-            if type(child) != discord.ui.TextInput:
+            if type(child) is not discord.ui.TextInput:
                 continue
             if child.label == key:
                 return child.value
@@ -790,7 +790,7 @@ class ModLogMessage(discord.ui.Modal):
             )
             return
 
-        if type(mod_log_channel) != discord.ForumChannel:
+        if type(mod_log_channel) is not discord.ForumChannel:
             self.log.info(
                 f"Channel {mod_log_config.channel_id} is not a ForumChannel, it is a {type(mod_log_channel)}",
                 channel_id=mod_log_config.channel_id,
