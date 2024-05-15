@@ -108,7 +108,7 @@ class S3Backend:
             aws_access_key_id=self.sprobot_s3_key,
             aws_secret_access_key=self.sprobot_s3_secret,
             endpoint_url=self.sprobot_s3_endpoint,
-        ) as s3:
+        ) as s3:  # type: ignore
             try:
                 start = time.time()
                 obj = await s3.get_object(
@@ -189,7 +189,7 @@ class S3Backend:
                 aws_access_key_id=self.sprobot_s3_key,
                 aws_secret_access_key=self.sprobot_s3_secret,
                 endpoint_url=self.sprobot_s3_endpoint,
-            ) as s3:
+            ) as s3:  # type: ignore
                 await s3.upload_fileobj(
                     buf,
                     self.sprobot_s3_bucket,
@@ -252,7 +252,7 @@ class S3Backend:
             aws_access_key_id=self.sprobot_s3_key,
             aws_secret_access_key=self.sprobot_s3_secret,
             endpoint_url=self.sprobot_s3_endpoint,
-        ) as s3:
+        ) as s3:  # type: ignore
             await s3.delete_object(
                 Bucket=self.sprobot_s3_bucket,
                 Key=s3_path,
@@ -308,7 +308,7 @@ class S3Backend:
                 aws_access_key_id=self.sprobot_s3_key,
                 aws_secret_access_key=self.sprobot_s3_secret,
                 endpoint_url=self.sprobot_s3_endpoint,
-            ) as s3:
+            ) as s3:  # type: ignore
                 await s3.upload_fileobj(
                     buf,
                     self.sprobot_s3_bucket,
@@ -374,7 +374,7 @@ class S3Backend:
             aws_access_key_id=self.sprobot_s3_key,
             aws_secret_access_key=self.sprobot_s3_secret,
             endpoint_url=self.sprobot_s3_endpoint,
-        ) as s3:
+        ) as s3:  # type: ignore
             await s3.put_object(
                 Body=json.dumps(profile),
                 Bucket=self.sprobot_s3_bucket,

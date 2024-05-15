@@ -7,7 +7,7 @@ WORKDIR /code
 RUN rm -f /etc/apt/apt.conf.d/docker-clean; echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 ARG DEBIAN_FRONTEND=noninteractive
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt update 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt install -y uwsgi uwsgi-plugins-all
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt install -y uwsgi uwsgi-plugins-all nodejs npm
 
 # copy the dependencies file to the working directory
 COPY requirements.txt .
@@ -30,6 +30,7 @@ FROM base as devbase
 ENV SPROBOT_ENV=dev
 COPY requirements-dev.txt .
 RUN --mount=type=cache,target=/root/.cache pip install -r requirements-dev.txt
+RUN --mount=type=cache,target=/root/.npm npm install -g pyright
 # copy our test runner
 COPY src/ .
 COPY testing/ /testing

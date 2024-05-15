@@ -878,6 +878,9 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
 
             mod_log_channel = interaction.client.get_channel(mod_log_config.channel_id)  # type: ignore
 
+            if type(mod_log_channel) is not discord.ForumChannel:
+                raise Exception("Wrong channel type")
+
             found_thread = None
             starter_message = None
             for search_term in [
@@ -917,17 +920,15 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
     return savepost
 
 
-def get_commands() -> (
-    Dict[
-        int,
-        List[
-            Union[
-                discord.app_commands.ContextMenu,
-                discord.app_commands.Command[Any, Any, Any],
-            ]
-        ],
-    ]
-):
+def get_commands() -> Dict[
+    int,
+    List[
+        Union[
+            discord.app_commands.ContextMenu,
+            discord.app_commands.Command[Any, Any, Any],
+        ]
+    ],
+]:
     results: Dict[
         int,
         List[

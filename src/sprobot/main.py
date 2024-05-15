@@ -214,9 +214,9 @@ class MyClient(discord.Client):
                     await thread.send(content=help_message, embed=embed_to_send)
 
                     # Once we've sent the message, don't bother checking again
-                    self.skip_thread_list[
-                        thread.id
-                    ] = f"Already sent a response to {thread.name}"
+                    self.skip_thread_list[thread.id] = (
+                        f"Already sent a response to {thread.name}"
+                    )
 
             await asyncio.sleep(30 * 60)  # Every 30 minutes
 

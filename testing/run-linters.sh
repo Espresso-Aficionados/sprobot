@@ -1,11 +1,11 @@
 #!/bin/bash
 set -eou pipefail
 
-echo "Running mypy on sprobot"
-cd /code/sprobot && time mypy --strict --explicit-package-bases --namespace-packages .
+echo $PWD
+ls -la
 
-echo "Running mypy on sprobot-web"
-cd /code/sprobot-web && time mypy --strict --explicit-package-bases --namespace-packages .
+echo "Running pyright"
+time pyright --warnings -p /testing/pyrightconfig.json .
 
 cd /code/
 echo "RUNNING isort"
