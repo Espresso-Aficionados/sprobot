@@ -804,20 +804,7 @@ class ModLogMessage(discord.ui.Modal):
         edited_by_embed = discord.Embed()
         edited_by_embed.description = f"Last edited by @{str(interaction.user)}"
 
-        if self.thread:
-            if self.thread.name != ideal_thread_name:
-                self.log.info(
-                    "Thread has wrong name",
-                    original_name=self.thread.name,
-                    new_name=ideal_thread_name,
-                )
-                await self.thread.edit(name=ideal_thread_name)
-            if self.can_edit_topic:
-                if ideal_thread_topic and self.starter_message:
-                    await self.starter_message.edit(
-                        content=ideal_thread_topic, embed=edited_by_embed
-                    )
-        else:
+        if not self.thread:
             self.thread, _ = await mod_log_channel.create_thread(
                 name=ideal_thread_name,
                 content=ideal_thread_topic,
@@ -827,6 +814,20 @@ class ModLogMessage(discord.ui.Modal):
         sent_message = await self.thread.send(
             embed=saved_message_embed,
         )
+
+        if self.thread.name != ideal_thread_name:
+            self.log.info(
+                "Thread has wrong name",
+                original_name=self.thread.name,
+                new_name=ideal_thread_name,
+            )
+            await self.thread.edit(name=ideal_thread_name)
+
+        if self.can_edit_topic:
+            if ideal_thread_topic and self.starter_message:
+                await self.starter_message.edit(
+                    content=ideal_thread_topic, embed=edited_by_embed
+                )
 
         notification_embed = discord.Embed(
             title=f"Saved message to from {str(self.message.author)} in #{mod_log_channel.name}/{self.thread.name}",
