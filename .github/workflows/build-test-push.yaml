@@ -10,16 +10,11 @@ on:
 
 jobs:
   lint:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - platform: "linux/amd64"
-            runs-on: "ubuntu-latest"
-          - platform: "linux/arm64"
-            runs-on: "macos-latest"
+        platform: [linux/amd64, linux/arm64]
       fail-fast: true
-
-    runs-on: ${{ matrix.runs-on }}
 
     steps:
       - name: checkout code
@@ -50,14 +45,8 @@ jobs:
     needs: [lint]
     strategy:
       matrix:
-        include:
-          - platform: "linux/amd64"
-            runs-on: "ubuntu-latest"
-          - platform: "linux/arm64"
-            runs-on: "macos-latest"
-      fail-fast: true
-
-    runs-on: ${{ matrix.runs-on }}
+        platform: [linux/amd64, linux/arm64]
+    runs-on: ubuntu-latest
     steps:
       - name: checkout code
         uses: actions/checkout@v4
