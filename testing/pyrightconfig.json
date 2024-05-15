@@ -1,0 +1,17 @@
+{
+    "strict": ["**"],
+    "reportMissingImports": true,
+    "include": ["../code"],
+    "pythonPlatform": "Linux",
+    "ignore": [
+        "../code//test/"
+    ],
+    "executionEnvironments": [
+        {
+            "root": "../code/sprobot/"
+        },
+        {
+            "root": "../code/sprobot-web/"
+        }
+    ]
+}
