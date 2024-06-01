@@ -1,5 +1,5 @@
 discord.py==2.3.2
-aioboto3==12.4.0
+aioboto3==13.0.0
 httpx==0.25.2
 types-requests==2.31.0.20240406
 structlog==24.1.0
