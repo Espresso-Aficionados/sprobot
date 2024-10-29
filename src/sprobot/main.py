@@ -5,7 +5,9 @@ from datetime import datetime, timedelta
 from typing import Dict
 
 import discord
+import requests
 import structlog
+from discord.ext import tasks
 from commands import get_commands
 from discord import app_commands
 
@@ -69,130 +71,60 @@ class MyClient(discord.Client):
             await self.tree.sync(guild=guild)
 
         self.skip_thread_list: Dict[int, str] = dict()
-        self.bg_task = self.loop.create_task(self.send_forum_reminder())
+        self.send_forum_reminder.start()
+        self.ping_healthcheck.start()
 
-    async def send_forum_reminder(self) -> None:
-        while True:
-            log = structlog.get_logger()
-            try:
-                await self._send_forum_reminder()
-            except Exception:
-                log.exception("Unhandled exception")
-                await asyncio.sleep(10)
-
-    async def _send_forum_reminder(self) -> None:
-        await self.wait_until_ready()
+    @tasks.loop(seconds=30)
+    async def ping_healthcheck(self):
         log = structlog.get_logger()
-        while not self.is_closed():
-            for channel_id, info in get_thread_help_config().items():
-                channel = self.get_channel(channel_id)
-                if not channel:
-                    log.info(
-                        f"Unknown channel to check for old forum posts: {channel_id}"
-                    )
-                    continue
+        try:
+            log.info("Pinging healthcheck endpoint")
+            requests.get(os.environ.get("SPROBOT_HEALTHCHECK_ENDPOINT"), timeout=10)
+        except requests.RequestException as e:
+            # Log ping failure here...
+            log.info(f"Ping failed: {e}")
 
-                if type(channel) is not discord.ForumChannel:
-                    log.info(
-                        f"Channel {channel_id} is not a ForumChannel, it is a {type(channel)}"
-                    )
-                    continue
+    @ping_healthcheck.before_loop
+    async def before_healthchecks(self):
+        await self.wait_until_ready()
 
+    @tasks.loop(minutes=30)
+    async def send_forum_reminder(self) -> None:
+        log = structlog.get_logger()
+        try:
+            await self._send_forum_reminder(log)
+        except Exception:
+            log.exception("Unhandled exception")
+            await asyncio.sleep(10)
+
+    @send_forum_reminder.before_loop
+    async def before_forum_reminder(self):
+        await self.wait_until_ready()
+
+    async def _send_forum_reminder(self, log) -> None:
+        for channel_id, info in get_thread_help_config().items():
+            channel = self.get_channel(channel_id)
+            if not channel:
+                log.info(f"Unknown channel to check for old forum posts: {channel_id}")
+                continue
+
+            if type(channel) is not discord.ForumChannel:
                 log.info(
-                    "Scanning for threads",
-                    guild_name=channel.guild.name,
-                    guild_id=channel.guild.id,
-                    channel_name=channel.name,
-                    channel_id=channel.id,
+                    f"Channel {channel_id} is not a ForumChannel, it is a {type(channel)}"
                 )
-                for thread in channel.threads:
-                    if thread.id in self.skip_thread_list:
-                        log.info(
-                            f"Thread is in the skip_list, reason: {self.skip_thread_list[thread.id]}",
-                            guild_name=channel.guild.name,
-                            guild_id=channel.guild.id,
-                            channel_name=channel.name,
-                            channel_id=channel.id,
-                            thread_id=thread.id,
-                            thread_name=thread.name,
-                        )
-                        continue
+                continue
 
-                    if thread.archived or thread.locked:
-                        log.info(
-                            "Thread is locked, skipping",
-                            guild_name=channel.guild.name,
-                            guild_id=channel.guild.id,
-                            channel_name=channel.name,
-                            channel_id=channel.id,
-                            thread_id=thread.id,
-                            thread_name=thread.name,
-                        )
-                        continue
-
-                    if not thread.created_at:
-                        log.info(
-                            "Thread doesnt have a created_at, should be impossible",
-                            guild_name=channel.guild.name,
-                            guild_id=channel.guild.id,
-                            channel_name=channel.name,
-                            channel_id=channel.id,
-                            thread_id=thread.id,
-                            thread_name=thread.name,
-                        )
-                        continue
-
-                    now = datetime.now(thread.created_at.tzinfo)
-                    thread_age = now - thread.created_at
-                    if thread_age < info.max_thread_age:
-                        log.info(
-                            f"Thread is only {thread_age} old, waiting until it is {info.max_thread_age}, skipping",
-                            guild_name=channel.guild.name,
-                            guild_id=channel.guild.id,
-                            channel_name=channel.name,
-                            channel_id=channel.id,
-                            thread_id=thread.id,
-                            thread_name=thread.name,
-                        )
-                        continue
-
-                    found_non_op_author = False
-                    number_of_posts_searched = 0
-                    async for message in thread.history(limit=info.history_limit):
-                        number_of_posts_searched += 1
-                        if message.author.id != thread.owner_id:
-                            found_non_op_author = True
-
-                    if found_non_op_author:
-                        reason = "Thread has a reply from a non-op author, skipping"
-                        log.info(
-                            reason,
-                            guild_name=channel.guild.name,
-                            guild_id=channel.guild.id,
-                            channel_name=channel.name,
-                            channel_id=channel.id,
-                            thread_id=thread.id,
-                            thread_name=thread.name,
-                        )
-                        self.skip_thread_list[thread.id] = reason
-                        continue
-
-                    if number_of_posts_searched >= info.history_limit:
-                        reason = f"Thread has too many reples (>{info.history_limit}), skipping"
-                        log.info(
-                            reason,
-                            guild_name=channel.guild.name,
-                            guild_id=channel.guild.id,
-                            channel_name=channel.name,
-                            channel_id=channel.id,
-                            thread_id=thread.id,
-                            thread_name=thread.name,
-                        )
-                        self.skip_thread_list[thread.id] = reason
-                        continue
-
+            log.info(
+                "Scanning for threads",
+                guild_name=channel.guild.name,
+                guild_id=channel.guild.id,
+                channel_name=channel.name,
+                channel_id=channel.id,
+            )
+            for thread in channel.threads:
+                if thread.id in self.skip_thread_list:
                     log.info(
-                        "Sending help prompt",
+                        f"Thread is in the skip_list, reason: {self.skip_thread_list[thread.id]}",
                         guild_name=channel.guild.name,
                         guild_id=channel.guild.id,
                         channel_name=channel.name,
@@ -200,25 +132,109 @@ class MyClient(discord.Client):
                         thread_id=thread.id,
                         thread_name=thread.name,
                     )
+                    continue
 
-                    help_message = (
-                        "It looks like nobody has responded even though this thread has been open for a while. "
-                        f"Maybe one of our <@&{info.helper_id}> could help?"
+                if thread.archived or thread.locked:
+                    log.info(
+                        "Thread is locked, skipping",
+                        guild_name=channel.guild.name,
+                        guild_id=channel.guild.id,
+                        channel_name=channel.name,
+                        channel_id=channel.id,
+                        thread_id=thread.id,
+                        thread_name=thread.name,
                     )
+                    continue
 
-                    embed_to_send = discord.Embed()
-                    embed_to_send.description = (
-                        f"Want to be part of the <@&{info.helper_id}>? Sign up by reacting to this [post in #info]"
-                        f"({info.link_to_post})"
+                if not thread.created_at:
+                    log.info(
+                        "Thread doesnt have a created_at, should be impossible",
+                        guild_name=channel.guild.name,
+                        guild_id=channel.guild.id,
+                        channel_name=channel.name,
+                        channel_id=channel.id,
+                        thread_id=thread.id,
+                        thread_name=thread.name,
                     )
-                    await thread.send(content=help_message, embed=embed_to_send)
+                    continue
 
-                    # Once we've sent the message, don't bother checking again
-                    self.skip_thread_list[thread.id] = (
-                        f"Already sent a response to {thread.name}"
+                now = datetime.now(thread.created_at.tzinfo)
+                thread_age = now - thread.created_at
+                if thread_age < info.max_thread_age:
+                    log.info(
+                        f"Thread is only {thread_age} old, waiting until it is {info.max_thread_age}, skipping",
+                        guild_name=channel.guild.name,
+                        guild_id=channel.guild.id,
+                        channel_name=channel.name,
+                        channel_id=channel.id,
+                        thread_id=thread.id,
+                        thread_name=thread.name,
                     )
+                    continue
 
-            await asyncio.sleep(30 * 60)  # Every 30 minutes
+                found_non_op_author = False
+                number_of_posts_searched = 0
+                async for message in thread.history(limit=info.history_limit):
+                    number_of_posts_searched += 1
+                    if message.author.id != thread.owner_id:
+                        found_non_op_author = True
+
+                if found_non_op_author:
+                    reason = "Thread has a reply from a non-op author, skipping"
+                    log.info(
+                        reason,
+                        guild_name=channel.guild.name,
+                        guild_id=channel.guild.id,
+                        channel_name=channel.name,
+                        channel_id=channel.id,
+                        thread_id=thread.id,
+                        thread_name=thread.name,
+                    )
+                    self.skip_thread_list[thread.id] = reason
+                    continue
+
+                if number_of_posts_searched >= info.history_limit:
+                    reason = (
+                        f"Thread has too many reples (>{info.history_limit}), skipping"
+                    )
+                    log.info(
+                        reason,
+                        guild_name=channel.guild.name,
+                        guild_id=channel.guild.id,
+                        channel_name=channel.name,
+                        channel_id=channel.id,
+                        thread_id=thread.id,
+                        thread_name=thread.name,
+                    )
+                    self.skip_thread_list[thread.id] = reason
+                    continue
+
+                log.info(
+                    "Sending help prompt",
+                    guild_name=channel.guild.name,
+                    guild_id=channel.guild.id,
+                    channel_name=channel.name,
+                    channel_id=channel.id,
+                    thread_id=thread.id,
+                    thread_name=thread.name,
+                )
+
+                help_message = (
+                    "It looks like nobody has responded even though this thread has been open for a while. "
+                    f"Maybe one of our <@&{info.helper_id}> could help?"
+                )
+
+                embed_to_send = discord.Embed()
+                embed_to_send.description = (
+                    f"Want to be part of the <@&{info.helper_id}>? Sign up by reacting to this [post in #info]"
+                    f"({info.link_to_post})"
+                )
+                await thread.send(content=help_message, embed=embed_to_send)
+
+                # Once we've sent the message, don't bother checking again
+                self.skip_thread_list[thread.id] = (
+                    f"Already sent a response to {thread.name}"
+                )
 
 
 def main() -> None:
