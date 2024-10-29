@@ -1,5 +1,5 @@
 # set base image (host OS)
-FROM python:3.10.15 as base
+FROM python:3.10.15 AS base
 
 # set the working directory in the container
 WORKDIR /code
@@ -15,18 +15,18 @@ COPY requirements.txt .
 # install dependencies
 RUN --mount=type=cache,target=/root/.cache pip install -r requirements.txt
 
-FROM base as prod
+FROM base AS prod
 ENV SPROBOT_ENV=prod
 # copy the content of the local src directory to the working directory
 COPY src/ .
 CMD [ "python", "./sprobot/main.py" ]
 
-from base as prodweb
+FROM base AS prodweb
 WORKDIR /code/sprobot-web
 CMD [ "uwsgi_python3", "--ini", "uwsgi.ini", "--http-socket", "0.0.0.0:80", "--pythonpath", "/usr/local/lib/python3.10/site-packages/"]
 
 # Dev stuff below here
-FROM base as devbase
+FROM base AS devbase
 ENV SPROBOT_ENV=dev
 COPY requirements-dev.txt .
 RUN --mount=type=cache,target=/root/.cache pip install -r requirements-dev.txt
@@ -35,18 +35,18 @@ RUN --mount=type=cache,target=/root/.npm npm install -g pyright
 COPY src/ .
 COPY testing/ /testing
 
-from devbase as dev
+FROM devbase AS dev
 CMD [ "python", "./sprobot/main.py" ]
 
-from devbase as autoformat
+FROM devbase AS autoformat
 CMD ["/testing/autoformat.sh"]
 
-from devbase as devweb
+FROM devbase AS devweb
 WORKDIR /code/sprobot-web
 CMD [ "uwsgi_python3", "--ini", "uwsgi.ini", "--http-socket", "0.0.0.0:80", "--pythonpath", "/usr/local/lib/python3.10/site-packages/"]
 
-FROM devbase as test
+FROM devbase AS test
 CMD ["/testing/run-tests.sh"]
 
-FROM devbase as lint
+FROM devbase AS lint
 CMD ["/testing/run-linters.sh"]

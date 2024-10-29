@@ -7,9 +7,9 @@ from typing import Dict
 import discord
 import requests
 import structlog
-from discord.ext import tasks
 from commands import get_commands
 from discord import app_commands
+from discord.ext import tasks
 
 
 @dataclass
@@ -77,9 +77,15 @@ class MyClient(discord.Client):
     @tasks.loop(seconds=30)
     async def ping_healthcheck(self):
         log = structlog.get_logger()
+        endpoint = os.environ.get("SPROBOT_HEALTHCHECK_ENDPOINT")
+        if endpoint is None:
+            log.info(
+                "Please set SPROBOT_HEALTHCHECK_ENDPOINT to enable healthcheck reporting"
+            )
+            return
         try:
             log.info("Pinging healthcheck endpoint")
-            requests.get(os.environ.get("SPROBOT_HEALTHCHECK_ENDPOINT"), timeout=10)
+            requests.get(endpoint, timeout=10)
         except requests.RequestException as e:
             # Log ping failure here...
             log.info(f"Ping failed: {e}")
