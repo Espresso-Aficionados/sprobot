@@ -17,6 +17,7 @@ import discord
 import structlog
 import util
 from discord import app_commands
+from links import wiki_links
 from templates import Template, all_templates
 
 EMBED_SPLIT_SIZE = 1024
@@ -851,6 +852,35 @@ class ModLogMessage(discord.ui.Modal):
         traceback.print_exception(*sys.exc_info())
 
 
+async def wiki_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> List[app_commands.Choice[str]]:
+    base = wiki_links.keys()
+    possibilities = []
+    for link in base:
+        if current in link:
+            possibilities.append(link)
+            if len(possibilities) >= 20:
+                break
+    return [app_commands.Choice(name=v, value=v) for v in possibilities]
+
+
+@app_commands.command(
+    name="wiki",
+    description="Post link to a page on the EAF wiki",
+)
+@app_commands.autocomplete(page=wiki_autocomplete)
+async def wiki(interaction: discord.Interaction, page: str) -> None:
+    if page not in wiki_links.keys():
+        await interaction.response.send_message(
+            f"Can't find a link for page {page}!", ephemeral=True
+        )
+    await interaction.response.send_message(
+        wiki_links[page],
+    )
+
+
 def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
     @app_commands.context_menu(
         name="Save message to mod log",
@@ -950,5 +980,6 @@ def get_commands() -> Dict[
             results[guild_id].append(_getsavecommand(template))
             results[guild_id].append(_getdeletefunc(template))
         results[guild_id].append(_getsavetomodlog(guild_id))
+        results[guild_id].append(wiki)
 
     return results
