@@ -856,13 +856,20 @@ async def wiki_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> List[app_commands.Choice[str]]:
-    base = wiki_links.keys()
     possibilities = []
-    for link in base:
-        if current in link:
-            possibilities.append(link)
-            if len(possibilities) >= 20:
-                break
+    for link in wiki_links:
+        if current in link.shortcut:
+            possibilities.append(link.shortcut)
+        else:
+            if link.hints:
+                for hint in link.hints:
+                    if current in hint:
+                        possibilities.append(link.shortcut)
+                        break
+
+        if len(possibilities) >= 20:
+            break
+
     return [app_commands.Choice(name=v, value=v) for v in possibilities]
 
 
@@ -872,13 +879,16 @@ async def wiki_autocomplete(
 )
 @app_commands.autocomplete(page=wiki_autocomplete)
 async def wiki(interaction: discord.Interaction, page: str) -> None:
-    if page not in wiki_links.keys():
+    for link in wiki_links:
+        if link.shortcut == page:
+            await interaction.response.send_message(
+                link.link,
+            )
+            return
+    else:
         await interaction.response.send_message(
             f"Can't find a link for page {page}!", ephemeral=True
         )
-    await interaction.response.send_message(
-        wiki_links[page],
-    )
 
 
 def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
