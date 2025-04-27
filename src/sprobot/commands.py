@@ -632,8 +632,6 @@ class ModLogMessage(discord.ui.Modal):
         self,
         client: discord.Client,
         message: discord.Message,
-        thread: Optional[discord.Thread],
-        starter_message: Optional[discord.Message],
         *args: Any,
         **kwargs: Any,
     ):
@@ -641,49 +639,9 @@ class ModLogMessage(discord.ui.Modal):
         super().__init__(title="Save Message to Mod Logs", *args, **kwargs)
         self.log = structlog.get_logger()
 
-        self.TOPIC_LABEL = "Thread Topic"
         self.MOD_NOTE_LABEL = "Mod Note about message"
 
         self.message = message
-        self.thread = thread
-        self.starter_message = starter_message
-        self.can_edit_topic = False
-
-        orig_topic = None
-        self.log.info(
-            "thread and starter message",
-            thread=self.thread,
-            starter_message=self.starter_message,
-        )
-        if self.starter_message:
-            if self.starter_message.author.id == client.application_id:
-                self.can_edit_topic = True
-                orig_topic = self.starter_message.content
-            else:
-                self.log.info(
-                    "Unable to edit original message",
-                    thread_user_id=self.starter_message.author.id,
-                    bot_user_id=client.application_id,
-                )
-
-        if not thread:
-            self.can_edit_topic = True
-
-        if self.can_edit_topic:
-            default_text = f"Thread to discuss @{self.message.author}"
-            if orig_topic:
-                default_text = orig_topic
-
-            self.add_item(
-                discord.ui.TextInput(
-                    label=self.TOPIC_LABEL,
-                    placeholder=f"Topic for thread about @{self.message.author}.",
-                    style=discord.TextStyle.paragraph,
-                    max_length=1024,
-                    required=True,
-                    default=default_text,
-                )
-            )
 
         self.add_item(
             discord.ui.TextInput(
@@ -706,6 +664,8 @@ class ModLogMessage(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not interaction.guild:
             raise TypeError("No Guild Found")
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
         saved_message_embed = discord.Embed(
             title=f"Message from @{str(self.message.author)} to #{str(self.message.channel)}",
@@ -799,43 +759,47 @@ class ModLogMessage(discord.ui.Modal):
             )
             return
 
-        ideal_thread_name = f"{str(self.message.author)} - {self.message.author.id}"
-        ideal_thread_topic = self._get_form_value(self.TOPIC_LABEL)
+        found_thread = None
+        for search_term in [
+            f"- {self.message.author.id}",
+            str(self.message.author),
+        ]:
+            if found_thread:
+                break
 
-        edited_by_embed = discord.Embed()
-        edited_by_embed.description = f"Last edited by @{str(interaction.user)}"
+            if not found_thread:
+                for thread in mod_log_channel.threads:
+                    if search_term in thread.name:
+                        found_thread = thread
+                        break
 
-        if not self.thread:
-            self.thread, _ = await mod_log_channel.create_thread(
-                name=ideal_thread_name,
+            if not found_thread:
+                async for thread in mod_log_channel.archived_threads(limit=None):
+                    if search_term in thread.name:
+                        found_thread = thread
+                        break
+
+        if not found_thread:
+            found_thread, _ = await mod_log_channel.create_thread(
+                name=f"{str(self.message.author)} - {self.message.author.id}",
                 content=ideal_thread_topic,
-                embed=edited_by_embed,
             )
 
-        sent_message = await self.thread.send(
+        self.log.info(
+            "mod log thread",
+            thread=found_thread,
+        )
+
+        sent_message = await found_thread.send(
             embed=saved_message_embed,
         )
 
-        if self.thread.name != ideal_thread_name:
-            self.log.info(
-                "Thread has wrong name",
-                original_name=self.thread.name,
-                new_name=ideal_thread_name,
-            )
-            await self.thread.edit(name=ideal_thread_name)
-
-        if self.can_edit_topic:
-            if ideal_thread_topic and self.starter_message:
-                await self.starter_message.edit(
-                    content=ideal_thread_topic, embed=edited_by_embed
-                )
-
         notification_embed = discord.Embed(
-            title=f"Saved message to from {str(self.message.author)} in #{mod_log_channel.name}/{self.thread.name}",
+            title=f"Saved message to from {str(self.message.author)} in #{mod_log_channel.name}/{found_thread.name}",
             url=sent_message.jump_url,
         )
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=notification_embed,
             ephemeral=True,
         )
@@ -844,9 +808,7 @@ class ModLogMessage(discord.ui.Modal):
     async def on_error(
         self, interaction: discord.Interaction, error: Exception
     ) -> None:
-        await interaction.response.send_message(
-            "Oops! Something went wrong.", ephemeral=True
-        )
+        await interaction.followup.send("Oops! Something went wrong.", ephemeral=True)
 
         # Make sure we know what the error actually is
         traceback.print_exception(*sys.exc_info())
@@ -912,45 +874,10 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
                 guild_id=interaction.guild.id,
             )
 
-            interaction.response.defer(ephemeral=True, thinking=True)
-
-            mod_log_config = get_mod_log_config()
-            if not mod_log_config:
-                log.info("No mod log config found")
-                return
-
-            mod_log_channel = interaction.client.get_channel(mod_log_config.channel_id)  # type: ignore
-
-            if type(mod_log_channel) is not discord.ForumChannel:
-                raise Exception("Wrong channel type")
-
-            found_thread = None
-            starter_message = None
-            for search_term in [
-                f"- {message.author.id}",
-                str(message.author),
-            ]:
-                if found_thread:
-                    break
-
-                if not found_thread:
-                    for thread in mod_log_channel.threads:
-                        if search_term in thread.name:
-                            found_thread = thread
-                            break
-
-                if not found_thread:
-                    async for thread in mod_log_channel.archived_threads(limit=None):
-                        if search_term in thread.name:
-                            found_thread = thread
-                            break
-
-            if found_thread:
-                starter_message = await found_thread.fetch_message(found_thread.id)
-
             await interaction.response.send_modal(
                 ModLogMessage(
-                    interaction.client, message, found_thread, starter_message
+                    interaction.client,
+                    message,
                 )
             )
 
