@@ -912,6 +912,8 @@ def _getsavetomodlog(guild_id: int) -> discord.app_commands.ContextMenu:
                 guild_id=interaction.guild.id,
             )
 
+            interaction.response.defer(ephemeral=True, thinking=True)
+
             mod_log_config = get_mod_log_config()
             if not mod_log_config:
                 log.info("No mod log config found")
