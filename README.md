@@ -22,7 +22,7 @@ This repository uses the [Black](https://github.com/psf/black) automatic formatt
 ### Linting:
 We are using [flake8](https://flake8.pycqa.org/en/latest/), along with the [flake8-black](https://github.com/peterjc/flake8-black) plugin to enforce formatting before commit.
 
-The repository is automatically type checked via [mypy](http://www.mypy-lang.org/) in strict mode as well. 
+The repository is automatically type checked via [pyright](https://github.com/microsoft/pyright) in strict mode as well.
 
 ### Testing:
 Tests are using [pytest](https://docs.pytest.org/en/7.1.x/)
