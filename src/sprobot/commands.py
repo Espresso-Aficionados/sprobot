@@ -782,7 +782,7 @@ class ModLogMessage(discord.ui.Modal):
         if not found_thread:
             found_thread, _ = await mod_log_channel.create_thread(
                 name=f"{str(self.message.author)} - {self.message.author.id}",
-                content=ideal_thread_topic,
+                content=f"Topic for thread about @{self.message.author}.",
             )
 
         self.log.info(
