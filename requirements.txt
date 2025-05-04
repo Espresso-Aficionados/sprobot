@@ -5,6 +5,6 @@ requests==2.32.3
 types-requests==2.32.0.20241016
 structlog==25.1.0
 filetype==1.2.0
-cachetools==5.5.0
+cachetools==5.5.2
 types-cachetools==5.5.0.20240820
 flask==3.1.0
