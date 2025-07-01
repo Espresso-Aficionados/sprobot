@@ -3,7 +3,7 @@ aioboto3==14.3.0
 httpx==0.28.1
 requests==2.32.4
 types-requests==2.32.4.20250611
-structlog==25.3.0
+structlog==25.4.0
 filetype==1.2.0
 cachetools==6.1.0
 types-cachetools==6.0.0.20250525
