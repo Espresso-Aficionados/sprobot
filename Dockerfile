@@ -22,7 +22,10 @@ COPY src/ .
 CMD [ "python", "./sprobot/main.py" ]
 
 FROM base AS prodweb
+ENV SPROBOT_ENV=prod
+COPY src/ .
 WORKDIR /code/sprobot-web
+ENV FLASK_APP=main
 CMD [ "flask", "run", "--host", "0.0.0.0", "--port", "80" ]
 
 # Dev stuff below here
@@ -43,7 +46,8 @@ CMD ["/testing/autoformat.sh"]
 
 FROM devbase AS devweb
 WORKDIR /code/sprobot-web
-CMD [ "flask", "run", "--host", "0.0.0.0", "--port", "80", "--debug" ]
+ENV FLASK_APP=main
+CMD [ "flask", "run", "--host", "127.0.0.1", "--port", "8080", "--debug" ]
 
 FROM devbase AS test
 CMD ["/testing/run-tests.sh"]
