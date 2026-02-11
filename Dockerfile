@@ -1,13 +1,13 @@
 # set base image (host OS)
-FROM python:3.10.18 AS base
+FROM python:3.10.19 AS base
 
 # set the working directory in the container
 WORKDIR /code
 
 RUN rm -f /etc/apt/apt.conf.d/docker-clean; echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 ARG DEBIAN_FRONTEND=noninteractive
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt update 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt install -y uwsgi uwsgi-plugin-python3 nodejs npm
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt update
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt install -y nodejs npm
 
 # copy the dependencies file to the working directory
 COPY requirements.txt .
@@ -22,8 +22,11 @@ COPY src/ .
 CMD [ "python", "./sprobot/main.py" ]
 
 FROM base AS prodweb
+ENV SPROBOT_ENV=prod
+COPY src/ .
 WORKDIR /code/sprobot-web
-CMD [ "uwsgi_python3", "--ini", "uwsgi.ini", "--http-socket", "0.0.0.0:80", "--pythonpath", "/usr/local/lib/python3.10/site-packages/"]
+ENV FLASK_APP=main
+CMD [ "flask", "run", "--host", "0.0.0.0", "--port", "80" ]
 
 # Dev stuff below here
 FROM base AS devbase
@@ -43,7 +46,8 @@ CMD ["/testing/autoformat.sh"]
 
 FROM devbase AS devweb
 WORKDIR /code/sprobot-web
-CMD [ "uwsgi_python3", "--ini", "uwsgi.ini", "--http-socket", "0.0.0.0:80", "--pythonpath", "/usr/local/lib/python3.10/site-packages/"]
+ENV FLASK_APP=main
+CMD [ "flask", "run", "--host", "127.0.0.1", "--port", "8080", "--debug" ]
 
 FROM devbase AS test
 CMD ["/testing/run-tests.sh"]

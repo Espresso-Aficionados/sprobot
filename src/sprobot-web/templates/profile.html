@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ template_name }} - sprobot{% endblock %}
+{% block extra_css %}
+        .card {
+            background-color: #2b2d31;
+            border-left: 4px solid rgb(103, 71, 54);
+            border-radius: 4px;
+            padding: 16px;
+            background-color: #313338;
+        }
+        .card-title {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #f2f3f5;
+            margin-bottom: 12px;
+        }
+        .field {
+            margin-bottom: 12px;
+        }
+        .field-name {
+            font-size: 0.85em;
+            font-weight: 600;
+            color: #f2f3f5;
+            margin-bottom: 2px;
+        }
+        .field-value {
+            font-size: 0.95em;
+            color: #dbdee1;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .profile-image {
+            margin-top: 12px;
+        }
+        .profile-image img {
+            max-width: 100%;
+            border-radius: 4px;
+            object-fit: contain;
+        }
+{% endblock %}
+{% block content %}
+    <div class="card">
+        <div class="card-title">{{ title }}</div>
+        {% for name, value in fields %}
+        <div class="field">
+            <div class="field-name">{{ name }}</div>
+            <div class="field-value">{{ value }}</div>
+        </div>
+        {% endfor %}
+        {% if image_url %}
+        <div class="profile-image">
+            <img src="{{ image_url }}" alt="Gear Picture">
+        </div>
+        {% endif %}
+    </div>
+{% endblock %}

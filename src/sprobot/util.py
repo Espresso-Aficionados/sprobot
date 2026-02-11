@@ -1,20 +1,38 @@
 from __future__ import annotations
 
+import os
 import random
 import string
-from typing import Dict, Union
+from typing import Dict, Optional, Union
+from urllib.parse import quote
 
 import discord
 from templates import Template
 
+SPROBOT_WEB_ENDPOINT = "http://bot.espressoaf.com/"
+
+
+def _build_profile_url(template: Template, guild_id: int, user_id: int) -> str:
+    bucket = os.environ.get("SPROBOT_S3_BUCKET", "")
+    s3_path = f"profiles/{guild_id}/{template.Name}/{user_id}.json"
+    return SPROBOT_WEB_ENDPOINT + quote(f"{bucket}/{s3_path}")
+
 
 def build_embed_for_template(
-    template: Template, username: str, profile: Dict[str, str]
+    template: Template,
+    username: str,
+    profile: Dict[str, str],
+    guild_id: Optional[int] = None,
+    user_id: Optional[int] = None,
 ) -> discord.Embed:
-    # TODO: Make this a link to a little webpage for the profile
+    if guild_id and user_id:
+        url = _build_profile_url(template, guild_id, user_id)
+    else:
+        url = SPROBOT_WEB_ENDPOINT
+
     embed = discord.Embed(
         title=f"{template.Name} for {username}",
-        url="http://bot.espressoaf.com/",
+        url=url,
         color=discord.Colour.from_rgb(103, 71, 54),
     )
     for field in template.Fields:
