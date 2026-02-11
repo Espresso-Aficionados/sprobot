@@ -6,8 +6,8 @@ WORKDIR /code
 
 RUN rm -f /etc/apt/apt.conf.d/docker-clean; echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 ARG DEBIAN_FRONTEND=noninteractive
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt update 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt install -y uwsgi uwsgi-plugin-python3 nodejs npm
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt update
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked apt install -y nodejs npm
 
 # copy the dependencies file to the working directory
 COPY requirements.txt .
@@ -23,7 +23,7 @@ CMD [ "python", "./sprobot/main.py" ]
 
 FROM base AS prodweb
 WORKDIR /code/sprobot-web
-CMD [ "uwsgi_python3", "--ini", "uwsgi.ini", "--http-socket", "0.0.0.0:80", "--pythonpath", "/usr/local/lib/python3.10/site-packages/"]
+CMD [ "flask", "run", "--host", "0.0.0.0", "--port", "80" ]
 
 # Dev stuff below here
 FROM base AS devbase
@@ -43,7 +43,7 @@ CMD ["/testing/autoformat.sh"]
 
 FROM devbase AS devweb
 WORKDIR /code/sprobot-web
-CMD [ "uwsgi_python3", "--ini", "uwsgi.ini", "--http-socket", "0.0.0.0:80", "--pythonpath", "/usr/local/lib/python3.10/site-packages/"]
+CMD [ "flask", "run", "--host", "0.0.0.0", "--port", "80", "--debug" ]
 
 FROM devbase AS test
 CMD ["/testing/run-tests.sh"]

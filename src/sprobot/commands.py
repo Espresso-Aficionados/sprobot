@@ -279,7 +279,11 @@ class EditProfile(discord.ui.Modal):
 
         await interaction.response.send_message(
             embed=util.build_embed_for_template(
-                self.template, util.get_nick_or_name(interaction.user), built_profile
+                self.template,
+                util.get_nick_or_name(interaction.user),
+                built_profile,
+                guild_id=interaction.guild.id,
+                user_id=interaction.user.id,
             ),
             ephemeral=True,
         )
@@ -334,7 +338,13 @@ def _getgetfunc(
                 template, interaction.guild.id, user_id
             )
             await interaction.response.send_message(
-                embed=util.build_embed_for_template(template, user_name, user_profile),
+                embed=util.build_embed_for_template(
+                    template,
+                    user_name,
+                    user_profile,
+                    guild_id=interaction.guild.id,
+                    user_id=user_id,
+                ),
             )
 
         except KeyError:
@@ -424,7 +434,11 @@ def _getgetmenu(
 
             await interaction.response.send_message(
                 embed=util.build_embed_for_template(
-                    template, util.get_nick_or_name(author), user_profile
+                    template,
+                    util.get_nick_or_name(author),
+                    user_profile,
+                    guild_id=interaction.guild.id,
+                    user_id=author.id,
                 ),
             )
         except KeyError:
@@ -495,7 +509,11 @@ def _getsavecommand(template: Template) -> discord.app_commands.Command[Any, Any
 
         await interaction.response.send_message(
             embed=util.build_embed_for_template(
-                template, util.get_nick_or_name(interaction.user), user_profile
+                template,
+                util.get_nick_or_name(interaction.user),
+                user_profile,
+                guild_id=interaction.guild.id,
+                user_id=interaction.user.id,
             ),
             ephemeral=True,
         )
@@ -610,7 +628,11 @@ def _getsavemenu(guild_id: int, template: Template) -> discord.app_commands.Cont
 
             await interaction.response.send_message(
                 embed=util.build_embed_for_template(
-                    template, util.get_nick_or_name(interaction.user), user_profile
+                    template,
+                    util.get_nick_or_name(interaction.user),
+                    user_profile,
+                    guild_id=interaction.guild.id,
+                    user_id=interaction.user.id,
                 ),
                 ephemeral=True,
             )
