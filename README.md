@@ -3,29 +3,44 @@
 
 Espresso Discord Profile Bot
 
+## Quickstart
 
-## Quickstart:
+Run tests locally using `./test-go.sh`, which runs gofmt, go vet, and all tests inside Docker.
 
-Run tests locally using `./test.sh`, it will run the linter + tests for you in docker. 
+Run the bot locally using `./run-go.sh`. This builds and runs a dev container.
 
-Run the container itself by using `./run.sh`. This should automatically build and run a dev container for you. 
+Run the web server locally using `./run-go-web.sh`.
 
-multiarch deployments are automatically built and pushed to dockerhub at [sadbox/sprobot](https://hub.docker.com/repository/docker/sadbox/sprobot) once a commit makes it to main. 
+Multiarch deployments are automatically built and pushed to Docker Hub once a commit makes it to main.
 
-Keep dev/test-only dependencies in requirements-dev.txt, and production-necessary dependencies in requirements.txt. 
+## Project Structure
 
-## For Contributors:
+- `cmd/sprobot/` - Discord bot entrypoint
+- `cmd/sprobot-web/` - Web server entrypoint
+- `pkg/bot/` - Discord bot logic (commands, modals, event handlers)
+- `pkg/sprobot/` - Shared types (templates, links, config)
+- `pkg/s3client/` - S3 storage client
 
-### Style:
-This repository uses the [Black](https://github.com/psf/black) automatic formatter. 
+## For Contributors
 
-### Linting:
-We are using [flake8](https://flake8.pycqa.org/en/latest/), along with the [flake8-black](https://github.com/peterjc/flake8-black) plugin to enforce formatting before commit.
+### Testing
 
-The repository is automatically type checked via [pyright](https://github.com/microsoft/pyright) in strict mode as well.
+```
+./test-go.sh
+```
 
-### Testing:
-Tests are using [pytest](https://docs.pytest.org/en/7.1.x/)
+Or run locally without Docker:
 
-### Updates:
-The repo should have automatic pull requests submitted by dependabot when dependencies are updated. 
+```
+go build ./...
+go vet ./...
+go test ./...
+```
+
+### Style
+
+Code must pass `gofmt`. This is checked automatically in CI.
+
+### Updates
+
+The repo has automatic pull requests submitted by dependabot when dependencies are updated.
