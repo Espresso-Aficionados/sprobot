@@ -237,6 +237,8 @@ class EditProfile(discord.ui.Modal):
                     default=profile.get(field.Name),
                 )
             )
+        self.add_item(discord.ui.FileUpload(
+            label="ProfileImage", min_values=1, max_values=1))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not interaction.guild:
@@ -255,6 +257,8 @@ class EditProfile(discord.ui.Modal):
                     template=self.template.Name,
                     guild_id=interaction.guild.id,
                 )
+                continue
+            if child.label is None:
                 continue
             built_profile[child.label] = child.value
 
