@@ -1,4 +1,4 @@
-discord.py==2.6.3
+discord.py==2.6.4
 aioboto3==15.1.0
 httpx==0.28.1
 requests==2.32.5
