@@ -56,7 +56,7 @@ FROM devbase AS lint
 CMD ["/testing/run-linters.sh"]
 
 # Go targets
-FROM golang:1.24-bookworm AS gobuild
+FROM golang:1.26-bookworm AS gobuild
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -87,7 +87,7 @@ ENV SPROBOT_ENV=dev
 ENV PORT=8080
 CMD ["/sprobot-web"]
 
-FROM golang:1.24-bookworm AS gotest
+FROM golang:1.26-bookworm AS gotest
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
