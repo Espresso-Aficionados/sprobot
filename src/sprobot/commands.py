@@ -237,8 +237,11 @@ class EditProfile(discord.ui.Modal):
                     default=profile.get(field.Name),
                 )
             )
-        self.add_item(discord.ui.FileUpload(
-            label="ProfileImage", min_values=1, max_values=1))
+        self.add_item(
+            discord.ui.FileUpload(  # type: ignore[attr-defined]
+                label="ProfileImage", min_values=1, max_values=1
+            )
+        )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not interaction.guild:
