@@ -68,10 +68,13 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 go build -o /sprobot-web ./cmd/sprobot-web
 
 FROM gcr.io/distroless/static-debian12 AS prodgobot
+ENV SPROBOT_ENV=prod
 COPY --from=gobuild /sprobot /sprobot
 CMD ["/sprobot"]
 
 FROM gcr.io/distroless/static-debian12 AS prodgoweb
+ENV SPROBOT_ENV=prod
+ENV PORT=9001
 COPY --from=gobuild /sprobot-web /sprobot-web
 CMD ["/sprobot-web"]
 
