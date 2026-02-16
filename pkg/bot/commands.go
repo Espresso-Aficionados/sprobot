@@ -20,118 +20,88 @@ func (b *Bot) registerAllCommands() {
 		return
 	}
 
+	topPostersConfigs := getTopPostersConfig(b.env)
+
 	for guildID, tmpls := range templates {
 		guildSnowflake := snowflake.ID(guildID)
+
+		var commands []discord.ApplicationCommandCreate
+
 		for _, tmpl := range tmpls {
-			b.registerTemplateCommands(guildSnowflake, tmpl)
+			commands = append(commands, templateCommands(tmpl)...)
 		}
-		b.registerModLogCommand(guildSnowflake)
-		b.registerWikiCommand(guildSnowflake)
+
+		// Mod log context menu
+		perm := discord.PermissionManageMessages
+		commands = append(commands, discord.MessageCommandCreate{
+			Name:                     "Save message to mod log",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+		})
+
+		// /wiki
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:        "wiki",
+			Description: "Post link to a page on the EAF wiki",
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionString{
+					Name:         "page",
+					Description:  "Wiki page shortcut",
+					Required:     true,
+					Autocomplete: true,
+				},
+			},
+		})
+
+		// /topposters
+		if _, ok := topPostersConfigs[guildSnowflake]; ok {
+			commands = append(commands, discord.SlashCommandCreate{
+				Name:        "topposters",
+				Description: "Show top message posters over the last 7 days",
+			})
+		}
+
+		if _, err := b.client.Rest.SetGuildCommands(b.client.ApplicationID, guildSnowflake, commands); err != nil {
+			b.log.Error("Failed to bulk register guild commands", "error", err, "guild_id", guildSnowflake)
+		} else {
+			b.log.Info("Registered guild commands", "guild_id", guildSnowflake, "count", len(commands))
+		}
 	}
 }
 
-func (b *Bot) registerTemplateCommands(guildID snowflake.ID, tmpl sprobot.Template) {
-	appID := b.client.ApplicationID
-
-	// /editprofile, /editroaster
-	editCmd := discord.SlashCommandCreate{
-		Name:        "edit" + tmpl.ShortName,
-		Description: tmpl.Description,
-	}
-	if _, err := b.client.Rest.CreateGuildCommand(appID, guildID, editCmd); err != nil {
-		b.log.Error("Failed to create edit command", "error", err, "template", tmpl.ShortName)
-	}
-
-	// /getprofile, /getroaster
-	getCmd := discord.SlashCommandCreate{
-		Name:        "get" + tmpl.ShortName,
-		Description: tmpl.Description,
-		Options: []discord.ApplicationCommandOption{
-			discord.ApplicationCommandOptionUser{
-				Name:        "name",
-				Description: "User to get profile for",
+func templateCommands(tmpl sprobot.Template) []discord.ApplicationCommandCreate {
+	return []discord.ApplicationCommandCreate{
+		// /editprofile, /editroaster
+		discord.SlashCommandCreate{
+			Name:        "edit" + tmpl.ShortName,
+			Description: tmpl.Description,
+		},
+		// /getprofile, /getroaster
+		discord.SlashCommandCreate{
+			Name:        "get" + tmpl.ShortName,
+			Description: tmpl.Description,
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionUser{
+					Name:        "name",
+					Description: "User to get profile for",
+				},
 			},
 		},
-	}
-	if _, err := b.client.Rest.CreateGuildCommand(appID, guildID, getCmd); err != nil {
-		b.log.Error("Failed to create get command", "error", err, "template", tmpl.ShortName)
-	}
-
-	// /deleteprofile, /deleteroaster
-	deleteCmd := discord.SlashCommandCreate{
-		Name:        "delete" + tmpl.ShortName,
-		Description: "Delete profile or profile image",
-	}
-	if _, err := b.client.Rest.CreateGuildCommand(appID, guildID, deleteCmd); err != nil {
-		b.log.Error("Failed to create delete command", "error", err, "template", tmpl.ShortName)
-	}
-
-	// /saveprofileimage, /saveroasterimage
-	saveCmd := discord.SlashCommandCreate{
-		Name:        "save" + tmpl.ShortName + "image",
-		Description: fmt.Sprintf("Add a profile image to %s", tmpl.Name),
-		Options: []discord.ApplicationCommandOption{
-			discord.ApplicationCommandOptionAttachment{
-				Name:        "image",
-				Description: "Image to save",
-				Required:    true,
-			},
+		// /deleteprofile, /deleteroaster
+		discord.SlashCommandCreate{
+			Name:        "delete" + tmpl.ShortName,
+			Description: "Delete profile or profile image",
 		},
-	}
-	if _, err := b.client.Rest.CreateGuildCommand(appID, guildID, saveCmd); err != nil {
-		b.log.Error("Failed to create save image command", "error", err, "template", tmpl.ShortName)
-	}
-
-	// Context menus: "Get <Name> Profile" (user + message)
-	getUserMenu := discord.UserCommandCreate{
-		Name: fmt.Sprintf("Get %s Profile", tmpl.Name),
-	}
-	if _, err := b.client.Rest.CreateGuildCommand(appID, guildID, getUserMenu); err != nil {
-		b.log.Error("Failed to create get profile user menu", "error", err, "template", tmpl.ShortName)
-	}
-
-	getMsgMenu := discord.MessageCommandCreate{
-		Name: fmt.Sprintf("Get %s Profile", tmpl.Name),
-	}
-	if _, err := b.client.Rest.CreateGuildCommand(appID, guildID, getMsgMenu); err != nil {
-		b.log.Error("Failed to create get profile message menu", "error", err, "template", tmpl.ShortName)
-	}
-
-	// Context menu: "Save as <Name> Image"
-	saveMenu := discord.MessageCommandCreate{
-		Name: fmt.Sprintf("Save as %s Image", tmpl.Name),
-	}
-	if _, err := b.client.Rest.CreateGuildCommand(appID, guildID, saveMenu); err != nil {
-		b.log.Error("Failed to create save image menu", "error", err, "template", tmpl.ShortName)
-	}
-}
-
-func (b *Bot) registerModLogCommand(guildID snowflake.ID) {
-	perm := discord.PermissionManageMessages
-	modLogMenu := discord.MessageCommandCreate{
-		Name:                     "Save message to mod log",
-		DefaultMemberPermissions: omit.NewPtr(perm),
-	}
-	if _, err := b.client.Rest.CreateGuildCommand(b.client.ApplicationID, guildID, modLogMenu); err != nil {
-		b.log.Error("Failed to create mod log menu", "error", err)
-	}
-}
-
-func (b *Bot) registerWikiCommand(guildID snowflake.ID) {
-	wikiCmd := discord.SlashCommandCreate{
-		Name:        "wiki",
-		Description: "Post link to a page on the EAF wiki",
-		Options: []discord.ApplicationCommandOption{
-			discord.ApplicationCommandOptionString{
-				Name:         "page",
-				Description:  "Wiki page shortcut",
-				Required:     true,
-				Autocomplete: true,
-			},
+		// Context menus: "Get <Name> Profile" (user + message)
+		discord.UserCommandCreate{
+			Name: fmt.Sprintf("Get %s Profile", tmpl.Name),
 		},
-	}
-	if _, err := b.client.Rest.CreateGuildCommand(b.client.ApplicationID, guildID, wikiCmd); err != nil {
-		b.log.Error("Failed to create wiki command", "error", err)
+		discord.MessageCommandCreate{
+			Name: fmt.Sprintf("Get %s Profile", tmpl.Name),
+		},
+		// Context menu: "Save as <Name> Image"
+		discord.MessageCommandCreate{
+			Name: fmt.Sprintf("Save as %s Image", tmpl.Name),
+		},
 	}
 }
 
@@ -170,9 +140,6 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		case "delete" + tmpl.ShortName:
 			b.handleDelete(e, tmpl)
 			return
-		case "save" + tmpl.ShortName + "image":
-			b.handleSaveImageCommand(e, tmpl)
-			return
 		case fmt.Sprintf("Get %s Profile", tmpl.Name):
 			b.handleGetMenu(e, tmpl)
 			return
@@ -187,6 +154,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleWiki(e)
 	case "Save message to mod log":
 		b.handleModLogMenu(e)
+	case "topposters":
+		b.handleTopPosters(e)
 	}
 }
 
