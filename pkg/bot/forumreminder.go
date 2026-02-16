@@ -1,0 +1,202 @@
+package bot
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/snowflake/v2"
+)
+
+type threadHelpInfo struct {
+	HelperID     string
+	LinkToPost   string
+	MaxThreadAge time.Duration
+	HistoryLimit int
+}
+
+func getThreadHelpConfig(env string) map[snowflake.ID]threadHelpInfo {
+	switch env {
+	case "prod":
+		return map[snowflake.ID]threadHelpInfo{
+			1019753326469980262: {
+				HelperID:     "1020401507121774722",
+				LinkToPost:   "https://discord.com/channels/726985544038612993/727325278820368456/1020402429717663854",
+				MaxThreadAge: 24 * time.Hour,
+				HistoryLimit: 50,
+			},
+		}
+	case "dev":
+		return map[snowflake.ID]threadHelpInfo{
+			1019680268229021807: {
+				HelperID:     "1015493549430685706",
+				LinkToPost:   "https://discord.com/channels/1013566342345019512/1019680095893471322/1020431232129048667",
+				MaxThreadAge: 5 * time.Minute,
+				HistoryLimit: 5,
+			},
+		}
+	default:
+		return nil
+	}
+}
+
+func (b *Bot) forumReminderLoop() {
+	// Wait for the bot to be ready
+	for !b.ready.Load() {
+		time.Sleep(1 * time.Second)
+	}
+
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	// Run immediately once, then on ticker
+	b.sendForumReminders()
+	for range ticker.C {
+		b.sendForumReminders()
+	}
+}
+
+func (b *Bot) sendForumReminders() {
+	defer func() {
+		if r := recover(); r != nil {
+			b.log.Error("Panic in forum reminder", "error", r)
+		}
+	}()
+
+	config := getThreadHelpConfig(b.env)
+	if config == nil {
+		return
+	}
+
+	for channelID, info := range config {
+		channel, err := b.client.Rest.GetChannel(channelID)
+		if err != nil {
+			b.log.Info("Unknown channel to check for old forum posts", "channel_id", channelID)
+			continue
+		}
+
+		if channel.Type() != discord.ChannelTypeGuildForum {
+			b.log.Info("Channel is not a ForumChannel", "channel_id", channelID, "type", channel.Type())
+			continue
+		}
+
+		forumCh, ok := channel.(discord.GuildForumChannel)
+		if !ok {
+			continue
+		}
+
+		b.log.Info("Scanning for threads",
+			"guild_id", forumCh.GuildID(),
+			"channel_id", channelID,
+			"channel_name", channel.Name(),
+		)
+
+		// Get active threads for this guild
+		activeThreads, err := b.client.Rest.GetActiveGuildThreads(forumCh.GuildID())
+		if err != nil {
+			b.log.Error("Failed to get active threads", "error", err)
+			continue
+		}
+
+		for _, thread := range activeThreads.Threads {
+			parentID := thread.ParentID()
+			if parentID == nil || *parentID != channelID {
+				continue
+			}
+			b.checkThread(thread, info)
+		}
+	}
+}
+
+func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
+	threadID := int(thread.ID())
+	if reason, ok := b.skipList[threadID]; ok {
+		b.log.Info("Thread is in the skip_list",
+			"reason", reason,
+			"thread_id", thread.ID(),
+			"thread_name", thread.Name(),
+		)
+		return
+	}
+
+	if thread.ThreadMetadata.Archived || thread.ThreadMetadata.Locked {
+		b.log.Info("Thread is locked/archived, skipping",
+			"thread_id", thread.ID(),
+			"thread_name", thread.Name(),
+		)
+		return
+	}
+
+	// Parse thread creation time from snowflake ID
+	createdAt := thread.CreatedAt()
+	threadAge := time.Since(createdAt)
+
+	if threadAge < info.MaxThreadAge {
+		b.log.Info(fmt.Sprintf("Thread is only %s old, waiting until %s", threadAge, info.MaxThreadAge),
+			"thread_id", thread.ID(),
+			"thread_name", thread.Name(),
+		)
+		return
+	}
+
+	// Check message history
+	messages, err := b.client.Rest.GetMessages(thread.ID(), 0, 0, 0, info.HistoryLimit)
+	if err != nil {
+		b.log.Error("Failed to get thread messages", "error", err, "thread_id", thread.ID())
+		return
+	}
+
+	foundNonOP := false
+	for _, msg := range messages {
+		if msg.Author.ID != thread.OwnerID {
+			foundNonOP = true
+			break
+		}
+	}
+
+	if foundNonOP {
+		reason := "Thread has a reply from a non-op author, skipping"
+		b.log.Info(reason, "thread_id", thread.ID(), "thread_name", thread.Name())
+		b.skipList[threadID] = reason
+		return
+	}
+
+	if len(messages) >= info.HistoryLimit {
+		reason := fmt.Sprintf("Thread has too many replies (>%d), skipping", info.HistoryLimit)
+		b.log.Info(reason, "thread_id", thread.ID(), "thread_name", thread.Name())
+		b.skipList[threadID] = reason
+		return
+	}
+
+	b.log.Info("Sending help prompt", "thread_id", thread.ID(), "thread_name", thread.Name())
+
+	helpMessage := fmt.Sprintf(
+		"It looks like nobody has responded even though this thread has been open for a while. "+
+			"Maybe one of our <@&%s> could help?",
+		info.HelperID,
+	)
+
+	embed := discord.Embed{
+		Description: fmt.Sprintf(
+			"Want to be part of the <@&%s>? Sign up by reacting to this [post in #info](%s)",
+			info.HelperID,
+			info.LinkToPost,
+		),
+	}
+
+	_, err = b.client.Rest.CreateMessage(thread.ID(), discord.MessageCreate{
+		Content: helpMessage,
+		Embeds:  []discord.Embed{embed},
+	})
+	if err != nil {
+		b.log.Error("Failed to send forum reminder", "error", err, "thread_id", thread.ID())
+	}
+
+	b.skipList[threadID] = fmt.Sprintf("Already sent a response to %s", thread.Name())
+}
+
+func snowflakeToTime(id int64) time.Time {
+	const discordEpoch = 1420070400000
+	ms := (id >> 22) + discordEpoch
+	return time.UnixMilli(ms)
+}

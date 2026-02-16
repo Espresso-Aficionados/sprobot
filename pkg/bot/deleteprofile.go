@@ -1,0 +1,186 @@
+package bot
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
+
+	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/sadbox/sprobot/pkg/sprobot"
+)
+
+func (b *Bot) handleDelete(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
+	b.log.Info("Processing delete",
+		"user_id", userIDStr(e),
+		"template", tmpl.Name,
+		"guild_id", guildIDStr(e),
+	)
+
+	e.CreateMessage(discord.MessageCreate{
+		Content: "What would you like to delete?",
+		Flags:   discord.MessageFlagEphemeral,
+		Components: []discord.LayoutComponent{
+			discord.NewActionRow(
+				discord.NewPrimaryButton(
+					"Delete Entire Profile",
+					fmt.Sprintf("del_profile_%s", tmpl.ShortName),
+				),
+				discord.NewPrimaryButton(
+					"Delete Profile Picture",
+					fmt.Sprintf("del_image_%s", tmpl.ShortName),
+				),
+				discord.NewSecondaryButton(
+					"Cancel",
+					"del_cancel",
+				),
+			),
+		},
+	})
+}
+
+func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
+	customID := e.Data.CustomID()
+
+	if customID == "del_cancel" {
+		content := "No worries!"
+		e.UpdateMessage(discord.MessageUpdate{
+			Content:    &content,
+			Components: &[]discord.LayoutComponent{},
+		})
+		return
+	}
+
+	templates := sprobot.AllTemplates(b.env)
+	for _, tmpls := range templates {
+		for _, tmpl := range tmpls {
+			switch customID {
+			case fmt.Sprintf("del_profile_%s", tmpl.ShortName):
+				content := "Are you sure?"
+				e.UpdateMessage(discord.MessageUpdate{
+					Content: &content,
+					Components: &[]discord.LayoutComponent{
+						discord.NewActionRow(
+							discord.NewDangerButton(
+								"Confirm",
+								fmt.Sprintf("del_confirm_profile_%s", tmpl.ShortName),
+							),
+							discord.NewSecondaryButton(
+								"Cancel",
+								"del_cancel",
+							),
+						),
+					},
+				})
+				return
+
+			case fmt.Sprintf("del_image_%s", tmpl.ShortName):
+				content := "Are you sure?"
+				e.UpdateMessage(discord.MessageUpdate{
+					Content: &content,
+					Components: &[]discord.LayoutComponent{
+						discord.NewActionRow(
+							discord.NewDangerButton(
+								"Confirm",
+								fmt.Sprintf("del_confirm_image_%s", tmpl.ShortName),
+							),
+							discord.NewSecondaryButton(
+								"Cancel",
+								"del_cancel",
+							),
+						),
+					},
+				})
+				return
+
+			case fmt.Sprintf("del_confirm_profile_%s", tmpl.ShortName):
+				b.confirmDeleteProfile(e, tmpl)
+				return
+
+			case fmt.Sprintf("del_confirm_image_%s", tmpl.ShortName):
+				b.confirmDeleteImage(e, tmpl)
+				return
+			}
+		}
+	}
+}
+
+func (b *Bot) confirmDeleteProfile(e *events.ComponentInteractionCreate, tmpl sprobot.Template) {
+	guildStr := guildIDStr(e)
+	userStr := userIDStr(e)
+
+	err := b.s3.DeleteProfile(context.Background(), tmpl, guildStr, userStr)
+	if err != nil {
+		b.log.Error("Failed to delete profile", "error", err)
+		content := "Oops! Something went wrong."
+		e.UpdateMessage(discord.MessageUpdate{
+			Content:    &content,
+			Components: &[]discord.LayoutComponent{},
+		})
+		return
+	}
+	content := "Deleted!"
+	e.UpdateMessage(discord.MessageUpdate{
+		Content:    &content,
+		Components: &[]discord.LayoutComponent{},
+	})
+}
+
+func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl sprobot.Template) {
+	guildStr := guildIDStr(e)
+	userStr := userIDStr(e)
+
+	profile, err := b.s3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
+	if err != nil {
+		if errors.Is(err, s3client.ErrNotFound) {
+			content := "Deleted!"
+			e.UpdateMessage(discord.MessageUpdate{
+				Content:    &content,
+				Components: &[]discord.LayoutComponent{},
+			})
+			return
+		}
+		b.log.Error("Failed to fetch profile for image delete", "error", err)
+		return
+	}
+
+	delete(profile, tmpl.Image.Name)
+
+	hasFields := false
+	for _, f := range tmpl.Fields {
+		if v, ok := profile[f.Name]; ok && strings.TrimSpace(v) != "" {
+			hasFields = true
+			break
+		}
+	}
+
+	if hasFields {
+		_, userErr, err := b.s3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
+		if err != nil {
+			b.log.Error("Failed to save profile after image delete", "error", err)
+			return
+		}
+		if userErr != "" {
+			content := userErr
+			e.UpdateMessage(discord.MessageUpdate{
+				Content:    &content,
+				Components: &[]discord.LayoutComponent{},
+			})
+			return
+		}
+	} else {
+		if err := b.s3.DeleteProfile(context.Background(), tmpl, guildStr, userStr); err != nil {
+			b.log.Error("Failed to delete empty profile", "error", err)
+			return
+		}
+	}
+
+	content := "Deleted!"
+	e.UpdateMessage(discord.MessageUpdate{
+		Content:    &content,
+		Components: &[]discord.LayoutComponent{},
+	})
+}

@@ -73,8 +73,39 @@ jobs:
         run: docker run --platform ${{ matrix.platform }} sprobot-local-test
 
 
+  gotest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+      fail-fast: true
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build gotest image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: sprobot-gotest
+          target: gotest
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=go-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=go-${{ matrix.platform }}
+
+      - name: Run Go vet and tests
+        run: docker run --platform ${{ matrix.platform }} sprobot-gotest
+
   publish-latest:
-    needs: [test, lint]
+    needs: [test, lint, gotest]
     if: startsWith(github.ref, 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
@@ -93,7 +124,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push
+      - name: Build and push Python bot
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -101,4 +132,24 @@ jobs:
           tags: sadbox/sprobot:latest
           target: prod
           platforms: linux/amd64,linux/arm64
-          cache-from: type=gha,scope=linux/arm64 # Ideally we'd like to pull cache from both, but arm is the slower to build, so we settle for that
+          cache-from: type=gha,scope=linux/arm64
+
+      - name: Build and push Go bot
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: sadbox/sprobot-go:latest
+          target: prodgobot
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=go-linux/arm64
+
+      - name: Build and push Go web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: sadbox/sprobot-go-web:latest
+          target: prodgoweb
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=go-linux/arm64

@@ -54,3 +54,40 @@ CMD ["/testing/run-tests.sh"]
 
 FROM devbase AS lint
 CMD ["/testing/run-linters.sh"]
+
+# Go targets
+FROM golang:1.24-bookworm AS gobuild
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY cmd/ cmd/
+COPY pkg/ pkg/
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /sprobot ./cmd/sprobot
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /sprobot-web ./cmd/sprobot-web
+
+FROM gcr.io/distroless/static-debian12 AS prodgobot
+COPY --from=gobuild /sprobot /sprobot
+CMD ["/sprobot"]
+
+FROM gcr.io/distroless/static-debian12 AS prodgoweb
+COPY --from=gobuild /sprobot-web /sprobot-web
+CMD ["/sprobot-web"]
+
+FROM gobuild AS devgobot
+ENV SPROBOT_ENV=dev
+CMD ["/sprobot"]
+
+FROM gobuild AS devgoweb
+ENV SPROBOT_ENV=dev
+ENV PORT=8080
+CMD ["/sprobot-web"]
+
+FROM golang:1.24-bookworm AS gotest
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY cmd/ cmd/
+COPY pkg/ pkg/
+CMD ["sh", "-c", "test -z \"$(gofmt -l .)\" || { echo 'gofmt check failed:'; gofmt -l .; exit 1; } && go vet ./... && go test ./..."]
