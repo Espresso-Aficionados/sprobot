@@ -47,22 +47,22 @@ jobs:
     strategy:
       matrix:
         include:
-          - image: sadbox/sprobot-go
+          - image: sadbox/sprobot
             target: prod
             platform: linux/amd64
             runner: ubuntu-latest
             cache-scope: publish-bot-amd64
-          - image: sadbox/sprobot-go
+          - image: sadbox/sprobot
             target: prod
             platform: linux/arm64
             runner: ubuntu-24.04-arm
             cache-scope: publish-bot-arm64
-          - image: sadbox/sprobot-go-web
+          - image: sadbox/sprobot-web
             target: prodweb
             platform: linux/amd64
             runner: ubuntu-latest
             cache-scope: publish-web-amd64
-          - image: sadbox/sprobot-go-web
+          - image: sadbox/sprobot-web
             target: prodweb
             platform: linux/arm64
             runner: ubuntu-24.04-arm
@@ -118,10 +118,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - image: sadbox/sprobot-go
-            artifact-prefix: digest-sadbox-sprobot-go
-          - image: sadbox/sprobot-go-web
-            artifact-prefix: digest-sadbox-sprobot-go-web
+          - image: sadbox/sprobot
+            artifact-prefix: digest-sadbox-sprobot
+          - image: sadbox/sprobot-web
+            artifact-prefix: digest-sadbox-sprobot-web
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
