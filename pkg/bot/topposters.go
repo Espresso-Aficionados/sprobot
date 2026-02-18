@@ -162,6 +162,16 @@ func pruneOldDays(counts map[string]map[string]int, cutoff string) {
 	}
 }
 
+func oldestDate(counts map[string]map[string]int) string {
+	oldest := ""
+	for date := range counts {
+		if oldest == "" || date < oldest {
+			oldest = date
+		}
+	}
+	return oldest
+}
+
 func aggregateCounts(counts map[string]map[string]int) map[string]int {
 	totals := make(map[string]int)
 	for _, users := range counts {
@@ -203,6 +213,7 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 
 	gc.mu.Lock()
 	totals := aggregateCounts(gc.Counts)
+	since := oldestDate(gc.Counts)
 	gc.mu.Unlock()
 
 	// Sort by count descending
@@ -228,8 +239,15 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 		description = strings.Join(lines, "\n")
 	}
 
+	title := "Top Posters (Last 7 Days)"
+	if since != "" {
+		if t, err := time.Parse("2006-01-02", since); err == nil {
+			title = fmt.Sprintf("Top Posters (Since %s)", t.Format("Jan 2, 2006"))
+		}
+	}
+
 	embed := discord.Embed{
-		Title:       "Top Posters (Last 7 Days)",
+		Title:       title,
 		Description: description,
 	}
 

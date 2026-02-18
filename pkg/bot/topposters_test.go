@@ -114,6 +114,32 @@ func TestAggregateCounts(t *testing.T) {
 	}
 }
 
+func TestOldestDate(t *testing.T) {
+	counts := map[string]map[string]int{
+		"2026-02-12": {"user1": 1},
+		"2026-02-10": {"user2": 2},
+		"2026-02-14": {"user3": 3},
+	}
+	if got := oldestDate(counts); got != "2026-02-10" {
+		t.Errorf("oldestDate = %q, want %q", got, "2026-02-10")
+	}
+}
+
+func TestOldestDateEmpty(t *testing.T) {
+	if got := oldestDate(map[string]map[string]int{}); got != "" {
+		t.Errorf("oldestDate = %q, want empty", got)
+	}
+}
+
+func TestOldestDateSingleDay(t *testing.T) {
+	counts := map[string]map[string]int{
+		"2026-02-10": {"user1": 5},
+	}
+	if got := oldestDate(counts); got != "2026-02-10" {
+		t.Errorf("oldestDate = %q, want %q", got, "2026-02-10")
+	}
+}
+
 func TestAggregateCountsEmpty(t *testing.T) {
 	totals := aggregateCounts(map[string]map[string]int{})
 	if len(totals) != 0 {
