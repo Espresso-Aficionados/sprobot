@@ -22,6 +22,14 @@ import (
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
+// disableURLValidation overrides the URL validator for testing with local servers.
+func disableURLValidation(t *testing.T) {
+	t.Helper()
+	orig := urlValidator
+	urlValidator = func(string) error { return nil }
+	t.Cleanup(func() { urlValidator = orig })
+}
+
 // fakeS3 is an in-memory S3-compatible server for testing.
 type fakeS3 struct {
 	mu      sync.Mutex
@@ -317,6 +325,7 @@ func TestSaveProfileWithImageAlreadyHosted(t *testing.T) {
 }
 
 func TestSaveProfileWithImageDownload(t *testing.T) {
+	disableURLValidation(t)
 	fake := newFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
@@ -361,6 +370,7 @@ func TestSaveProfileWithImageDownload(t *testing.T) {
 }
 
 func TestSaveProfileWithNonImageURL(t *testing.T) {
+	disableURLValidation(t)
 	fake := newFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
@@ -392,6 +402,7 @@ func TestSaveProfileWithNonImageURL(t *testing.T) {
 }
 
 func TestSaveProfileWithUnreachableURL(t *testing.T) {
+	disableURLValidation(t)
 	fake := newFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
@@ -412,6 +423,30 @@ func TestSaveProfileWithUnreachableURL(t *testing.T) {
 	}
 	if !strings.Contains(userErr, "Unable to fetch") {
 		t.Errorf("userErr %q should mention fetch failure", userErr)
+	}
+}
+
+func TestSaveProfileWithBlockedURL(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	profile := map[string]string{
+		"Machine":      "Pavoni",
+		"Gear Picture": "http://127.0.0.1:1/nope.png",
+	}
+
+	_, userErr, err := c.SaveProfile(context.Background(), sprobot.ProfileTemplate, "123", "456", profile)
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if userErr == "" {
+		t.Error("expected userErr about blocked URL, got empty")
+	}
+	if !strings.Contains(userErr, "not valid") {
+		t.Errorf("userErr %q should mention URL not valid", userErr)
 	}
 }
 
@@ -447,6 +482,7 @@ func TestDeleteProfile(t *testing.T) {
 }
 
 func TestSaveModImage(t *testing.T) {
+	disableURLValidation(t)
 	fake := newFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
@@ -472,6 +508,7 @@ func TestSaveModImage(t *testing.T) {
 }
 
 func TestSaveModImageUnreachable(t *testing.T) {
+	disableURLValidation(t)
 	fake := newFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
@@ -486,6 +523,24 @@ func TestSaveModImageUnreachable(t *testing.T) {
 	// Should gracefully return the original URL
 	if got != original {
 		t.Errorf("expected original URL %q on failure, got %q", original, got)
+	}
+}
+
+func TestSaveModImageBlockedURL(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	original := "http://127.0.0.1:1/nope.jpg"
+	got, err := c.SaveModImage(context.Background(), "123", original)
+	if err != nil {
+		t.Fatalf("SaveModImage: %v", err)
+	}
+	// URL validation blocks loopback — should return original URL
+	if got != original {
+		t.Errorf("expected original URL %q on blocked, got %q", original, got)
 	}
 }
 

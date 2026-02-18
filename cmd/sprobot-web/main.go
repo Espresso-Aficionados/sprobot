@@ -49,8 +49,16 @@ func main() {
 		port = "8080"
 	}
 
+	server := &http.Server{
+		Addr:         ":" + port,
+		Handler:      securityHeaders(accessLog(mux)),
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
 	log.Printf("Listening on :%s", port)
-	if err := http.ListenAndServe(":"+port, accessLog(mux)); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
 }
@@ -150,6 +158,16 @@ func accessLog(next http.Handler) http.Handler {
 			ip = r.RemoteAddr
 		}
 		log.Printf("%s %s %s %d %s %q", ip, r.Method, r.URL.RequestURI(), rec.status, time.Since(start), r.UserAgent())
+	})
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' https:;")
+		next.ServeHTTP(w, r)
 	})
 }
 

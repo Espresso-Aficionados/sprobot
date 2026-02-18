@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/disgoorg/disgo/discord"
-	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
@@ -22,9 +21,6 @@ func TestGetTopPostersConfigDev(t *testing.T) {
 	if cfg.TargetRoleID != 0 {
 		t.Errorf("TargetRoleID = %d, want 0", cfg.TargetRoleID)
 	}
-	if cfg.CommandRoleID != 0 {
-		t.Errorf("CommandRoleID = %d, want 0", cfg.CommandRoleID)
-	}
 }
 
 func TestGetTopPostersConfigProd(t *testing.T) {
@@ -38,9 +34,6 @@ func TestGetTopPostersConfigProd(t *testing.T) {
 	}
 	if cfg.TargetRoleID != 791104833117225000 {
 		t.Errorf("TargetRoleID = %d, want 791104833117225000", cfg.TargetRoleID)
-	}
-	if cfg.CommandRoleID != 738986689749450769 {
-		t.Errorf("CommandRoleID = %d, want 738986689749450769", cfg.CommandRoleID)
 	}
 }
 
@@ -295,23 +288,4 @@ func TestTemplateCommandsGetHasUserOption(t *testing.T) {
 		}
 	}
 	t.Error("getprofile command not found")
-}
-
-func TestProdCommandRoleID(t *testing.T) {
-	configs := getTopPostersConfig("prod")
-	cfg := configs[726985544038612993]
-
-	want := snowflake.ID(738986689749450769)
-	if cfg.CommandRoleID != want {
-		t.Errorf("prod CommandRoleID = %d, want %d", cfg.CommandRoleID, want)
-	}
-}
-
-func TestDevCommandRoleIDAllowsAnyone(t *testing.T) {
-	configs := getTopPostersConfig("dev")
-	cfg := configs[1013566342345019512]
-
-	if cfg.CommandRoleID != 0 {
-		t.Errorf("dev CommandRoleID = %d, want 0 (anyone)", cfg.CommandRoleID)
-	}
 }

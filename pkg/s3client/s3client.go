@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +24,42 @@ import (
 
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
+
+const maxImageSize = 10 * 1024 * 1024 // 10 MB
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// urlValidator is the function used to validate URLs before fetching.
+// It is a variable so tests can override it.
+var urlValidator = validateImageURL
+
+// validateImageURL checks that the URL uses an allowed scheme and does not
+// resolve to a private/loopback IP range.
+func validateImageURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("unsupported URL scheme %q", parsed.Scheme)
+	}
+
+	host := parsed.Hostname()
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		return fmt.Errorf("DNS lookup failed for %q: %w", host, err)
+	}
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return fmt.Errorf("URL resolves to a blocked IP range")
+		}
+	}
+	return nil
+}
 
 var ErrNotFound = errors.New("profile not found")
 
@@ -229,21 +266,30 @@ func (c *Client) DeleteProfile(ctx context.Context, tmpl sprobot.Template, guild
 func (c *Client) SaveModImage(ctx context.Context, guildID string, fileURL string) (string, error) {
 	c.log.Info("Saving file to mod log", "guild_id", guildID)
 
-	resp, err := http.Get(fileURL)
+	if err := urlValidator(fileURL); err != nil {
+		c.log.Info("URL validation failed", "url", fileURL, "error", err)
+		return fileURL, nil
+	}
+
+	resp, err := httpClient.Get(fileURL)
 	if err != nil {
 		c.log.Info("Unable to fetch from the link provided", "url", fileURL, "error", err)
 		return fileURL, nil
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize))
 	if err != nil {
 		c.log.Info("Unable to read response body", "url", fileURL, "error", err)
 		return fileURL, nil
 	}
 
 	randomID := randomString(30)
-	parsed, _ := url.Parse(fileURL)
+	parsed, err := url.Parse(fileURL)
+	if err != nil {
+		c.log.Info("Unable to parse URL for extension", "url", fileURL, "error", err)
+		return fileURL, nil
+	}
 	ext := path.Ext(parsed.Path)
 	s3Path := fmt.Sprintf("mod_files/%s/%s%s", guildID, randomID, ext)
 
@@ -273,13 +319,17 @@ func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guild
 		return "", maybeURL
 	}
 
-	resp, err := http.Get(maybeURL)
+	if err := urlValidator(maybeURL); err != nil {
+		return "The URL provided is not valid. Make sure it's a publicly accessible image URL and try again. The rest of your profile has been saved.", ""
+	}
+
+	resp, err := httpClient.Get(maybeURL)
 	if err != nil {
 		return "Unable to fetch from the URL provided, make sure it's an image and try again. The rest of your profile has been saved.", ""
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize))
 	if err != nil {
 		return "Unable to fetch from the URL provided, make sure it's an image and try again. The rest of your profile has been saved.", ""
 	}

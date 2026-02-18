@@ -55,8 +55,9 @@ func (b *Bot) registerAllCommands() {
 		// /topposters
 		if _, ok := topPostersConfigs[guildSnowflake]; ok {
 			commands = append(commands, discord.SlashCommandCreate{
-				Name:        "topposters",
-				Description: "Show top message posters over the last 7 days",
+				Name:                     "topposters",
+				Description:              "Show top message posters over the last 7 days",
+				DefaultMemberPermissions: omit.NewPtr(perm),
 			})
 		}
 

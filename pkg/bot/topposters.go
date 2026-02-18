@@ -17,8 +17,7 @@ import (
 )
 
 type topPostersConfig struct {
-	TargetRoleID  snowflake.ID // Role to filter OUT (0 = no filtering)
-	CommandRoleID snowflake.ID // Role required to USE the command (0 = anyone)
+	TargetRoleID snowflake.ID // Role to filter OUT (0 = no filtering)
 }
 
 func getTopPostersConfig(env string) map[snowflake.ID]topPostersConfig {
@@ -26,15 +25,13 @@ func getTopPostersConfig(env string) map[snowflake.ID]topPostersConfig {
 	case "prod":
 		return map[snowflake.ID]topPostersConfig{
 			726985544038612993: {
-				TargetRoleID:  791104833117225000,
-				CommandRoleID: 738986689749450769,
+				TargetRoleID: 791104833117225000,
 			},
 		}
 	case "dev":
 		return map[snowflake.ID]topPostersConfig{
 			1013566342345019512: {
-				TargetRoleID:  0,
-				CommandRoleID: 0,
+				TargetRoleID: 0,
 			},
 		}
 	default:
@@ -183,20 +180,10 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	// Check role permission
-	if cfg.CommandRoleID != 0 {
-		member := e.Member()
-		hasRole := false
-		for _, roleID := range member.RoleIDs {
-			if roleID == cfg.CommandRoleID {
-				hasRole = true
-				break
-			}
-		}
-		if !hasRole {
-			respondEphemeral(e, "You don't have permission to use this command.")
-			return
-		}
+	// Check ManageMessages permission
+	if member := e.Member(); member == nil || member.Permissions&discord.PermissionManageMessages == 0 {
+		respondEphemeral(e, "You don't have permission to use this command.")
+		return
 	}
 
 	gc := b.topPosters[guildID]
