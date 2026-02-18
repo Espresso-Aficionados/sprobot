@@ -5,11 +5,11 @@ Espresso Discord Profile Bot
 
 ## Quickstart
 
-Run tests locally using `./test-go.sh`, which runs gofmt, go vet, and all tests inside Docker.
+Run tests locally using `./test.sh`, which runs gofmt, go vet, and all tests inside Docker.
 
-Run the bot locally using `./run-go.sh`. This builds and runs a dev container.
+Run the bot locally using `./run.sh`. This builds and runs a dev container.
 
-Run the web server locally using `./run-go-web.sh`.
+Run the web server locally using `./run-web.sh`.
 
 Multiarch deployments are automatically built and pushed to Docker Hub once a commit makes it to main.
 
@@ -26,7 +26,7 @@ Multiarch deployments are automatically built and pushed to Docker Hub once a co
 ### Testing
 
 ```
-./test-go.sh
+./test.sh
 ```
 
 Or run locally without Docker:
