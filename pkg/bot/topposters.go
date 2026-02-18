@@ -54,8 +54,18 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 
 	guildID := *e.GuildID
 	configs := getTopPostersConfig(b.env)
-	if _, ok := configs[guildID]; !ok {
+	cfg, ok := configs[guildID]
+	if !ok {
 		return
+	}
+
+	// Filter out users with the target role at recording time
+	if cfg.TargetRoleID != 0 && e.Message.Member != nil {
+		for _, roleID := range e.Message.Member.RoleIDs {
+			if roleID == cfg.TargetRoleID {
+				return
+			}
+		}
 	}
 
 	gc := b.topPosters[guildID]
@@ -174,8 +184,7 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 
 	configs := getTopPostersConfig(b.env)
-	cfg, ok := configs[guildID]
-	if !ok {
+	if _, ok := configs[guildID]; !ok {
 		respondEphemeral(e, "This command is not configured for this server.")
 		return
 	}
@@ -205,37 +214,13 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 		return entries[i].Count > entries[j].Count
 	})
 
-	// Filter out users with the target role and build top 20
-	e.DeferCreateMessage(false)
-
+	// Build top 20
 	var lines []string
-	rank := 0
-	for _, entry := range entries {
+	for rank, entry := range entries {
 		if rank >= 20 {
 			break
 		}
-
-		if cfg.TargetRoleID != 0 {
-			uid, _ := snowflake.Parse(entry.UserID)
-			member, err := b.client.Rest.GetMember(guildID, uid)
-			if err != nil {
-				b.log.Info("Failed to fetch member", "user_id", entry.UserID, "error", err)
-				continue
-			}
-			hasTarget := false
-			for _, roleID := range member.RoleIDs {
-				if roleID == cfg.TargetRoleID {
-					hasTarget = true
-					break
-				}
-			}
-			if hasTarget {
-				continue
-			}
-		}
-
-		rank++
-		lines = append(lines, fmt.Sprintf("%d. <@%s> — %d messages", rank, entry.UserID, entry.Count))
+		lines = append(lines, fmt.Sprintf("%d. <@%s> — %d messages", rank+1, entry.UserID, entry.Count))
 	}
 
 	description := "No messages tracked yet."
@@ -248,7 +233,7 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 		Description: description,
 	}
 
-	b.client.Rest.CreateFollowupMessage(b.client.ApplicationID, e.Token(), discord.MessageCreate{
+	e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	})
 }
