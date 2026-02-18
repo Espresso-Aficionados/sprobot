@@ -132,7 +132,11 @@ jobs:
           tags: sadbox/sprobot:latest
           target: prod
           platforms: linux/amd64,linux/arm64
-          cache-from: type=gha,scope=linux/arm64
+          cache-from: |
+            type=gha,scope=linux/amd64
+            type=gha,scope=linux/arm64
+            type=gha,scope=publish-prod
+          cache-to: type=gha,mode=max,scope=publish-prod
 
       - name: Build and push Go bot
         uses: docker/build-push-action@v6
@@ -142,7 +146,11 @@ jobs:
           tags: sadbox/sprobot-go:latest
           target: prodgobot
           platforms: linux/amd64,linux/arm64
-          cache-from: type=gha,scope=go-linux/arm64
+          cache-from: |
+            type=gha,scope=go-linux/amd64
+            type=gha,scope=go-linux/arm64
+            type=gha,scope=publish-gobot
+          cache-to: type=gha,mode=max,scope=publish-gobot
 
       - name: Build and push Go web
         uses: docker/build-push-action@v6
@@ -152,4 +160,8 @@ jobs:
           tags: sadbox/sprobot-go-web:latest
           target: prodgoweb
           platforms: linux/amd64,linux/arm64
-          cache-from: type=gha,scope=go-linux/arm64
+          cache-from: |
+            type=gha,scope=go-linux/amd64
+            type=gha,scope=go-linux/arm64
+            type=gha,scope=publish-goweb
+          cache-to: type=gha,mode=max,scope=publish-goweb
