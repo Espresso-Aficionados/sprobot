@@ -8,6 +8,8 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 go build -o /sprobot ./cmd/sprobot
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /sprobot-web ./cmd/sprobot-web
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /stickybot ./cmd/stickybot
 
 FROM gcr.io/distroless/static-debian12 AS prod
 ENV SPROBOT_ENV=prod
@@ -28,6 +30,15 @@ FROM build AS devweb
 ENV SPROBOT_ENV=dev
 ENV PORT=8080
 CMD ["/sprobot-web"]
+
+FROM gcr.io/distroless/static-debian12 AS prodstickybot
+ENV STICKYBOT_ENV=prod
+COPY --from=build /stickybot /stickybot
+CMD ["/stickybot"]
+
+FROM build AS devstickybot
+ENV STICKYBOT_ENV=dev
+CMD ["/stickybot"]
 
 FROM golang:1.26-bookworm AS test
 WORKDIR /build

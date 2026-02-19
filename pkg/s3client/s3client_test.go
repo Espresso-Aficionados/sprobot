@@ -585,6 +585,146 @@ func TestRandomString(t *testing.T) {
 	}
 }
 
+func TestFetchStickies(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	// Seed data
+	stickyData := []byte(`{"100":{"channel_id":"100","content":"hello"}}`)
+	fake.mu.Lock()
+	fake.objects["/test-bucket/stickies/123.json"] = stickyData
+	fake.mu.Unlock()
+
+	got, err := c.FetchStickies(context.Background(), "123")
+	if err != nil {
+		t.Fatalf("FetchStickies: %v", err)
+	}
+	if string(got) != string(stickyData) {
+		t.Errorf("got %q, want %q", string(got), string(stickyData))
+	}
+}
+
+func TestFetchStickiesNotFound(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	_, err := c.FetchStickies(context.Background(), "999")
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestSaveStickies(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	data := []byte(`{"200":{"channel_id":"200","content":"sticky"}}`)
+	err := c.SaveStickies(context.Background(), "456", data)
+	if err != nil {
+		t.Fatalf("SaveStickies: %v", err)
+	}
+
+	fake.mu.Lock()
+	saved, ok := fake.objects["/test-bucket/stickies/456.json"]
+	fake.mu.Unlock()
+
+	if !ok {
+		t.Fatal("stickies not found in S3")
+	}
+	if string(saved) != string(data) {
+		t.Errorf("saved %q, want %q", string(saved), string(data))
+	}
+}
+
+func TestSaveAndFetchStickiesRoundTrip(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	original := []byte(`{"channel":"data"}`)
+	if err := c.SaveStickies(context.Background(), "789", original); err != nil {
+		t.Fatalf("SaveStickies: %v", err)
+	}
+
+	got, err := c.FetchStickies(context.Background(), "789")
+	if err != nil {
+		t.Fatalf("FetchStickies: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Errorf("round trip mismatch: got %q, want %q", string(got), string(original))
+	}
+}
+
+func TestSaveStickyFile(t *testing.T) {
+	disableURLValidation(t)
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	fileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("fake-file-data"))
+	}))
+	defer fileServer.Close()
+
+	c := newTestClient(t, server)
+
+	got, err := c.SaveStickyFile(context.Background(), "123", fileServer.URL+"/attachment.png")
+	if err != nil {
+		t.Fatalf("SaveStickyFile: %v", err)
+	}
+	if !strings.HasPrefix(got, server.URL) {
+		t.Errorf("result URL %q should start with endpoint %q", got, server.URL)
+	}
+	if !strings.Contains(got, "sticky_files") {
+		t.Errorf("result URL %q should contain sticky_files", got)
+	}
+}
+
+func TestSaveStickyFileBlockedURL(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	// Loopback URL should be blocked by default validator
+	_, err := c.SaveStickyFile(context.Background(), "123", "http://127.0.0.1:1/nope.png")
+	if err == nil {
+		t.Error("expected error for blocked URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "validation failed") {
+		t.Errorf("error %q should mention validation", err.Error())
+	}
+}
+
+func TestSaveStickyFileUnreachable(t *testing.T) {
+	disableURLValidation(t)
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	_, err := c.SaveStickyFile(context.Background(), "123", "http://127.0.0.1:1/nope.png")
+	if err == nil {
+		t.Error("expected error for unreachable URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "fetching file") {
+		t.Errorf("error %q should mention fetching", err.Error())
+	}
+}
+
 func TestNewMissingEnvVars(t *testing.T) {
 	tests := []struct {
 		name string

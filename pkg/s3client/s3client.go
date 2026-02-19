@@ -110,6 +110,17 @@ func New() (*Client, error) {
 	}, nil
 }
 
+// NewDirect creates a Client with explicitly provided dependencies.
+func NewDirect(s3Client *s3.Client, bucket, endpoint string, cache *lru.Cache[string, map[string]string], log *slog.Logger) *Client {
+	return &Client{
+		s3:       s3Client,
+		bucket:   bucket,
+		endpoint: endpoint,
+		cache:    cache,
+		log:      log,
+	}
+}
+
 func cacheKey(templateName, guildID, userID string) string {
 	return templateName + "/" + guildID + "/" + userID
 }
@@ -413,6 +424,73 @@ func (c *Client) SaveTopPosters(ctx context.Context, guildID string, data map[st
 		return fmt.Errorf("saving top posters to s3: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) FetchStickies(ctx context.Context, guildID string) ([]byte, error) {
+	s3Path := fmt.Sprintf("stickies/%s.json", guildID)
+	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &c.bucket,
+		Key:    &s3Path,
+	})
+	if err != nil {
+		var nsk *s3types.NoSuchKey
+		if errors.As(err, &nsk) || strings.Contains(err.Error(), "NoSuchKey") {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("fetching stickies from s3: %w", err)
+	}
+	defer out.Body.Close()
+	return io.ReadAll(out.Body)
+}
+
+func (c *Client) SaveStickies(ctx context.Context, guildID string, data []byte) error {
+	s3Path := fmt.Sprintf("stickies/%s.json", guildID)
+	_, err := c.s3.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: &c.bucket,
+		Key:    &s3Path,
+		Body:   bytes.NewReader(data),
+	})
+	if err != nil {
+		return fmt.Errorf("saving stickies to s3: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (string, error) {
+	if err := urlValidator(fileURL); err != nil {
+		return "", fmt.Errorf("URL validation failed: %w", err)
+	}
+
+	resp, err := httpClient.Get(fileURL)
+	if err != nil {
+		return "", fmt.Errorf("fetching file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize))
+	if err != nil {
+		return "", fmt.Errorf("reading file: %w", err)
+	}
+
+	randomID := randomString(30)
+	parsed, err := url.Parse(fileURL)
+	if err != nil {
+		return "", fmt.Errorf("parsing URL: %w", err)
+	}
+	ext := path.Ext(parsed.Path)
+	s3Path := fmt.Sprintf("sticky_files/%s/%s%s", guildID, randomID, ext)
+
+	_, err = c.s3.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: &c.bucket,
+		Key:    &s3Path,
+		Body:   bytes.NewReader(data),
+		ACL:    s3types.ObjectCannedACLPublicRead,
+	})
+	if err != nil {
+		return "", fmt.Errorf("uploading to s3: %w", err)
+	}
+
+	return c.buildS3URL(s3Path), nil
 }
 
 func randomString(n int) string {

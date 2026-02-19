@@ -1,0 +1,122 @@
+package stickybot
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"os/signal"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/disgoorg/disgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/gateway"
+	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/s3client"
+)
+
+type Bot struct {
+	client   *bot.Client
+	s3       *s3client.Client
+	env      string
+	log      *slog.Logger
+	ready    atomic.Bool
+	stickies map[snowflake.ID]map[snowflake.ID]*stickyMessage // guild -> channel -> sticky
+}
+
+func New(token string) (*Bot, error) {
+	s3, err := s3client.New()
+	if err != nil {
+		return nil, err
+	}
+
+	b := &Bot{
+		s3:       s3,
+		env:      os.Getenv("STICKYBOT_ENV"),
+		log:      slog.Default(),
+		stickies: make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
+	}
+
+	client, err := disgo.New(token,
+		bot.WithGatewayConfigOpts(
+			gateway.WithIntents(
+				gateway.IntentGuilds,
+				gateway.IntentGuildMessages,
+				gateway.IntentMessageContent,
+			),
+		),
+		bot.WithEventListenerFunc(b.onReady),
+		bot.WithEventListenerFunc(b.onCommand),
+		bot.WithEventListenerFunc(b.onModal),
+		bot.WithEventListenerFunc(b.onMessage),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	b.client = client
+	return b, nil
+}
+
+func (b *Bot) Run() error {
+	ctx := context.Background()
+
+	if err := b.client.OpenGateway(ctx); err != nil {
+		return err
+	}
+	defer b.client.Close(ctx)
+
+	b.loadStickies()
+	b.registerAllCommands()
+	go b.stickySaveLoop()
+
+	b.log.Info("Stickybot is running. Press Ctrl+C to exit.")
+	sc := make(chan os.Signal, 1)
+	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM)
+	<-sc
+	b.log.Info("Shutting down.")
+	b.saveAllStickies()
+	return nil
+}
+
+func (b *Bot) onReady(_ *events.Ready) {
+	b.log.Info("Logged in")
+	b.ready.Store(true)
+}
+
+func (b *Bot) onMessage(e *events.MessageCreate) {
+	if e.Message.Author.Bot {
+		return
+	}
+	if e.GuildID == nil {
+		return
+	}
+
+	guildID := *e.GuildID
+	channels, ok := b.stickies[guildID]
+	if !ok {
+		return
+	}
+
+	s, ok := channels[e.ChannelID]
+	if !ok || !s.Active {
+		return
+	}
+
+	var reposted bool
+	s.mu.Lock()
+	s.MsgsSinceLast++
+	elapsed := time.Since(s.LastPostTime)
+	if elapsed >= time.Duration(s.DelaySeconds)*time.Second && s.MsgsSinceLast >= s.MsgThreshold {
+		b.repostSticky(s, b.client.Rest)
+		reposted = true
+	}
+	s.mu.Unlock()
+
+	if reposted {
+		b.saveStickiesForGuild(guildID)
+	}
+}
