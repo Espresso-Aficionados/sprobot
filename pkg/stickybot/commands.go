@@ -143,7 +143,7 @@ func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 				discord.TextInputComponent{
 					CustomID: fieldThreshold,
 					Style:    discord.TextInputStyleShort,
-					Value:    "4",
+					Value:    "30",
 					Required: true,
 				},
 			),

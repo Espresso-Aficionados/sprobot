@@ -75,7 +75,7 @@ func (b *Bot) Run() error {
 	}
 	go b.stickySaveLoop()
 
-	b.log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot&permissions=68608", b.client.ApplicationID))
+	b.log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.client.ApplicationID))
 	b.log.Info("Stickybot is running. Press Ctrl+C to exit.")
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM)
