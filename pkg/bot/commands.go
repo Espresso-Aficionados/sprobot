@@ -13,11 +13,11 @@ import (
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
-func (b *Bot) registerAllCommands() {
+func (b *Bot) registerAllCommands() error {
 	templates := sprobot.AllTemplates(b.env)
 	if templates == nil {
 		b.log.Info("No templates configured for env", "env", b.env)
-		return
+		return nil
 	}
 
 	topPostersConfigs := getTopPostersConfig(b.env)
@@ -62,11 +62,11 @@ func (b *Bot) registerAllCommands() {
 		}
 
 		if _, err := b.client.Rest.SetGuildCommands(b.client.ApplicationID, guildSnowflake, commands); err != nil {
-			b.log.Error("Failed to bulk register guild commands", "error", err, "guild_id", guildSnowflake)
-		} else {
-			b.log.Info("Registered guild commands", "guild_id", guildSnowflake, "count", len(commands))
+			return fmt.Errorf("registering guild commands for %d: %w", guildSnowflake, err)
 		}
+		b.log.Info("Registered guild commands", "guild_id", guildSnowflake, "count", len(commands))
 	}
+	return nil
 }
 
 func templateCommands(tmpl sprobot.Template) []discord.ApplicationCommandCreate {

@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -74,7 +75,9 @@ func (b *Bot) Run() error {
 	defer b.client.Close(ctx)
 
 	b.loadTopPosters()
-	b.registerAllCommands()
+	if err := b.registerAllCommands(); err != nil {
+		return fmt.Errorf("registering commands: %w", err)
+	}
 	go b.forumReminderLoop()
 	go b.healthcheckLoop()
 	go b.topPostersSaveLoop()
