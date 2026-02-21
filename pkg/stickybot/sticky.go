@@ -5,18 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
-	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 type stickyMessage struct {
-	mu            sync.Mutex      `json:"-"`
+	msgCh  chan struct{} `json:"-"` // buffered(128), message signal from onMessage
+	stopCh chan struct{} `json:"-"` // closed to stop the goroutine
+
 	ChannelID     snowflake.ID    `json:"channel_id"`
 	GuildID       snowflake.ID    `json:"guild_id"`
 	Content       string          `json:"content"`
@@ -25,10 +25,9 @@ type stickyMessage struct {
 	CreatedBy     snowflake.ID    `json:"created_by"`
 	Active        bool            `json:"active"`
 	LastMessageID snowflake.ID    `json:"last_message_id"`
-	DelaySeconds  int             `json:"delay_seconds"`
+	MinDwellMins  int             `json:"min_dwell_mins"`
+	MaxDwellMins  int             `json:"max_dwell_mins"`
 	MsgThreshold  int             `json:"msg_threshold"`
-	LastPostTime  time.Time       `json:"-"`
-	MsgsSinceLast int             `json:"-"`
 }
 
 // stickyExport is used for JSON serialization since stickyMessage has unexported fields.
@@ -41,7 +40,8 @@ type stickyExport struct {
 	CreatedBy     snowflake.ID    `json:"created_by"`
 	Active        bool            `json:"active"`
 	LastMessageID snowflake.ID    `json:"last_message_id"`
-	DelaySeconds  int             `json:"delay_seconds"`
+	MinDwellMins  int             `json:"min_dwell_mins"`
+	MaxDwellMins  int             `json:"max_dwell_mins"`
 	MsgThreshold  int             `json:"msg_threshold"`
 }
 
@@ -55,7 +55,8 @@ func (s *stickyMessage) toExport() stickyExport {
 		CreatedBy:     s.CreatedBy,
 		Active:        s.Active,
 		LastMessageID: s.LastMessageID,
-		DelaySeconds:  s.DelaySeconds,
+		MinDwellMins:  s.MinDwellMins,
+		MaxDwellMins:  s.MaxDwellMins,
 		MsgThreshold:  s.MsgThreshold,
 	}
 }
@@ -70,7 +71,8 @@ func fromExport(e stickyExport) *stickyMessage {
 		CreatedBy:     e.CreatedBy,
 		Active:        e.Active,
 		LastMessageID: e.LastMessageID,
-		DelaySeconds:  e.DelaySeconds,
+		MinDwellMins:  e.MinDwellMins,
+		MaxDwellMins:  e.MaxDwellMins,
 		MsgThreshold:  e.MsgThreshold,
 	}
 }
@@ -98,6 +100,9 @@ func (b *Bot) loadStickies() {
 		for _, e := range exports {
 			s := fromExport(e)
 			channels[s.ChannelID] = s
+			if s.Active {
+				b.startStickyGoroutine(s)
+			}
 		}
 		b.stickies[guildID] = channels
 		b.log.Info("Loaded stickies", "guild_id", guildID, "count", len(channels))
@@ -112,9 +117,7 @@ func (b *Bot) saveStickiesForGuild(guildID snowflake.ID) {
 
 	exports := make(map[string]stickyExport, len(channels))
 	for chID, s := range channels {
-		s.mu.Lock()
 		exports[fmt.Sprintf("%d", chID)] = s.toExport()
-		s.mu.Unlock()
 	}
 
 	data, err := json.Marshal(exports)
@@ -156,10 +159,100 @@ func (b *Bot) stickySaveLoop() {
 	}
 }
 
-func (b *Bot) repostSticky(s *stickyMessage, restClient rest.Rest) {
+// startStickyGoroutine creates channels and launches the per-sticky goroutine.
+func (b *Bot) startStickyGoroutine(s *stickyMessage) {
+	s.msgCh = make(chan struct{}, 128)
+	s.stopCh = make(chan struct{})
+	go b.runStickyGoroutine(s)
+}
+
+// stopStickyGoroutine signals the goroutine to exit by closing stopCh.
+func (b *Bot) stopStickyGoroutine(s *stickyMessage) {
+	if s.stopCh != nil {
+		close(s.stopCh)
+		s.stopCh = nil
+		s.msgCh = nil
+	}
+}
+
+func (b *Bot) stopAllStickyGoroutines() {
+	for _, channels := range b.stickies {
+		for _, s := range channels {
+			b.stopStickyGoroutine(s)
+		}
+	}
+}
+
+// runStickyGoroutine is the per-sticky select loop. It owns all mutable runtime
+// state (message count, timers) and reposts when dwell conditions are met.
+func (b *Bot) runStickyGoroutine(s *stickyMessage) {
+	var msgsSinceLast int
+
+	maxDwell := time.Duration(s.MaxDwellMins) * time.Minute
+	minDwell := time.Duration(s.MinDwellMins) * time.Minute
+
+	maxTimer := time.NewTimer(maxDwell)
+	var minTimer *time.Timer
+
+	defer func() {
+		maxTimer.Stop()
+		if minTimer != nil {
+			minTimer.Stop()
+		}
+	}()
+
+	minTimerC := func() <-chan time.Time {
+		if minTimer == nil {
+			return nil
+		}
+		return minTimer.C
+	}
+
+	for {
+		select {
+		case <-s.stopCh:
+			return
+
+		case <-s.msgCh:
+			msgsSinceLast++
+			if minTimer == nil {
+				minTimer = time.NewTimer(minDwell)
+			}
+
+		case <-minTimerC():
+			if msgsSinceLast >= s.MsgThreshold {
+				if b.repostSticky(s) {
+					msgsSinceLast = 0
+					if !maxTimer.Stop() {
+						select {
+						case <-maxTimer.C:
+						default:
+						}
+					}
+					maxTimer.Reset(maxDwell)
+				}
+			}
+			minTimer = nil
+
+		case <-maxTimer.C:
+			if msgsSinceLast >= 1 {
+				if b.repostSticky(s) {
+					msgsSinceLast = 0
+				}
+			}
+			maxTimer.Reset(maxDwell)
+			if minTimer != nil {
+				minTimer.Stop()
+				minTimer = nil
+			}
+		}
+	}
+}
+
+func (b *Bot) repostSticky(s *stickyMessage) bool {
 	// Delete old message (best-effort)
 	if s.LastMessageID != 0 {
-		_ = restClient.DeleteMessage(s.ChannelID, s.LastMessageID)
+		_ = b.client.Rest.DeleteMessage(s.ChannelID, s.LastMessageID)
 	}
 
 	msg := discord.MessageCreate{
@@ -167,13 +260,22 @@ func (b *Bot) repostSticky(s *stickyMessage, restClient rest.Rest) {
 		Embeds:  s.Embeds,
 	}
 
-	sent, err := restClient.CreateMessage(s.ChannelID, msg)
+	var sent *discord.Message
+	var err error
+	for attempt := range 3 {
+		sent, err = b.client.Rest.CreateMessage(s.ChannelID, msg)
+		if err == nil {
+			break
+		}
+		b.log.Warn("Repost attempt failed", "channel_id", s.ChannelID, "attempt", attempt+1, "error", err)
+		time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+	}
 	if err != nil {
-		b.log.Error("Failed to repost sticky", "channel_id", s.ChannelID, "error", err)
-		return
+		b.log.Error("Failed to repost sticky after retries", "channel_id", s.ChannelID, "error", err)
+		return false
 	}
 
 	s.LastMessageID = sent.ID
-	s.LastPostTime = time.Now()
-	s.MsgsSinceLast = 0
+	b.saveStickiesForGuild(s.GuildID)
+	return true
 }

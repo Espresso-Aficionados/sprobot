@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -107,10 +106,9 @@ func TestToExportAndFromExport(t *testing.T) {
 		CreatedBy:     300,
 		Active:        true,
 		LastMessageID: 400,
-		DelaySeconds:  15,
+		MinDwellMins:  15,
+		MaxDwellMins:  30,
 		MsgThreshold:  4,
-		LastPostTime:  time.Now(),
-		MsgsSinceLast: 7,
 	}
 
 	e := s.toExport()
@@ -139,8 +137,11 @@ func TestToExportAndFromExport(t *testing.T) {
 	if e.LastMessageID != 400 {
 		t.Errorf("LastMessageID = %d, want 400", e.LastMessageID)
 	}
-	if e.DelaySeconds != 15 {
-		t.Errorf("DelaySeconds = %d, want 15", e.DelaySeconds)
+	if e.MinDwellMins != 15 {
+		t.Errorf("MinDwellMins = %d, want 15", e.MinDwellMins)
+	}
+	if e.MaxDwellMins != 30 {
+		t.Errorf("MaxDwellMins = %d, want 30", e.MaxDwellMins)
 	}
 	if e.MsgThreshold != 4 {
 		t.Errorf("MsgThreshold = %d, want 4", e.MsgThreshold)
@@ -157,12 +158,12 @@ func TestToExportAndFromExport(t *testing.T) {
 	if s2.Active != s.Active {
 		t.Error("round-trip Active mismatch")
 	}
-	// Transient fields should be zero
-	if !s2.LastPostTime.IsZero() {
-		t.Error("LastPostTime should be zero after fromExport")
+	// Channel fields should be nil after fromExport
+	if s2.msgCh != nil {
+		t.Error("msgCh should be nil after fromExport")
 	}
-	if s2.MsgsSinceLast != 0 {
-		t.Error("MsgsSinceLast should be zero after fromExport")
+	if s2.stopCh != nil {
+		t.Error("stopCh should be nil after fromExport")
 	}
 }
 
@@ -172,7 +173,8 @@ func TestExportJSONRoundTrip(t *testing.T) {
 		GuildID:       200,
 		Content:       "sticky text",
 		Active:        true,
-		DelaySeconds:  30,
+		MinDwellMins:  15,
+		MaxDwellMins:  30,
 		MsgThreshold:  5,
 		LastMessageID: 500,
 	}
@@ -196,8 +198,11 @@ func TestExportJSONRoundTrip(t *testing.T) {
 	if e2.Active != e.Active {
 		t.Errorf("Active = %v, want %v", e2.Active, e.Active)
 	}
-	if e2.DelaySeconds != e.DelaySeconds {
-		t.Errorf("DelaySeconds = %d, want %d", e2.DelaySeconds, e.DelaySeconds)
+	if e2.MinDwellMins != e.MinDwellMins {
+		t.Errorf("MinDwellMins = %d, want %d", e2.MinDwellMins, e.MinDwellMins)
+	}
+	if e2.MaxDwellMins != e.MaxDwellMins {
+		t.Errorf("MaxDwellMins = %d, want %d", e2.MaxDwellMins, e.MaxDwellMins)
 	}
 	if e2.MsgThreshold != e.MsgThreshold {
 		t.Errorf("MsgThreshold = %d, want %d", e2.MsgThreshold, e.MsgThreshold)
@@ -249,14 +254,15 @@ func TestLoadStickiesFromS3(t *testing.T) {
 
 	c := newTestS3Client(t, server)
 
-	// Seed some stickies data
+	// Seed some stickies data — Active: false so no goroutine is started
 	exports := map[string]stickyExport{
 		"111": {
 			ChannelID:    111,
 			GuildID:      1013566342345019512,
 			Content:      "sticky content",
-			Active:       true,
-			DelaySeconds: 10,
+			Active:       false,
+			MinDwellMins: 10,
+			MaxDwellMins: 20,
 			MsgThreshold: 3,
 		},
 	}
@@ -280,11 +286,11 @@ func TestLoadStickiesFromS3(t *testing.T) {
 	if s.Content != "sticky content" {
 		t.Errorf("Content = %q, want %q", s.Content, "sticky content")
 	}
-	if !s.Active {
-		t.Error("expected Active to be true")
+	if s.Active {
+		t.Error("expected Active to be false")
 	}
-	if s.DelaySeconds != 10 {
-		t.Errorf("DelaySeconds = %d, want 10", s.DelaySeconds)
+	if s.MinDwellMins != 10 {
+		t.Errorf("MinDwellMins = %d, want 10", s.MinDwellMins)
 	}
 }
 
@@ -303,7 +309,8 @@ func TestSaveStickiesForGuild(t *testing.T) {
 			GuildID:      guildID,
 			Content:      "saved content",
 			Active:       true,
-			DelaySeconds: 20,
+			MinDwellMins: 20,
+			MaxDwellMins: 40,
 			MsgThreshold: 5,
 		},
 	}
@@ -331,8 +338,8 @@ func TestSaveStickiesForGuild(t *testing.T) {
 	if e.Content != "saved content" {
 		t.Errorf("Content = %q, want %q", e.Content, "saved content")
 	}
-	if e.DelaySeconds != 20 {
-		t.Errorf("DelaySeconds = %d, want 20", e.DelaySeconds)
+	if e.MinDwellMins != 20 {
+		t.Errorf("MinDwellMins = %d, want 20", e.MinDwellMins)
 	}
 }
 
@@ -375,11 +382,9 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 			CreatedBy:     444,
 			Active:        false,
 			LastMessageID: 555,
-			DelaySeconds:  30,
+			MinDwellMins:  15,
+			MaxDwellMins:  30,
 			MsgThreshold:  10,
-			// Transient fields should not be persisted
-			LastPostTime:  time.Now(),
-			MsgsSinceLast: 99,
 		},
 	}
 
@@ -415,18 +420,14 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	if s.LastMessageID != 555 {
 		t.Errorf("LastMessageID = %d, want 555", s.LastMessageID)
 	}
-	if s.DelaySeconds != 30 {
-		t.Errorf("DelaySeconds = %d, want 30", s.DelaySeconds)
+	if s.MinDwellMins != 15 {
+		t.Errorf("MinDwellMins = %d, want 15", s.MinDwellMins)
+	}
+	if s.MaxDwellMins != 30 {
+		t.Errorf("MaxDwellMins = %d, want 30", s.MaxDwellMins)
 	}
 	if s.MsgThreshold != 10 {
 		t.Errorf("MsgThreshold = %d, want 10", s.MsgThreshold)
-	}
-	// Transient fields should be zero
-	if !s.LastPostTime.IsZero() {
-		t.Error("LastPostTime should not be persisted")
-	}
-	if s.MsgsSinceLast != 0 {
-		t.Error("MsgsSinceLast should not be persisted")
 	}
 }
 
@@ -440,7 +441,7 @@ func TestSaveAllStickies(t *testing.T) {
 
 	guild1 := snowflake.ID(1013566342345019512)
 	b.stickies[guild1] = map[snowflake.ID]*stickyMessage{
-		100: {ChannelID: 100, GuildID: guild1, Content: "g1", Active: true, DelaySeconds: 5, MsgThreshold: 2},
+		100: {ChannelID: 100, GuildID: guild1, Content: "g1", Active: true, MinDwellMins: 5, MaxDwellMins: 10, MsgThreshold: 2},
 	}
 
 	b.saveAllStickies()
@@ -482,28 +483,27 @@ func TestGetSticky(t *testing.T) {
 	}
 }
 
-func TestStickyMessageConcurrentAccess(t *testing.T) {
+func TestStopStickyGoroutineIdempotent(t *testing.T) {
+	b := &Bot{log: discardLogger()}
 	s := &stickyMessage{
-		Active:       true,
-		DelaySeconds: 1,
-		MsgThreshold: 1,
+		ChannelID:    100,
+		MinDwellMins: 15,
+		MaxDwellMins: 30,
+		MsgThreshold: 4,
 	}
 
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			s.mu.Lock()
-			s.MsgsSinceLast++
-			s.mu.Unlock()
-		}()
+	b.startStickyGoroutine(s)
+	if s.msgCh == nil || s.stopCh == nil {
+		t.Fatal("channels should be set after start")
 	}
-	wg.Wait()
 
-	if s.MsgsSinceLast != 100 {
-		t.Errorf("MsgsSinceLast = %d, want 100", s.MsgsSinceLast)
+	b.stopStickyGoroutine(s)
+	if s.msgCh != nil || s.stopCh != nil {
+		t.Error("channels should be nil after stop")
 	}
+
+	// Second stop should not panic
+	b.stopStickyGoroutine(s)
 }
 
 func TestLoadStickiesInvalidJSON(t *testing.T) {
@@ -538,8 +538,8 @@ func TestSaveStickiesMultipleChannels(t *testing.T) {
 
 	guildID := snowflake.ID(1013566342345019512)
 	b.stickies[guildID] = map[snowflake.ID]*stickyMessage{
-		100: {ChannelID: 100, GuildID: guildID, Content: "first", Active: true, DelaySeconds: 5, MsgThreshold: 2},
-		200: {ChannelID: 200, GuildID: guildID, Content: "second", Active: false, DelaySeconds: 10, MsgThreshold: 3},
+		100: {ChannelID: 100, GuildID: guildID, Content: "first", Active: true, MinDwellMins: 5, MaxDwellMins: 10, MsgThreshold: 2},
+		200: {ChannelID: 200, GuildID: guildID, Content: "second", Active: false, MinDwellMins: 10, MaxDwellMins: 20, MsgThreshold: 3},
 	}
 
 	b.saveStickiesForGuild(guildID)

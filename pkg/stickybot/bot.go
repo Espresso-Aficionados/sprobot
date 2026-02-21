@@ -2,12 +2,12 @@ package stickybot
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"sync/atomic"
 	"syscall"
-	"time"
 
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
@@ -70,14 +70,18 @@ func (b *Bot) Run() error {
 	defer b.client.Close(ctx)
 
 	b.loadStickies()
-	b.registerAllCommands()
+	if err := b.registerAllCommands(); err != nil {
+		return fmt.Errorf("registering commands: %w", err)
+	}
 	go b.stickySaveLoop()
 
+	b.log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot&permissions=68608", b.client.ApplicationID))
 	b.log.Info("Stickybot is running. Press Ctrl+C to exit.")
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM)
 	<-sc
 	b.log.Info("Shutting down.")
+	b.stopAllStickyGoroutines()
 	b.saveAllStickies()
 	return nil
 }
@@ -106,17 +110,8 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 		return
 	}
 
-	var reposted bool
-	s.mu.Lock()
-	s.MsgsSinceLast++
-	elapsed := time.Since(s.LastPostTime)
-	if elapsed >= time.Duration(s.DelaySeconds)*time.Second && s.MsgsSinceLast >= s.MsgThreshold {
-		b.repostSticky(s, b.client.Rest)
-		reposted = true
-	}
-	s.mu.Unlock()
-
-	if reposted {
-		b.saveStickiesForGuild(guildID)
+	select {
+	case s.msgCh <- struct{}{}:
+	default:
 	}
 }

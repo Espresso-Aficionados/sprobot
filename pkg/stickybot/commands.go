@@ -21,11 +21,12 @@ const (
 	subRemove      = "remove"
 	subList        = "list"
 	modalPrefix    = "sticky_config_"
-	fieldDelay     = "delay_seconds"
+	fieldMinDwell  = "min_dwell_mins"
+	fieldMaxDwell  = "max_dwell_mins"
 	fieldThreshold = "msg_threshold"
 )
 
-func (b *Bot) registerAllCommands() {
+func (b *Bot) registerAllCommands() error {
 	perm := discord.PermissionManageMessages
 
 	commands := []discord.ApplicationCommandCreate{
@@ -60,11 +61,11 @@ func (b *Bot) registerAllCommands() {
 
 	for _, guildID := range getGuildIDs(b.env) {
 		if _, err := b.client.Rest.SetGuildCommands(b.client.ApplicationID, guildID, commands); err != nil {
-			b.log.Error("Failed to register guild commands", "error", err, "guild_id", guildID)
-		} else {
-			b.log.Info("Registered guild commands", "guild_id", guildID, "count", len(commands))
+			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
 		}
+		b.log.Info("Registered guild commands", "guild_id", guildID, "count", len(commands))
 	}
+	return nil
 }
 
 func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
@@ -120,11 +121,20 @@ func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 		Title:    "Sticky Message Settings",
 		Components: []discord.LayoutComponent{
 			discord.NewLabel(
-				"Delay (seconds between reposts)",
+				"Min dwell time (minutes before repost)",
 				discord.TextInputComponent{
-					CustomID: fieldDelay,
+					CustomID: fieldMinDwell,
 					Style:    discord.TextInputStyleShort,
 					Value:    "15",
+					Required: true,
+				},
+			),
+			discord.NewLabel(
+				"Max dwell time (force repost after mins)",
+				discord.TextInputComponent{
+					CustomID: fieldMaxDwell,
+					Style:    discord.TextInputStyleShort,
+					Value:    "30",
 					Required: true,
 				},
 			),
@@ -155,12 +165,22 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	channelID, _ := snowflake.Parse(parts[0])
 	messageID, _ := snowflake.Parse(parts[1])
 
-	delayStr := e.Data.Text(fieldDelay)
+	minDwellStr := e.Data.Text(fieldMinDwell)
+	maxDwellStr := e.Data.Text(fieldMaxDwell)
 	threshStr := e.Data.Text(fieldThreshold)
 
-	delay, err := strconv.Atoi(delayStr)
-	if err != nil || delay < 0 {
-		respondEphemeral(e, "Delay must be a non-negative number.")
+	minDwell, err := strconv.Atoi(minDwellStr)
+	if err != nil || minDwell < 0 {
+		respondEphemeral(e, "Min dwell must be a non-negative number.")
+		return
+	}
+	maxDwell, err := strconv.Atoi(maxDwellStr)
+	if err != nil || maxDwell < 1 {
+		respondEphemeral(e, "Max dwell must be a positive number.")
+		return
+	}
+	if maxDwell <= minDwell {
+		respondEphemeral(e, "Max dwell must be greater than min dwell.")
 		return
 	}
 	threshold, err := strconv.Atoi(threshStr)
@@ -210,7 +230,8 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		FileURLs:     fileURLs,
 		CreatedBy:    e.User().ID,
 		Active:       true,
-		DelaySeconds: delay,
+		MinDwellMins: minDwell,
+		MaxDwellMins: maxDwell,
 		MsgThreshold: threshold,
 	}
 
@@ -227,16 +248,23 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 
 	s.LastMessageID = sent.ID
 
-	// Store it
+	// Replace any existing sticky in this channel
 	if b.stickies[guildID] == nil {
 		b.stickies[guildID] = make(map[snowflake.ID]*stickyMessage)
 	}
+	if old, ok := b.stickies[guildID][channelID]; ok {
+		b.stopStickyGoroutine(old)
+		if old.LastMessageID != 0 {
+			_ = b.client.Rest.DeleteMessage(channelID, old.LastMessageID)
+		}
+	}
 	b.stickies[guildID][channelID] = s
+	b.startStickyGoroutine(s)
 
 	// Save to S3 immediately
 	b.saveStickiesForGuild(guildID)
 
-	b.followup(e, fmt.Sprintf("Sticky created in <#%d>! Delay: %ds, threshold: %d messages.", channelID, delay, threshold))
+	b.followup(e, fmt.Sprintf("Sticky created in <#%d>! Dwell: %d–%d min, threshold: %d messages.", channelID, minDwell, maxDwell, threshold))
 }
 
 func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {
@@ -249,9 +277,8 @@ func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	s.mu.Lock()
+	b.stopStickyGoroutine(s)
 	s.Active = false
-	s.mu.Unlock()
 
 	b.saveStickiesForGuild(guildID)
 	respondEphemeral(e, "Sticky paused.")
@@ -266,10 +293,13 @@ func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
 		respondEphemeral(e, "No sticky in this channel.")
 		return
 	}
+	if s.Active {
+		respondEphemeral(e, "Sticky is already active.")
+		return
+	}
 
-	s.mu.Lock()
 	s.Active = true
-	s.mu.Unlock()
+	b.startStickyGoroutine(s)
 
 	b.saveStickiesForGuild(guildID)
 	respondEphemeral(e, "Sticky resumed.")
@@ -291,12 +321,12 @@ func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) 
 		return
 	}
 
+	b.stopStickyGoroutine(s)
+
 	// Delete the current sticky message (best-effort)
-	s.mu.Lock()
 	if s.LastMessageID != 0 {
 		_ = b.client.Rest.DeleteMessage(channelID, s.LastMessageID)
 	}
-	s.mu.Unlock()
 
 	delete(channels, channelID)
 	b.saveStickiesForGuild(guildID)
@@ -314,17 +344,12 @@ func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {
 
 	var lines []string
 	for _, s := range channels {
-		s.mu.Lock()
 		status := "active"
 		if !s.Active {
 			status = "paused"
 		}
-		preview := s.Content
-		if len(preview) > 50 {
-			preview = preview[:50] + "..."
-		}
-		lines = append(lines, fmt.Sprintf("<#%d> — %s — %q", s.ChannelID, status, preview))
-		s.mu.Unlock()
+		previewStr := truncatePreview(s.Content, 50)
+		lines = append(lines, fmt.Sprintf("<#%d> — %s — %q", s.ChannelID, status, previewStr))
 	}
 
 	respondEphemeral(e, strings.Join(lines, "\n"))
@@ -354,4 +379,21 @@ func (b *Bot) followup(e *events.ModalSubmitInteractionCreate, content string) {
 		Content: content,
 		Flags:   discord.MessageFlagEphemeral,
 	})
+}
+
+// truncatePreview truncates a string to maxRunes without splitting Unicode
+// characters or Discord markup tokens like <:name:id>, <a:name:id>, <@id>, <#id>.
+func truncatePreview(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	runes = runes[:maxRunes]
+	// If we cut inside a <...> token, back up to before the '<'
+	preview := string(runes)
+	lastOpen := strings.LastIndex(preview, "<")
+	if lastOpen != -1 && !strings.Contains(preview[lastOpen:], ">") {
+		preview = preview[:lastOpen]
+	}
+	return preview + "..."
 }

@@ -95,10 +95,11 @@ func New() (*Client, error) {
 	}
 
 	client := s3.New(s3.Options{
-		Region:       "us-southeast-1",
-		BaseEndpoint: &endpoint,
-		Credentials:  credentials.NewStaticCredentialsProvider(key, secret, ""),
-		UsePathStyle: true,
+		Region:           "us-southeast-1",
+		BaseEndpoint:     &endpoint,
+		Credentials:      credentials.NewStaticCredentialsProvider(key, secret, ""),
+		UsePathStyle:     true,
+		RetryMaxAttempts: 5,
 	})
 
 	return &Client{
