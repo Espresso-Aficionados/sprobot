@@ -16,6 +16,7 @@ const (
 	subEnable  = "enable"
 	subDisable = "disable"
 	subList    = "list"
+	subThreads = "threads"
 )
 
 func (b *Bot) registerAllCommands() error {
@@ -38,6 +39,10 @@ func (b *Bot) registerAllCommands() error {
 				discord.ApplicationCommandOptionSubCommand{
 					Name:        subList,
 					Description: "List all channels with thread reminders in this server",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        subThreads,
+					Description: "Show active threads in the current channel",
 				},
 			},
 		},
@@ -76,6 +81,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleDisable(e)
 	case subList:
 		b.handleList(e)
+	case subThreads:
+		b.handleThreads(e)
 	}
 }
 
@@ -135,6 +142,22 @@ func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
 	delete(channels, channelID)
 	b.saveRemindersForGuild(guildID)
 	respondEphemeral(e, "Thread reminders disabled.")
+}
+
+func (b *Bot) handleThreads(e *events.ApplicationCommandInteractionCreate) {
+	guildID := *e.GuildID()
+	channelID := e.Channel().ID()
+
+	embed := b.buildThreadEmbed(guildID, channelID)
+	if embed == nil {
+		respondEphemeral(e, "No active threads in this channel.")
+		return
+	}
+
+	e.CreateMessage(discord.MessageCreate{
+		Embeds: []discord.Embed{*embed},
+		Flags:  discord.MessageFlagEphemeral,
+	})
 }
 
 func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {

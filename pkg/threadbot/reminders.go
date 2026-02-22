@@ -323,14 +323,16 @@ func (b *Bot) runReminderGoroutine(r *threadReminder) {
 	}
 }
 
-func (b *Bot) repostReminder(r *threadReminder) bool {
-	result, err := b.client.Rest.GetActiveGuildThreads(r.GuildID)
+// buildThreadEmbed fetches active threads for the given guild/channel and
+// returns an embed showing the top 10 by message count. Returns nil if there
+// are no active threads.
+func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
+	result, err := b.client.Rest.GetActiveGuildThreads(guildID)
 	if err != nil {
-		b.log.Error("Failed to fetch active threads", "guild_id", r.GuildID, "error", err)
-		return false
+		b.log.Error("Failed to fetch active threads", "guild_id", guildID, "error", err)
+		return nil
 	}
 
-	// Filter threads belonging to this channel
 	type threadInfo struct {
 		Name         string
 		ID           snowflake.ID
@@ -344,7 +346,7 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 			continue
 		}
 		parentID := t.ParentID()
-		if parentID == nil || *parentID != r.ChannelID {
+		if parentID == nil || *parentID != channelID {
 			continue
 		}
 		threads = append(threads, threadInfo{
@@ -357,27 +359,24 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 	}
 
 	if len(threads) == 0 {
-		return false
+		return nil
 	}
 
-	// Sort by message count descending (most active first)
 	sort.Slice(threads, func(i, j int) bool {
 		return threads[i].MessageCount > threads[j].MessageCount
 	})
 
-	// Limit to top 10
 	total := len(threads)
 	if len(threads) > 10 {
 		threads = threads[:10]
 	}
 
-	// Build description with thread links
 	now := time.Now()
 	const maxDescLen = 3900
 	var desc strings.Builder
 	for _, t := range threads {
 		age := formatAge(now.Sub(t.CreatedAt))
-		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members, %s old\n", t.Name, r.GuildID, t.ID, t.MessageCount, t.MemberCount, age)
+		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.MessageCount, t.MemberCount, age)
 		if desc.Len()+len(line) > maxDescLen {
 			break
 		}
@@ -397,6 +396,14 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 		},
 		Timestamp: &now,
 	}
+	return &embed
+}
+
+func (b *Bot) repostReminder(r *threadReminder) bool {
+	embed := b.buildThreadEmbed(r.GuildID, r.ChannelID)
+	if embed == nil {
+		return false
+	}
 
 	// Delete old message (best-effort)
 	if r.LastMessageID != 0 {
@@ -404,10 +411,11 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 	}
 
 	msg := discord.MessageCreate{
-		Embeds: []discord.Embed{embed},
+		Embeds: []discord.Embed{*embed},
 	}
 
 	var sent *discord.Message
+	var err error
 	for attempt := range 3 {
 		sent, err = b.client.Rest.CreateMessage(r.ChannelID, msg)
 		if err == nil {
@@ -421,6 +429,7 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 		return false
 	}
 
+	now := time.Now()
 	r.LastMessageID = sent.ID
 	r.LastPostTime = now
 	b.saveRemindersForGuild(r.GuildID)
