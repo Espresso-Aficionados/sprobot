@@ -98,17 +98,18 @@ func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {
 
 func TestToExportAndFromExport(t *testing.T) {
 	s := &stickyMessage{
-		ChannelID:     100,
-		GuildID:       200,
-		Content:       "hello",
-		Embeds:        []discord.Embed{{Title: "test"}},
-		FileURLs:      []string{"https://example.com/file.png"},
-		CreatedBy:     300,
-		Active:        true,
-		LastMessageID: 400,
-		MinDwellMins:  15,
-		MaxDwellMins:  30,
-		MsgThreshold:  4,
+		ChannelID:         100,
+		GuildID:           200,
+		Content:           "hello",
+		Embeds:            []discord.Embed{{Title: "test"}},
+		FileURLs:          []string{"https://example.com/file.png"},
+		CreatedBy:         300,
+		Active:            true,
+		LastMessageID:     400,
+		MinIdleMins:       15,
+		MaxIdleMins:       30,
+		MsgThreshold:      4,
+		TimeThresholdMins: 10,
 	}
 
 	e := s.toExport()
@@ -137,14 +138,17 @@ func TestToExportAndFromExport(t *testing.T) {
 	if e.LastMessageID != 400 {
 		t.Errorf("LastMessageID = %d, want 400", e.LastMessageID)
 	}
-	if e.MinDwellMins != 15 {
-		t.Errorf("MinDwellMins = %d, want 15", e.MinDwellMins)
+	if e.MinIdleMins != 15 {
+		t.Errorf("MinIdleMins = %d, want 15", e.MinIdleMins)
 	}
-	if e.MaxDwellMins != 30 {
-		t.Errorf("MaxDwellMins = %d, want 30", e.MaxDwellMins)
+	if e.MaxIdleMins != 30 {
+		t.Errorf("MaxIdleMins = %d, want 30", e.MaxIdleMins)
 	}
 	if e.MsgThreshold != 4 {
 		t.Errorf("MsgThreshold = %d, want 4", e.MsgThreshold)
+	}
+	if e.TimeThresholdMins != 10 {
+		t.Errorf("TimeThresholdMins = %d, want 10", e.TimeThresholdMins)
 	}
 
 	// Round-trip through fromExport
@@ -169,14 +173,15 @@ func TestToExportAndFromExport(t *testing.T) {
 
 func TestExportJSONRoundTrip(t *testing.T) {
 	e := stickyExport{
-		ChannelID:     100,
-		GuildID:       200,
-		Content:       "sticky text",
-		Active:        true,
-		MinDwellMins:  15,
-		MaxDwellMins:  30,
-		MsgThreshold:  5,
-		LastMessageID: 500,
+		ChannelID:         100,
+		GuildID:           200,
+		Content:           "sticky text",
+		Active:            true,
+		MinIdleMins:       15,
+		MaxIdleMins:       30,
+		MsgThreshold:      5,
+		TimeThresholdMins: 10,
+		LastMessageID:     500,
 	}
 
 	data, err := json.Marshal(e)
@@ -198,14 +203,17 @@ func TestExportJSONRoundTrip(t *testing.T) {
 	if e2.Active != e.Active {
 		t.Errorf("Active = %v, want %v", e2.Active, e.Active)
 	}
-	if e2.MinDwellMins != e.MinDwellMins {
-		t.Errorf("MinDwellMins = %d, want %d", e2.MinDwellMins, e.MinDwellMins)
+	if e2.MinIdleMins != e.MinIdleMins {
+		t.Errorf("MinIdleMins = %d, want %d", e2.MinIdleMins, e.MinIdleMins)
 	}
-	if e2.MaxDwellMins != e.MaxDwellMins {
-		t.Errorf("MaxDwellMins = %d, want %d", e2.MaxDwellMins, e.MaxDwellMins)
+	if e2.MaxIdleMins != e.MaxIdleMins {
+		t.Errorf("MaxIdleMins = %d, want %d", e2.MaxIdleMins, e.MaxIdleMins)
 	}
 	if e2.MsgThreshold != e.MsgThreshold {
 		t.Errorf("MsgThreshold = %d, want %d", e2.MsgThreshold, e.MsgThreshold)
+	}
+	if e2.TimeThresholdMins != e.TimeThresholdMins {
+		t.Errorf("TimeThresholdMins = %d, want %d", e2.TimeThresholdMins, e.TimeThresholdMins)
 	}
 }
 
@@ -261,8 +269,8 @@ func TestLoadStickiesFromS3(t *testing.T) {
 			GuildID:      1013566342345019512,
 			Content:      "sticky content",
 			Active:       false,
-			MinDwellMins: 10,
-			MaxDwellMins: 20,
+			MinIdleMins:  10,
+			MaxIdleMins:  20,
 			MsgThreshold: 3,
 		},
 	}
@@ -289,8 +297,8 @@ func TestLoadStickiesFromS3(t *testing.T) {
 	if s.Active {
 		t.Error("expected Active to be false")
 	}
-	if s.MinDwellMins != 10 {
-		t.Errorf("MinDwellMins = %d, want 10", s.MinDwellMins)
+	if s.MinIdleMins != 10 {
+		t.Errorf("MinIdleMins = %d, want 10", s.MinIdleMins)
 	}
 }
 
@@ -309,8 +317,8 @@ func TestSaveStickiesForGuild(t *testing.T) {
 			GuildID:      guildID,
 			Content:      "saved content",
 			Active:       true,
-			MinDwellMins: 20,
-			MaxDwellMins: 40,
+			MinIdleMins:  20,
+			MaxIdleMins:  40,
 			MsgThreshold: 5,
 		},
 	}
@@ -338,8 +346,8 @@ func TestSaveStickiesForGuild(t *testing.T) {
 	if e.Content != "saved content" {
 		t.Errorf("Content = %q, want %q", e.Content, "saved content")
 	}
-	if e.MinDwellMins != 20 {
-		t.Errorf("MinDwellMins = %d, want 20", e.MinDwellMins)
+	if e.MinIdleMins != 20 {
+		t.Errorf("MinIdleMins = %d, want 20", e.MinIdleMins)
 	}
 }
 
@@ -374,17 +382,18 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	guildID := snowflake.ID(1013566342345019512)
 	b.stickies[guildID] = map[snowflake.ID]*stickyMessage{
 		333: {
-			ChannelID:     333,
-			GuildID:       guildID,
-			Content:       "round trip",
-			Embeds:        []discord.Embed{{Title: "embed1"}},
-			FileURLs:      []string{"https://example.com/a.png"},
-			CreatedBy:     444,
-			Active:        false,
-			LastMessageID: 555,
-			MinDwellMins:  15,
-			MaxDwellMins:  30,
-			MsgThreshold:  10,
+			ChannelID:         333,
+			GuildID:           guildID,
+			Content:           "round trip",
+			Embeds:            []discord.Embed{{Title: "embed1"}},
+			FileURLs:          []string{"https://example.com/a.png"},
+			CreatedBy:         444,
+			Active:            false,
+			LastMessageID:     555,
+			MinIdleMins:       15,
+			MaxIdleMins:       30,
+			MsgThreshold:      10,
+			TimeThresholdMins: 10,
 		},
 	}
 
@@ -420,14 +429,17 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	if s.LastMessageID != 555 {
 		t.Errorf("LastMessageID = %d, want 555", s.LastMessageID)
 	}
-	if s.MinDwellMins != 15 {
-		t.Errorf("MinDwellMins = %d, want 15", s.MinDwellMins)
+	if s.MinIdleMins != 15 {
+		t.Errorf("MinIdleMins = %d, want 15", s.MinIdleMins)
 	}
-	if s.MaxDwellMins != 30 {
-		t.Errorf("MaxDwellMins = %d, want 30", s.MaxDwellMins)
+	if s.MaxIdleMins != 30 {
+		t.Errorf("MaxIdleMins = %d, want 30", s.MaxIdleMins)
 	}
 	if s.MsgThreshold != 10 {
 		t.Errorf("MsgThreshold = %d, want 10", s.MsgThreshold)
+	}
+	if s.TimeThresholdMins != 10 {
+		t.Errorf("TimeThresholdMins = %d, want 10", s.TimeThresholdMins)
 	}
 }
 
@@ -441,7 +453,7 @@ func TestSaveAllStickies(t *testing.T) {
 
 	guild1 := snowflake.ID(1013566342345019512)
 	b.stickies[guild1] = map[snowflake.ID]*stickyMessage{
-		100: {ChannelID: 100, GuildID: guild1, Content: "g1", Active: true, MinDwellMins: 5, MaxDwellMins: 10, MsgThreshold: 2},
+		100: {ChannelID: 100, GuildID: guild1, Content: "g1", Active: true, MinIdleMins: 5, MaxIdleMins: 10, MsgThreshold: 2},
 	}
 
 	b.saveAllStickies()
@@ -487,8 +499,8 @@ func TestStopStickyGoroutineIdempotent(t *testing.T) {
 	b := &Bot{log: discardLogger()}
 	s := &stickyMessage{
 		ChannelID:    100,
-		MinDwellMins: 15,
-		MaxDwellMins: 30,
+		MinIdleMins:  15,
+		MaxIdleMins:  30,
 		MsgThreshold: 4,
 	}
 
@@ -538,8 +550,8 @@ func TestSaveStickiesMultipleChannels(t *testing.T) {
 
 	guildID := snowflake.ID(1013566342345019512)
 	b.stickies[guildID] = map[snowflake.ID]*stickyMessage{
-		100: {ChannelID: 100, GuildID: guildID, Content: "first", Active: true, MinDwellMins: 5, MaxDwellMins: 10, MsgThreshold: 2},
-		200: {ChannelID: 200, GuildID: guildID, Content: "second", Active: false, MinDwellMins: 10, MaxDwellMins: 20, MsgThreshold: 3},
+		100: {ChannelID: 100, GuildID: guildID, Content: "first", Active: true, MinIdleMins: 5, MaxIdleMins: 10, MsgThreshold: 2},
+		200: {ChannelID: 200, GuildID: guildID, Content: "second", Active: false, MinIdleMins: 10, MaxIdleMins: 20, MsgThreshold: 3},
 	}
 
 	b.saveStickiesForGuild(guildID)

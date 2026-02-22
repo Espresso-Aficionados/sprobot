@@ -98,15 +98,16 @@ func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {
 func TestToExportAndFromExport(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	r := &threadReminder{
-		ChannelID:     100,
-		GuildID:       200,
-		EnabledBy:     300,
-		Enabled:       true,
-		LastMessageID: 400,
-		LastPostTime:  now,
-		MinDwellMins:  30,
-		MaxDwellMins:  720,
-		MsgThreshold:  30,
+		ChannelID:         100,
+		GuildID:           200,
+		EnabledBy:         300,
+		Enabled:           true,
+		LastMessageID:     400,
+		LastPostTime:      now,
+		MinIdleMins:       30,
+		MaxIdleMins:       720,
+		MsgThreshold:      30,
+		TimeThresholdMins: 60,
 	}
 
 	e := r.toExport()
@@ -129,14 +130,17 @@ func TestToExportAndFromExport(t *testing.T) {
 	if !e.LastPostTime.Equal(now) {
 		t.Errorf("LastPostTime = %v, want %v", e.LastPostTime, now)
 	}
-	if e.MinDwellMins != 30 {
-		t.Errorf("MinDwellMins = %d, want 30", e.MinDwellMins)
+	if e.MinIdleMins != 30 {
+		t.Errorf("MinIdleMins = %d, want 30", e.MinIdleMins)
 	}
-	if e.MaxDwellMins != 720 {
-		t.Errorf("MaxDwellMins = %d, want 720", e.MaxDwellMins)
+	if e.MaxIdleMins != 720 {
+		t.Errorf("MaxIdleMins = %d, want 720", e.MaxIdleMins)
 	}
 	if e.MsgThreshold != 30 {
 		t.Errorf("MsgThreshold = %d, want 30", e.MsgThreshold)
+	}
+	if e.TimeThresholdMins != 60 {
+		t.Errorf("TimeThresholdMins = %d, want 60", e.TimeThresholdMins)
 	}
 
 	// Round-trip through fromExport
@@ -165,15 +169,16 @@ func TestToExportAndFromExport(t *testing.T) {
 func TestExportJSONRoundTrip(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	e := reminderExport{
-		ChannelID:     100,
-		GuildID:       200,
-		EnabledBy:     300,
-		Enabled:       true,
-		LastMessageID: 400,
-		LastPostTime:  now,
-		MinDwellMins:  30,
-		MaxDwellMins:  720,
-		MsgThreshold:  30,
+		ChannelID:         100,
+		GuildID:           200,
+		EnabledBy:         300,
+		Enabled:           true,
+		LastMessageID:     400,
+		LastPostTime:      now,
+		MinIdleMins:       30,
+		MaxIdleMins:       720,
+		MsgThreshold:      30,
+		TimeThresholdMins: 60,
 	}
 
 	data, err := json.Marshal(e)
@@ -192,14 +197,17 @@ func TestExportJSONRoundTrip(t *testing.T) {
 	if e2.Enabled != e.Enabled {
 		t.Errorf("Enabled = %v, want %v", e2.Enabled, e.Enabled)
 	}
-	if e2.MinDwellMins != e.MinDwellMins {
-		t.Errorf("MinDwellMins = %d, want %d", e2.MinDwellMins, e.MinDwellMins)
+	if e2.MinIdleMins != e.MinIdleMins {
+		t.Errorf("MinIdleMins = %d, want %d", e2.MinIdleMins, e.MinIdleMins)
 	}
-	if e2.MaxDwellMins != e.MaxDwellMins {
-		t.Errorf("MaxDwellMins = %d, want %d", e2.MaxDwellMins, e.MaxDwellMins)
+	if e2.MaxIdleMins != e.MaxIdleMins {
+		t.Errorf("MaxIdleMins = %d, want %d", e2.MaxIdleMins, e.MaxIdleMins)
 	}
 	if e2.MsgThreshold != e.MsgThreshold {
 		t.Errorf("MsgThreshold = %d, want %d", e2.MsgThreshold, e.MsgThreshold)
+	}
+	if e2.TimeThresholdMins != e.TimeThresholdMins {
+		t.Errorf("TimeThresholdMins = %d, want %d", e2.TimeThresholdMins, e.TimeThresholdMins)
 	}
 	if !e2.LastPostTime.Equal(e.LastPostTime) {
 		t.Errorf("LastPostTime mismatch after JSON round-trip")
@@ -237,8 +245,8 @@ func TestLoadRemindersFromS3(t *testing.T) {
 			GuildID:      1013566342345019512,
 			EnabledBy:    222,
 			Enabled:      false,
-			MinDwellMins: 30,
-			MaxDwellMins: 720,
+			MinIdleMins:  30,
+			MaxIdleMins:  720,
 			MsgThreshold: 30,
 		},
 	}
@@ -265,8 +273,8 @@ func TestLoadRemindersFromS3(t *testing.T) {
 	if r.Enabled {
 		t.Error("expected Enabled to be false")
 	}
-	if r.MinDwellMins != 30 {
-		t.Errorf("MinDwellMins = %d, want 30", r.MinDwellMins)
+	if r.MinIdleMins != 30 {
+		t.Errorf("MinIdleMins = %d, want 30", r.MinIdleMins)
 	}
 }
 
@@ -285,8 +293,8 @@ func TestSaveRemindersForGuild(t *testing.T) {
 			GuildID:      guildID,
 			EnabledBy:    333,
 			Enabled:      true,
-			MinDwellMins: 30,
-			MaxDwellMins: 720,
+			MinIdleMins:  30,
+			MaxIdleMins:  720,
 			MsgThreshold: 30,
 		},
 	}
@@ -314,8 +322,8 @@ func TestSaveRemindersForGuild(t *testing.T) {
 	if e.EnabledBy != 333 {
 		t.Errorf("EnabledBy = %d, want 333", e.EnabledBy)
 	}
-	if e.MinDwellMins != 30 {
-		t.Errorf("MinDwellMins = %d, want 30", e.MinDwellMins)
+	if e.MinIdleMins != 30 {
+		t.Errorf("MinIdleMins = %d, want 30", e.MinIdleMins)
 	}
 }
 
@@ -351,15 +359,16 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	guildID := snowflake.ID(1013566342345019512)
 	b.reminders[guildID] = map[snowflake.ID]*threadReminder{
 		333: {
-			ChannelID:     333,
-			GuildID:       guildID,
-			EnabledBy:     444,
-			Enabled:       false,
-			LastMessageID: 555,
-			LastPostTime:  now,
-			MinDwellMins:  30,
-			MaxDwellMins:  720,
-			MsgThreshold:  30,
+			ChannelID:         333,
+			GuildID:           guildID,
+			EnabledBy:         444,
+			Enabled:           false,
+			LastMessageID:     555,
+			LastPostTime:      now,
+			MinIdleMins:       30,
+			MaxIdleMins:       720,
+			MsgThreshold:      30,
+			TimeThresholdMins: 60,
 		},
 	}
 
@@ -389,14 +398,17 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	if !r.LastPostTime.Equal(now) {
 		t.Errorf("LastPostTime mismatch")
 	}
-	if r.MinDwellMins != 30 {
-		t.Errorf("MinDwellMins = %d, want 30", r.MinDwellMins)
+	if r.MinIdleMins != 30 {
+		t.Errorf("MinIdleMins = %d, want 30", r.MinIdleMins)
 	}
-	if r.MaxDwellMins != 720 {
-		t.Errorf("MaxDwellMins = %d, want 720", r.MaxDwellMins)
+	if r.MaxIdleMins != 720 {
+		t.Errorf("MaxIdleMins = %d, want 720", r.MaxIdleMins)
 	}
 	if r.MsgThreshold != 30 {
 		t.Errorf("MsgThreshold = %d, want 30", r.MsgThreshold)
+	}
+	if r.TimeThresholdMins != 60 {
+		t.Errorf("TimeThresholdMins = %d, want 60", r.TimeThresholdMins)
 	}
 }
 
@@ -410,7 +422,7 @@ func TestSaveAllReminders(t *testing.T) {
 
 	guild1 := snowflake.ID(1013566342345019512)
 	b.reminders[guild1] = map[snowflake.ID]*threadReminder{
-		100: {ChannelID: 100, GuildID: guild1, Enabled: true, MinDwellMins: 30, MaxDwellMins: 720, MsgThreshold: 30},
+		100: {ChannelID: 100, GuildID: guild1, Enabled: true, MinIdleMins: 30, MaxIdleMins: 720, MsgThreshold: 30},
 	}
 
 	b.saveAllReminders()
@@ -428,8 +440,8 @@ func TestStopReminderGoroutineIdempotent(t *testing.T) {
 	b := &Bot{log: discardLogger()}
 	r := &threadReminder{
 		ChannelID:    100,
-		MinDwellMins: 30,
-		MaxDwellMins: 720,
+		MinIdleMins:  30,
+		MaxIdleMins:  720,
 		MsgThreshold: 30,
 	}
 
@@ -479,8 +491,8 @@ func TestSaveRemindersMultipleChannels(t *testing.T) {
 
 	guildID := snowflake.ID(1013566342345019512)
 	b.reminders[guildID] = map[snowflake.ID]*threadReminder{
-		100: {ChannelID: 100, GuildID: guildID, EnabledBy: 111, Enabled: true, MinDwellMins: 30, MaxDwellMins: 720, MsgThreshold: 30},
-		200: {ChannelID: 200, GuildID: guildID, EnabledBy: 222, Enabled: false, MinDwellMins: 60, MaxDwellMins: 1440, MsgThreshold: 50},
+		100: {ChannelID: 100, GuildID: guildID, EnabledBy: 111, Enabled: true, MinIdleMins: 30, MaxIdleMins: 720, MsgThreshold: 30},
+		200: {ChannelID: 200, GuildID: guildID, EnabledBy: 222, Enabled: false, MinIdleMins: 60, MaxIdleMins: 1440, MsgThreshold: 50},
 	}
 
 	b.saveRemindersForGuild(guildID)

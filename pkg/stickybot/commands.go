@@ -14,16 +14,17 @@ import (
 )
 
 const (
-	cmdContextMenu = "Sticky this message"
-	cmdSlash       = "sticky"
-	subStop        = "stop"
-	subStart       = "start"
-	subRemove      = "remove"
-	subList        = "list"
-	modalPrefix    = "sticky_config_"
-	fieldMinDwell  = "min_dwell_mins"
-	fieldMaxDwell  = "max_dwell_mins"
-	fieldThreshold = "msg_threshold"
+	cmdContextMenu     = "Sticky this message"
+	cmdSlash           = "sticky"
+	subStop            = "stop"
+	subStart           = "start"
+	subRemove          = "remove"
+	subList            = "list"
+	modalPrefix        = "sticky_config_"
+	fieldMinIdle       = "min_idle_mins"
+	fieldMaxIdle       = "max_idle_mins"
+	fieldThreshold     = "msg_threshold"
+	fieldTimeThreshold = "time_threshold_mins"
 )
 
 func (b *Bot) registerAllCommands() error {
@@ -121,29 +122,38 @@ func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 		Title:    "Sticky Message Settings",
 		Components: []discord.LayoutComponent{
 			discord.NewLabel(
-				"Min dwell time (minutes before repost)",
+				"Min idle time (minutes of quiet before repost)",
 				discord.TextInputComponent{
-					CustomID: fieldMinDwell,
+					CustomID: fieldMinIdle,
 					Style:    discord.TextInputStyleShort,
 					Value:    "15",
 					Required: true,
 				},
 			),
 			discord.NewLabel(
-				"Max dwell time (force repost after mins)",
+				"Max idle time (force repost after mins)",
 				discord.TextInputComponent{
-					CustomID: fieldMaxDwell,
+					CustomID: fieldMaxIdle,
 					Style:    discord.TextInputStyleShort,
 					Value:    "30",
 					Required: true,
 				},
 			),
 			discord.NewLabel(
-				"Message threshold (msgs before repost)",
+				"Message threshold (msgs before watching for idle)",
 				discord.TextInputComponent{
 					CustomID: fieldThreshold,
 					Style:    discord.TextInputStyleShort,
 					Value:    "30",
+					Required: true,
+				},
+			),
+			discord.NewLabel(
+				"Time threshold (mins before watching for idle)",
+				discord.TextInputComponent{
+					CustomID: fieldTimeThreshold,
+					Style:    discord.TextInputStyleShort,
+					Value:    "10",
 					Required: true,
 				},
 			),
@@ -165,27 +175,41 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	channelID, _ := snowflake.Parse(parts[0])
 	messageID, _ := snowflake.Parse(parts[1])
 
-	minDwellStr := e.Data.Text(fieldMinDwell)
-	maxDwellStr := e.Data.Text(fieldMaxDwell)
+	minIdleStr := e.Data.Text(fieldMinIdle)
+	maxIdleStr := e.Data.Text(fieldMaxIdle)
 	threshStr := e.Data.Text(fieldThreshold)
+	timeThreshStr := e.Data.Text(fieldTimeThreshold)
 
-	minDwell, err := strconv.Atoi(minDwellStr)
-	if err != nil || minDwell < 0 {
-		respondEphemeral(e, "Min dwell must be a non-negative number.")
+	minIdle, err := strconv.Atoi(minIdleStr)
+	if err != nil || minIdle < 0 {
+		respondEphemeral(e, "Min idle must be a non-negative number.")
 		return
 	}
-	maxDwell, err := strconv.Atoi(maxDwellStr)
-	if err != nil || maxDwell < 1 {
-		respondEphemeral(e, "Max dwell must be a positive number.")
+	maxIdle, err := strconv.Atoi(maxIdleStr)
+	if err != nil || maxIdle < 1 {
+		respondEphemeral(e, "Max idle must be a positive number.")
 		return
 	}
-	if maxDwell <= minDwell {
-		respondEphemeral(e, "Max dwell must be greater than min dwell.")
+	if maxIdle <= minIdle {
+		respondEphemeral(e, "Max idle must be greater than min idle.")
 		return
 	}
 	threshold, err := strconv.Atoi(threshStr)
-	if err != nil || threshold < 1 {
-		respondEphemeral(e, "Threshold must be a positive number.")
+	if err != nil || threshold < 0 {
+		respondEphemeral(e, "Message threshold must be a non-negative number.")
+		return
+	}
+	timeThreshold, err := strconv.Atoi(timeThreshStr)
+	if err != nil || timeThreshold < 0 {
+		respondEphemeral(e, "Time threshold must be a non-negative number.")
+		return
+	}
+	if threshold == 0 && timeThreshold == 0 {
+		respondEphemeral(e, "At least one of message threshold or time threshold must be greater than 0.")
+		return
+	}
+	if timeThreshold > 0 && timeThreshold >= maxIdle {
+		respondEphemeral(e, "Time threshold must be less than max idle.")
 		return
 	}
 
@@ -223,16 +247,17 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	}
 
 	s := &stickyMessage{
-		ChannelID:    channelID,
-		GuildID:      guildID,
-		Content:      msg.Content,
-		Embeds:       embeds,
-		FileURLs:     fileURLs,
-		CreatedBy:    e.User().ID,
-		Active:       true,
-		MinDwellMins: minDwell,
-		MaxDwellMins: maxDwell,
-		MsgThreshold: threshold,
+		ChannelID:         channelID,
+		GuildID:           guildID,
+		Content:           msg.Content,
+		Embeds:            embeds,
+		FileURLs:          fileURLs,
+		CreatedBy:         e.User().ID,
+		Active:            true,
+		MinIdleMins:       minIdle,
+		MaxIdleMins:       maxIdle,
+		MsgThreshold:      threshold,
+		TimeThresholdMins: timeThreshold,
 	}
 
 	// Post the sticky immediately
@@ -264,7 +289,7 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	// Save to S3 immediately
 	b.saveStickiesForGuild(guildID)
 
-	b.followup(e, fmt.Sprintf("Sticky created in <#%d>! Dwell: %d–%d min, threshold: %d messages.", channelID, minDwell, maxDwell, threshold))
+	b.followup(e, fmt.Sprintf("Sticky created in <#%d>! Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", channelID, minIdle, maxIdle, threshold, timeThreshold))
 }
 
 func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {

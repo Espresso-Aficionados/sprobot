@@ -19,55 +19,70 @@ type threadReminder struct {
 	msgCh  chan struct{} `json:"-"`
 	stopCh chan struct{} `json:"-"`
 
-	ChannelID     snowflake.ID `json:"channel_id"`
-	GuildID       snowflake.ID `json:"guild_id"`
-	EnabledBy     snowflake.ID `json:"enabled_by"`
-	Enabled       bool         `json:"enabled"`
-	LastMessageID snowflake.ID `json:"last_message_id"`
-	LastPostTime  time.Time    `json:"last_post_time"`
-	MinDwellMins  int          `json:"min_dwell_mins"`
-	MaxDwellMins  int          `json:"max_dwell_mins"`
-	MsgThreshold  int          `json:"msg_threshold"`
+	ChannelID         snowflake.ID `json:"channel_id"`
+	GuildID           snowflake.ID `json:"guild_id"`
+	EnabledBy         snowflake.ID `json:"enabled_by"`
+	Enabled           bool         `json:"enabled"`
+	LastMessageID     snowflake.ID `json:"last_message_id"`
+	LastPostTime      time.Time    `json:"last_post_time"`
+	MinIdleMins       int          `json:"min_idle_mins"`
+	MaxIdleMins       int          `json:"max_idle_mins"`
+	MsgThreshold      int          `json:"msg_threshold"`
+	TimeThresholdMins int          `json:"time_threshold_mins"`
 }
 
 type reminderExport struct {
-	ChannelID     snowflake.ID `json:"channel_id"`
-	GuildID       snowflake.ID `json:"guild_id"`
-	EnabledBy     snowflake.ID `json:"enabled_by"`
-	Enabled       bool         `json:"enabled"`
-	LastMessageID snowflake.ID `json:"last_message_id"`
-	LastPostTime  time.Time    `json:"last_post_time"`
-	MinDwellMins  int          `json:"min_dwell_mins"`
-	MaxDwellMins  int          `json:"max_dwell_mins"`
-	MsgThreshold  int          `json:"msg_threshold"`
+	ChannelID         snowflake.ID `json:"channel_id"`
+	GuildID           snowflake.ID `json:"guild_id"`
+	EnabledBy         snowflake.ID `json:"enabled_by"`
+	Enabled           bool         `json:"enabled"`
+	LastMessageID     snowflake.ID `json:"last_message_id"`
+	LastPostTime      time.Time    `json:"last_post_time"`
+	MinIdleMins       int          `json:"min_idle_mins"`
+	MaxIdleMins       int          `json:"max_idle_mins"`
+	MsgThreshold      int          `json:"msg_threshold"`
+	TimeThresholdMins int          `json:"time_threshold_mins"`
 }
 
 func (r *threadReminder) toExport() reminderExport {
 	return reminderExport{
-		ChannelID:     r.ChannelID,
-		GuildID:       r.GuildID,
-		EnabledBy:     r.EnabledBy,
-		Enabled:       r.Enabled,
-		LastMessageID: r.LastMessageID,
-		LastPostTime:  r.LastPostTime,
-		MinDwellMins:  r.MinDwellMins,
-		MaxDwellMins:  r.MaxDwellMins,
-		MsgThreshold:  r.MsgThreshold,
+		ChannelID:         r.ChannelID,
+		GuildID:           r.GuildID,
+		EnabledBy:         r.EnabledBy,
+		Enabled:           r.Enabled,
+		LastMessageID:     r.LastMessageID,
+		LastPostTime:      r.LastPostTime,
+		MinIdleMins:       r.MinIdleMins,
+		MaxIdleMins:       r.MaxIdleMins,
+		MsgThreshold:      r.MsgThreshold,
+		TimeThresholdMins: r.TimeThresholdMins,
 	}
 }
 
 func fromExport(e reminderExport) *threadReminder {
-	return &threadReminder{
-		ChannelID:     e.ChannelID,
-		GuildID:       e.GuildID,
-		EnabledBy:     e.EnabledBy,
-		Enabled:       e.Enabled,
-		LastMessageID: e.LastMessageID,
-		LastPostTime:  e.LastPostTime,
-		MinDwellMins:  e.MinDwellMins,
-		MaxDwellMins:  e.MaxDwellMins,
-		MsgThreshold:  e.MsgThreshold,
+	r := &threadReminder{
+		ChannelID:         e.ChannelID,
+		GuildID:           e.GuildID,
+		EnabledBy:         e.EnabledBy,
+		Enabled:           e.Enabled,
+		LastMessageID:     e.LastMessageID,
+		LastPostTime:      e.LastPostTime,
+		MinIdleMins:       e.MinIdleMins,
+		MaxIdleMins:       e.MaxIdleMins,
+		MsgThreshold:      e.MsgThreshold,
+		TimeThresholdMins: e.TimeThresholdMins,
 	}
+	// Defaults for zero values (backwards compat with old S3 data)
+	if r.MinIdleMins == 0 {
+		r.MinIdleMins = 30
+	}
+	if r.MaxIdleMins == 0 {
+		r.MaxIdleMins = 720
+	}
+	if r.MsgThreshold == 0 {
+		r.MsgThreshold = 30
+	}
+	return r
 }
 
 func (b *Bot) loadReminders() {
@@ -176,31 +191,89 @@ func (b *Bot) stopAllReminderGoroutines() {
 
 func (b *Bot) runReminderGoroutine(r *threadReminder) {
 	var msgsSinceLast int
+	var idleArmed bool
 
-	maxDwell := time.Duration(r.MaxDwellMins) * time.Minute
-	minDwell := time.Duration(r.MinDwellMins) * time.Minute
+	maxIdle := time.Duration(r.MaxIdleMins) * time.Minute
+	minIdle := time.Duration(r.MinIdleMins) * time.Minute
 
-	// Calculate initial max dwell based on time since last post
-	initialMax := maxDwell - time.Since(r.LastPostTime)
+	// Calculate initial max idle based on time since last post
+	initialMax := maxIdle - time.Since(r.LastPostTime)
 	if initialMax <= 0 || r.LastPostTime.IsZero() {
 		initialMax = time.Second
 	}
 
 	maxTimer := time.NewTimer(initialMax)
-	var minTimer *time.Timer
+
+	var timeThreshTimer *time.Timer
+	if r.TimeThresholdMins > 0 {
+		initialTimeThresh := time.Duration(r.TimeThresholdMins)*time.Minute - time.Since(r.LastPostTime)
+		if initialTimeThresh <= 0 || r.LastPostTime.IsZero() {
+			initialTimeThresh = time.Second
+		}
+		timeThreshTimer = time.NewTimer(initialTimeThresh)
+	}
+
+	var idleTimer *time.Timer
 
 	defer func() {
 		maxTimer.Stop()
-		if minTimer != nil {
-			minTimer.Stop()
+		if timeThreshTimer != nil {
+			timeThreshTimer.Stop()
+		}
+		if idleTimer != nil {
+			idleTimer.Stop()
 		}
 	}()
 
-	minTimerC := func() <-chan time.Time {
-		if minTimer == nil {
+	timeThreshC := func() <-chan time.Time {
+		if timeThreshTimer == nil {
 			return nil
 		}
-		return minTimer.C
+		return timeThreshTimer.C
+	}
+
+	idleTimerC := func() <-chan time.Time {
+		if idleTimer == nil {
+			return nil
+		}
+		return idleTimer.C
+	}
+
+	arm := func() {
+		if idleArmed {
+			return
+		}
+		idleArmed = true
+		if idleTimer == nil {
+			idleTimer = time.NewTimer(minIdle)
+		} else {
+			idleTimer.Reset(minIdle)
+		}
+	}
+
+	resetAll := func() {
+		msgsSinceLast = 0
+		idleArmed = false
+		if !maxTimer.Stop() {
+			select {
+			case <-maxTimer.C:
+			default:
+			}
+		}
+		maxTimer.Reset(maxIdle)
+		if timeThreshTimer != nil {
+			if !timeThreshTimer.Stop() {
+				select {
+				case <-timeThreshTimer.C:
+				default:
+				}
+			}
+			timeThreshTimer.Reset(time.Duration(r.TimeThresholdMins) * time.Minute)
+		}
+		if idleTimer != nil {
+			idleTimer.Stop()
+			idleTimer = nil
+		}
 	}
 
 	for {
@@ -210,35 +283,41 @@ func (b *Bot) runReminderGoroutine(r *threadReminder) {
 
 		case <-r.msgCh:
 			msgsSinceLast++
-			if minTimer == nil {
-				minTimer = time.NewTimer(minDwell)
-			}
-
-		case <-minTimerC():
-			if msgsSinceLast >= r.MsgThreshold {
-				if b.repostReminder(r) {
-					msgsSinceLast = 0
-					if !maxTimer.Stop() {
+			if idleArmed {
+				if idleTimer != nil {
+					if !idleTimer.Stop() {
 						select {
-						case <-maxTimer.C:
+						case <-idleTimer.C:
 						default:
 						}
 					}
-					maxTimer.Reset(maxDwell)
+					idleTimer.Reset(minIdle)
 				}
+			} else if r.MsgThreshold > 0 && msgsSinceLast >= r.MsgThreshold {
+				arm()
 			}
-			minTimer = nil
+
+		case <-timeThreshC():
+			if msgsSinceLast >= 1 {
+				arm()
+			}
+
+		case <-idleTimerC():
+			if b.repostReminder(r) {
+				resetAll()
+			} else {
+				idleTimer = nil
+			}
 
 		case <-maxTimer.C:
 			if msgsSinceLast >= 1 {
 				if b.repostReminder(r) {
-					msgsSinceLast = 0
+					resetAll()
+				} else {
+					maxTimer.Reset(maxIdle)
 				}
-			}
-			maxTimer.Reset(maxDwell)
-			if minTimer != nil {
-				minTimer.Stop()
-				minTimer = nil
+			} else {
+				maxTimer.Reset(maxIdle)
 			}
 		}
 	}

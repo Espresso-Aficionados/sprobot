@@ -17,64 +17,79 @@ type stickyMessage struct {
 	msgCh  chan struct{} `json:"-"` // buffered(128), message signal from onMessage
 	stopCh chan struct{} `json:"-"` // closed to stop the goroutine
 
-	ChannelID     snowflake.ID    `json:"channel_id"`
-	GuildID       snowflake.ID    `json:"guild_id"`
-	Content       string          `json:"content"`
-	Embeds        []discord.Embed `json:"embeds,omitempty"`
-	FileURLs      []string        `json:"file_urls,omitempty"`
-	CreatedBy     snowflake.ID    `json:"created_by"`
-	Active        bool            `json:"active"`
-	LastMessageID snowflake.ID    `json:"last_message_id"`
-	MinDwellMins  int             `json:"min_dwell_mins"`
-	MaxDwellMins  int             `json:"max_dwell_mins"`
-	MsgThreshold  int             `json:"msg_threshold"`
+	ChannelID         snowflake.ID    `json:"channel_id"`
+	GuildID           snowflake.ID    `json:"guild_id"`
+	Content           string          `json:"content"`
+	Embeds            []discord.Embed `json:"embeds,omitempty"`
+	FileURLs          []string        `json:"file_urls,omitempty"`
+	CreatedBy         snowflake.ID    `json:"created_by"`
+	Active            bool            `json:"active"`
+	LastMessageID     snowflake.ID    `json:"last_message_id"`
+	MinIdleMins       int             `json:"min_idle_mins"`
+	MaxIdleMins       int             `json:"max_idle_mins"`
+	MsgThreshold      int             `json:"msg_threshold"`
+	TimeThresholdMins int             `json:"time_threshold_mins"`
 }
 
 // stickyExport is used for JSON serialization since stickyMessage has unexported fields.
 type stickyExport struct {
-	ChannelID     snowflake.ID    `json:"channel_id"`
-	GuildID       snowflake.ID    `json:"guild_id"`
-	Content       string          `json:"content"`
-	Embeds        []discord.Embed `json:"embeds,omitempty"`
-	FileURLs      []string        `json:"file_urls,omitempty"`
-	CreatedBy     snowflake.ID    `json:"created_by"`
-	Active        bool            `json:"active"`
-	LastMessageID snowflake.ID    `json:"last_message_id"`
-	MinDwellMins  int             `json:"min_dwell_mins"`
-	MaxDwellMins  int             `json:"max_dwell_mins"`
-	MsgThreshold  int             `json:"msg_threshold"`
+	ChannelID         snowflake.ID    `json:"channel_id"`
+	GuildID           snowflake.ID    `json:"guild_id"`
+	Content           string          `json:"content"`
+	Embeds            []discord.Embed `json:"embeds,omitempty"`
+	FileURLs          []string        `json:"file_urls,omitempty"`
+	CreatedBy         snowflake.ID    `json:"created_by"`
+	Active            bool            `json:"active"`
+	LastMessageID     snowflake.ID    `json:"last_message_id"`
+	MinIdleMins       int             `json:"min_idle_mins"`
+	MaxIdleMins       int             `json:"max_idle_mins"`
+	MsgThreshold      int             `json:"msg_threshold"`
+	TimeThresholdMins int             `json:"time_threshold_mins"`
 }
 
 func (s *stickyMessage) toExport() stickyExport {
 	return stickyExport{
-		ChannelID:     s.ChannelID,
-		GuildID:       s.GuildID,
-		Content:       s.Content,
-		Embeds:        s.Embeds,
-		FileURLs:      s.FileURLs,
-		CreatedBy:     s.CreatedBy,
-		Active:        s.Active,
-		LastMessageID: s.LastMessageID,
-		MinDwellMins:  s.MinDwellMins,
-		MaxDwellMins:  s.MaxDwellMins,
-		MsgThreshold:  s.MsgThreshold,
+		ChannelID:         s.ChannelID,
+		GuildID:           s.GuildID,
+		Content:           s.Content,
+		Embeds:            s.Embeds,
+		FileURLs:          s.FileURLs,
+		CreatedBy:         s.CreatedBy,
+		Active:            s.Active,
+		LastMessageID:     s.LastMessageID,
+		MinIdleMins:       s.MinIdleMins,
+		MaxIdleMins:       s.MaxIdleMins,
+		MsgThreshold:      s.MsgThreshold,
+		TimeThresholdMins: s.TimeThresholdMins,
 	}
 }
 
 func fromExport(e stickyExport) *stickyMessage {
-	return &stickyMessage{
-		ChannelID:     e.ChannelID,
-		GuildID:       e.GuildID,
-		Content:       e.Content,
-		Embeds:        e.Embeds,
-		FileURLs:      e.FileURLs,
-		CreatedBy:     e.CreatedBy,
-		Active:        e.Active,
-		LastMessageID: e.LastMessageID,
-		MinDwellMins:  e.MinDwellMins,
-		MaxDwellMins:  e.MaxDwellMins,
-		MsgThreshold:  e.MsgThreshold,
+	s := &stickyMessage{
+		ChannelID:         e.ChannelID,
+		GuildID:           e.GuildID,
+		Content:           e.Content,
+		Embeds:            e.Embeds,
+		FileURLs:          e.FileURLs,
+		CreatedBy:         e.CreatedBy,
+		Active:            e.Active,
+		LastMessageID:     e.LastMessageID,
+		MinIdleMins:       e.MinIdleMins,
+		MaxIdleMins:       e.MaxIdleMins,
+		MsgThreshold:      e.MsgThreshold,
+		TimeThresholdMins: e.TimeThresholdMins,
 	}
+	// Defaults for zero values (backwards compat with old S3 data)
+	if s.MinIdleMins == 0 {
+		s.MinIdleMins = 15
+	}
+	if s.MaxIdleMins == 0 {
+		s.MaxIdleMins = 30
+	}
+	if s.MsgThreshold == 0 {
+		s.MsgThreshold = 30
+	}
+	return s
 }
 
 func (b *Bot) loadStickies() {
@@ -183,29 +198,89 @@ func (b *Bot) stopAllStickyGoroutines() {
 	}
 }
 
-// runStickyGoroutine is the per-sticky select loop. It owns all mutable runtime
-// state (message count, timers) and reposts when dwell conditions are met.
+// runStickyGoroutine is the per-sticky select loop. It watches for channel
+// idle time and reposts during natural lulls in conversation.
+//
+// The idle trigger is "armed" by either MsgThreshold messages arriving or
+// TimeThresholdMins elapsing (whichever comes first). Once armed, the idle
+// timer (MinIdleMins) resets on each new message. When the idle timer fires
+// (no messages for MinIdleMins), the sticky is reposted. MaxIdleMins is a
+// hard cap that forces a repost regardless of arming state.
 func (b *Bot) runStickyGoroutine(s *stickyMessage) {
 	var msgsSinceLast int
+	var idleArmed bool
 
-	maxDwell := time.Duration(s.MaxDwellMins) * time.Minute
-	minDwell := time.Duration(s.MinDwellMins) * time.Minute
+	maxIdle := time.Duration(s.MaxIdleMins) * time.Minute
+	minIdle := time.Duration(s.MinIdleMins) * time.Minute
 
-	maxTimer := time.NewTimer(maxDwell)
-	var minTimer *time.Timer
+	maxTimer := time.NewTimer(maxIdle)
+
+	var timeThreshTimer *time.Timer
+	if s.TimeThresholdMins > 0 {
+		timeThreshTimer = time.NewTimer(time.Duration(s.TimeThresholdMins) * time.Minute)
+	}
+
+	var idleTimer *time.Timer
 
 	defer func() {
 		maxTimer.Stop()
-		if minTimer != nil {
-			minTimer.Stop()
+		if timeThreshTimer != nil {
+			timeThreshTimer.Stop()
+		}
+		if idleTimer != nil {
+			idleTimer.Stop()
 		}
 	}()
 
-	minTimerC := func() <-chan time.Time {
-		if minTimer == nil {
+	timeThreshC := func() <-chan time.Time {
+		if timeThreshTimer == nil {
 			return nil
 		}
-		return minTimer.C
+		return timeThreshTimer.C
+	}
+
+	idleTimerC := func() <-chan time.Time {
+		if idleTimer == nil {
+			return nil
+		}
+		return idleTimer.C
+	}
+
+	arm := func() {
+		if idleArmed {
+			return
+		}
+		idleArmed = true
+		if idleTimer == nil {
+			idleTimer = time.NewTimer(minIdle)
+		} else {
+			idleTimer.Reset(minIdle)
+		}
+	}
+
+	resetAll := func() {
+		msgsSinceLast = 0
+		idleArmed = false
+		if !maxTimer.Stop() {
+			select {
+			case <-maxTimer.C:
+			default:
+			}
+		}
+		maxTimer.Reset(maxIdle)
+		if timeThreshTimer != nil {
+			if !timeThreshTimer.Stop() {
+				select {
+				case <-timeThreshTimer.C:
+				default:
+				}
+			}
+			timeThreshTimer.Reset(time.Duration(s.TimeThresholdMins) * time.Minute)
+		}
+		if idleTimer != nil {
+			idleTimer.Stop()
+			idleTimer = nil
+		}
 	}
 
 	for {
@@ -215,35 +290,41 @@ func (b *Bot) runStickyGoroutine(s *stickyMessage) {
 
 		case <-s.msgCh:
 			msgsSinceLast++
-			if minTimer == nil {
-				minTimer = time.NewTimer(minDwell)
-			}
-
-		case <-minTimerC():
-			if msgsSinceLast >= s.MsgThreshold {
-				if b.repostSticky(s) {
-					msgsSinceLast = 0
-					if !maxTimer.Stop() {
+			if idleArmed {
+				if idleTimer != nil {
+					if !idleTimer.Stop() {
 						select {
-						case <-maxTimer.C:
+						case <-idleTimer.C:
 						default:
 						}
 					}
-					maxTimer.Reset(maxDwell)
+					idleTimer.Reset(minIdle)
 				}
+			} else if s.MsgThreshold > 0 && msgsSinceLast >= s.MsgThreshold {
+				arm()
 			}
-			minTimer = nil
+
+		case <-timeThreshC():
+			if msgsSinceLast >= 1 {
+				arm()
+			}
+
+		case <-idleTimerC():
+			if b.repostSticky(s) {
+				resetAll()
+			} else {
+				idleTimer = nil
+			}
 
 		case <-maxTimer.C:
 			if msgsSinceLast >= 1 {
 				if b.repostSticky(s) {
-					msgsSinceLast = 0
+					resetAll()
+				} else {
+					maxTimer.Reset(maxIdle)
 				}
-			}
-			maxTimer.Reset(maxDwell)
-			if minTimer != nil {
-				minTimer.Stop()
-				minTimer = nil
+			} else {
+				maxTimer.Reset(maxIdle)
 			}
 		}
 	}

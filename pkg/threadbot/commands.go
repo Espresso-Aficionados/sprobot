@@ -92,20 +92,21 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	}
 
 	r := &threadReminder{
-		ChannelID:    channelID,
-		GuildID:      guildID,
-		EnabledBy:    e.User().ID,
-		Enabled:      true,
-		MinDwellMins: 30,
-		MaxDwellMins: 720,
-		MsgThreshold: 30,
+		ChannelID:         channelID,
+		GuildID:           guildID,
+		EnabledBy:         e.User().ID,
+		Enabled:           true,
+		MinIdleMins:       30,
+		MaxIdleMins:       720,
+		MsgThreshold:      30,
+		TimeThresholdMins: 60,
 	}
 
 	b.reminders[guildID][channelID] = r
 	b.startReminderGoroutine(r)
 	b.saveRemindersForGuild(guildID)
 
-	respondEphemeral(e, fmt.Sprintf("Thread reminders enabled in <#%d>. Dwell: %d–%d min, threshold: %d messages.", channelID, r.MinDwellMins, r.MaxDwellMins, r.MsgThreshold))
+	respondEphemeral(e, fmt.Sprintf("Thread reminders enabled in <#%d>. Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", channelID, r.MinIdleMins, r.MaxIdleMins, r.MsgThreshold, r.TimeThresholdMins))
 }
 
 func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
