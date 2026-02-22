@@ -13,7 +13,7 @@ import (
 
 const (
 	cmdSlash       = "threadbot"
-	cmdListThreads = "listthreads"
+	cmdListThreads = "threads"
 	subEnable      = "enable"
 	subDisable     = "disable"
 	subList        = "list"
