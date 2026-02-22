@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	cmdSlash   = "threadbot"
-	subEnable  = "enable"
-	subDisable = "disable"
-	subList    = "list"
-	subThreads = "threads"
+	cmdSlash       = "threadbot"
+	cmdListThreads = "listthreads"
+	subEnable      = "enable"
+	subDisable     = "disable"
+	subList        = "list"
 
 	optMinIdle       = "min_idle"
 	optMaxIdle       = "max_idle"
@@ -69,11 +69,11 @@ func (b *Bot) registerAllCommands() error {
 					Name:        subList,
 					Description: "List all channels with thread reminders in this server",
 				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        subThreads,
-					Description: "Show active threads in the current channel",
-				},
 			},
+		},
+		discord.SlashCommandCreate{
+			Name:        cmdListThreads,
+			Description: "Show active threads in the current channel",
 		},
 	}
 
@@ -95,23 +95,23 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 	if !ok {
 		return
 	}
-	if d.CommandName() != cmdSlash {
-		return
-	}
 
-	sub := d.SubCommandName
-	if sub == nil {
-		return
-	}
-	switch *sub {
-	case subEnable:
-		b.handleEnable(e)
-	case subDisable:
-		b.handleDisable(e)
-	case subList:
-		b.handleList(e)
-	case subThreads:
+	switch d.CommandName() {
+	case cmdListThreads:
 		b.handleThreads(e)
+	case cmdSlash:
+		sub := d.SubCommandName
+		if sub == nil {
+			return
+		}
+		switch *sub {
+		case subEnable:
+			b.handleEnable(e)
+		case subDisable:
+			b.handleDisable(e)
+		case subList:
+			b.handleList(e)
+		}
 	}
 }
 
