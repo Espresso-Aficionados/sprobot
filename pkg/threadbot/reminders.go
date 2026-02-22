@@ -12,6 +12,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/sadbox/sprobot/pkg/idleloop"
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
@@ -170,7 +171,13 @@ func (b *Bot) reminderSaveLoop() {
 func (b *Bot) startReminderGoroutine(r *threadReminder) {
 	r.msgCh = make(chan struct{}, 128)
 	r.stopCh = make(chan struct{})
-	go b.runReminderGoroutine(r)
+	go idleloop.Run(idleloop.Config{
+		MinIdleMins:       r.MinIdleMins,
+		MaxIdleMins:       r.MaxIdleMins,
+		MsgThreshold:      r.MsgThreshold,
+		TimeThresholdMins: r.TimeThresholdMins,
+		LastPostTime:      r.LastPostTime,
+	}, r.msgCh, r.stopCh, func() bool { return b.repostReminder(r) })
 }
 
 func (b *Bot) stopReminderGoroutine(r *threadReminder) {
@@ -185,144 +192,6 @@ func (b *Bot) stopAllReminderGoroutines() {
 	for _, channels := range b.reminders {
 		for _, r := range channels {
 			b.stopReminderGoroutine(r)
-		}
-	}
-}
-
-func (b *Bot) runReminderGoroutine(r *threadReminder) {
-	var msgsSinceLast int
-	var idleArmed bool
-
-	maxIdle := time.Duration(r.MaxIdleMins) * time.Minute
-	minIdle := time.Duration(r.MinIdleMins) * time.Minute
-
-	var timeThreshTimer *time.Timer
-	if r.TimeThresholdMins > 0 {
-		initialTimeThresh := time.Duration(r.TimeThresholdMins)*time.Minute - time.Since(r.LastPostTime)
-		if initialTimeThresh <= 0 || r.LastPostTime.IsZero() {
-			initialTimeThresh = time.Second
-		}
-		timeThreshTimer = time.NewTimer(initialTimeThresh)
-	}
-
-	var idleTimer *time.Timer
-	var maxTimer *time.Timer
-
-	defer func() {
-		if maxTimer != nil {
-			maxTimer.Stop()
-		}
-		if timeThreshTimer != nil {
-			timeThreshTimer.Stop()
-		}
-		if idleTimer != nil {
-			idleTimer.Stop()
-		}
-	}()
-
-	timeThreshC := func() <-chan time.Time {
-		if timeThreshTimer == nil {
-			return nil
-		}
-		return timeThreshTimer.C
-	}
-
-	idleTimerC := func() <-chan time.Time {
-		if idleTimer == nil {
-			return nil
-		}
-		return idleTimer.C
-	}
-
-	maxTimerC := func() <-chan time.Time {
-		if maxTimer == nil {
-			return nil
-		}
-		return maxTimer.C
-	}
-
-	arm := func() {
-		if idleArmed {
-			return
-		}
-		idleArmed = true
-		if idleTimer == nil {
-			idleTimer = time.NewTimer(minIdle)
-		} else {
-			idleTimer.Reset(minIdle)
-		}
-		if maxTimer == nil {
-			maxTimer = time.NewTimer(maxIdle)
-		} else {
-			maxTimer.Reset(maxIdle)
-		}
-	}
-
-	resetAll := func() {
-		msgsSinceLast = 0
-		idleArmed = false
-		if maxTimer != nil {
-			maxTimer.Stop()
-			maxTimer = nil
-		}
-		if timeThreshTimer != nil {
-			if !timeThreshTimer.Stop() {
-				select {
-				case <-timeThreshTimer.C:
-				default:
-				}
-			}
-			timeThreshTimer.Reset(time.Duration(r.TimeThresholdMins) * time.Minute)
-		}
-		if idleTimer != nil {
-			idleTimer.Stop()
-			idleTimer = nil
-		}
-	}
-
-	for {
-		select {
-		case <-r.stopCh:
-			return
-
-		case <-r.msgCh:
-			msgsSinceLast++
-			if idleArmed {
-				if idleTimer != nil {
-					if !idleTimer.Stop() {
-						select {
-						case <-idleTimer.C:
-						default:
-						}
-					}
-					idleTimer.Reset(minIdle)
-				}
-			} else if r.MsgThreshold > 0 && msgsSinceLast >= r.MsgThreshold {
-				arm()
-			}
-
-		case <-timeThreshC():
-			if msgsSinceLast >= 1 {
-				arm()
-			}
-
-		case <-idleTimerC():
-			if b.repostReminder(r) {
-				resetAll()
-			} else {
-				idleTimer = nil
-			}
-
-		case <-maxTimerC():
-			if msgsSinceLast >= 1 {
-				if b.repostReminder(r) {
-					resetAll()
-				} else {
-					maxTimer.Reset(maxIdle)
-				}
-			} else {
-				maxTimer.Reset(maxIdle)
-			}
 		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/sadbox/sprobot/pkg/idleloop"
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
@@ -174,14 +175,17 @@ func (b *Bot) stickySaveLoop() {
 	}
 }
 
-// startStickyGoroutine creates channels and launches the per-sticky goroutine.
 func (b *Bot) startStickyGoroutine(s *stickyMessage) {
 	s.msgCh = make(chan struct{}, 128)
 	s.stopCh = make(chan struct{})
-	go b.runStickyGoroutine(s)
+	go idleloop.Run(idleloop.Config{
+		MinIdleMins:       s.MinIdleMins,
+		MaxIdleMins:       s.MaxIdleMins,
+		MsgThreshold:      s.MsgThreshold,
+		TimeThresholdMins: s.TimeThresholdMins,
+	}, s.msgCh, s.stopCh, func() bool { return b.repostSticky(s) })
 }
 
-// stopStickyGoroutine signals the goroutine to exit by closing stopCh.
 func (b *Bot) stopStickyGoroutine(s *stickyMessage) {
 	if s.stopCh != nil {
 		close(s.stopCh)
@@ -194,148 +198,6 @@ func (b *Bot) stopAllStickyGoroutines() {
 	for _, channels := range b.stickies {
 		for _, s := range channels {
 			b.stopStickyGoroutine(s)
-		}
-	}
-}
-
-// runStickyGoroutine is the per-sticky select loop. It watches for channel
-// idle time and reposts during natural lulls in conversation.
-//
-// The idle trigger is "armed" by either MsgThreshold messages arriving or
-// TimeThresholdMins elapsing (whichever comes first). Once armed, the idle
-// timer (MinIdleMins) resets on each new message. When the idle timer fires
-// (no messages for MinIdleMins), the sticky is reposted. MaxIdleMins starts
-// counting from the moment of arming and forces a repost after that duration.
-func (b *Bot) runStickyGoroutine(s *stickyMessage) {
-	var msgsSinceLast int
-	var idleArmed bool
-
-	maxIdle := time.Duration(s.MaxIdleMins) * time.Minute
-	minIdle := time.Duration(s.MinIdleMins) * time.Minute
-
-	var timeThreshTimer *time.Timer
-	if s.TimeThresholdMins > 0 {
-		timeThreshTimer = time.NewTimer(time.Duration(s.TimeThresholdMins) * time.Minute)
-	}
-
-	var idleTimer *time.Timer
-	var maxTimer *time.Timer
-
-	defer func() {
-		if maxTimer != nil {
-			maxTimer.Stop()
-		}
-		if timeThreshTimer != nil {
-			timeThreshTimer.Stop()
-		}
-		if idleTimer != nil {
-			idleTimer.Stop()
-		}
-	}()
-
-	timeThreshC := func() <-chan time.Time {
-		if timeThreshTimer == nil {
-			return nil
-		}
-		return timeThreshTimer.C
-	}
-
-	idleTimerC := func() <-chan time.Time {
-		if idleTimer == nil {
-			return nil
-		}
-		return idleTimer.C
-	}
-
-	maxTimerC := func() <-chan time.Time {
-		if maxTimer == nil {
-			return nil
-		}
-		return maxTimer.C
-	}
-
-	arm := func() {
-		if idleArmed {
-			return
-		}
-		idleArmed = true
-		if idleTimer == nil {
-			idleTimer = time.NewTimer(minIdle)
-		} else {
-			idleTimer.Reset(minIdle)
-		}
-		if maxTimer == nil {
-			maxTimer = time.NewTimer(maxIdle)
-		} else {
-			maxTimer.Reset(maxIdle)
-		}
-	}
-
-	resetAll := func() {
-		msgsSinceLast = 0
-		idleArmed = false
-		if maxTimer != nil {
-			maxTimer.Stop()
-			maxTimer = nil
-		}
-		if timeThreshTimer != nil {
-			if !timeThreshTimer.Stop() {
-				select {
-				case <-timeThreshTimer.C:
-				default:
-				}
-			}
-			timeThreshTimer.Reset(time.Duration(s.TimeThresholdMins) * time.Minute)
-		}
-		if idleTimer != nil {
-			idleTimer.Stop()
-			idleTimer = nil
-		}
-	}
-
-	for {
-		select {
-		case <-s.stopCh:
-			return
-
-		case <-s.msgCh:
-			msgsSinceLast++
-			if idleArmed {
-				if idleTimer != nil {
-					if !idleTimer.Stop() {
-						select {
-						case <-idleTimer.C:
-						default:
-						}
-					}
-					idleTimer.Reset(minIdle)
-				}
-			} else if s.MsgThreshold > 0 && msgsSinceLast >= s.MsgThreshold {
-				arm()
-			}
-
-		case <-timeThreshC():
-			if msgsSinceLast >= 1 {
-				arm()
-			}
-
-		case <-idleTimerC():
-			if b.repostSticky(s) {
-				resetAll()
-			} else {
-				idleTimer = nil
-			}
-
-		case <-maxTimerC():
-			if msgsSinceLast >= 1 {
-				if b.repostSticky(s) {
-					resetAll()
-				} else {
-					maxTimer.Reset(maxIdle)
-				}
-			} else {
-				maxTimer.Reset(maxIdle)
-			}
 		}
 	}
 }
