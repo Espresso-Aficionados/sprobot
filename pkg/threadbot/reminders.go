@@ -332,8 +332,10 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 
 	// Filter threads belonging to this channel
 	type threadInfo struct {
-		Name string
-		ID   snowflake.ID
+		Name         string
+		ID           snowflake.ID
+		MessageCount int
+		MemberCount  int
 	}
 	var threads []threadInfo
 	for _, t := range result.Threads {
@@ -344,7 +346,12 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 		if parentID == nil || *parentID != r.ChannelID {
 			continue
 		}
-		threads = append(threads, threadInfo{Name: t.Name(), ID: t.ID()})
+		threads = append(threads, threadInfo{
+			Name:         t.Name(),
+			ID:           t.ID(),
+			MessageCount: t.MessageCount,
+			MemberCount:  t.MemberCount,
+		})
 	}
 
 	if len(threads) == 0 {
@@ -360,7 +367,7 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 	var desc strings.Builder
 	var truncated int
 	for i, t := range threads {
-		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d)\n", t.Name, r.GuildID, t.ID)
+		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members\n", t.Name, r.GuildID, t.ID, t.MessageCount, t.MemberCount)
 		if desc.Len()+len(line) > maxDescLen {
 			truncated = len(threads) - i
 			break
