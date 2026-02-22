@@ -457,6 +457,36 @@ func (c *Client) SaveStickies(ctx context.Context, guildID string, data []byte) 
 	return nil
 }
 
+func (c *Client) FetchThreadReminders(ctx context.Context, guildID string) ([]byte, error) {
+	s3Path := fmt.Sprintf("threadreminders/%s.json", guildID)
+	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &c.bucket,
+		Key:    &s3Path,
+	})
+	if err != nil {
+		var nsk *s3types.NoSuchKey
+		if errors.As(err, &nsk) || strings.Contains(err.Error(), "NoSuchKey") {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("fetching thread reminders from s3: %w", err)
+	}
+	defer out.Body.Close()
+	return io.ReadAll(out.Body)
+}
+
+func (c *Client) SaveThreadReminders(ctx context.Context, guildID string, data []byte) error {
+	s3Path := fmt.Sprintf("threadreminders/%s.json", guildID)
+	_, err := c.s3.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: &c.bucket,
+		Key:    &s3Path,
+		Body:   bytes.NewReader(data),
+	})
+	if err != nil {
+		return fmt.Errorf("saving thread reminders to s3: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (string, error) {
 	if err := urlValidator(fileURL); err != nil {
 		return "", fmt.Errorf("URL validation failed: %w", err)

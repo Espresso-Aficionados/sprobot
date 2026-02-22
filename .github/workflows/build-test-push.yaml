@@ -77,6 +77,16 @@ jobs:
             platform: linux/arm64
             runner: ubuntu-24.04-arm
             cache-scope: publish-stickybot-arm64
+          - image: sadbox/threadbot
+            target: prodthreadbot
+            platform: linux/amd64
+            runner: ubuntu-latest
+            cache-scope: publish-threadbot-amd64
+          - image: sadbox/threadbot
+            target: prodthreadbot
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            cache-scope: publish-threadbot-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - name: checkout code
@@ -134,6 +144,8 @@ jobs:
             artifact-prefix: digest-sadbox-sprobot-web
           - image: sadbox/stickybot
             artifact-prefix: digest-sadbox-stickybot
+          - image: sadbox/threadbot
+            artifact-prefix: digest-sadbox-threadbot
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
