@@ -122,7 +122,7 @@ func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 		Title:    "Sticky Message Settings",
 		Components: []discord.LayoutComponent{
 			discord.NewLabel(
-				"Min idle time (minutes of quiet before repost)",
+				"Min idle time (quiet mins before repost)",
 				discord.TextInputComponent{
 					CustomID: fieldMinIdle,
 					Style:    discord.TextInputStyleShort,
@@ -140,7 +140,7 @@ func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 				},
 			),
 			discord.NewLabel(
-				"Message threshold (msgs before watching for idle)",
+				"Message threshold (msgs to arm idle)",
 				discord.TextInputComponent{
 					CustomID: fieldThreshold,
 					Style:    discord.TextInputStyleShort,
@@ -149,7 +149,7 @@ func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 				},
 			),
 			discord.NewLabel(
-				"Time threshold (mins before watching for idle)",
+				"Time threshold (mins to arm idle)",
 				discord.TextInputComponent{
 					CustomID: fieldTimeThreshold,
 					Style:    discord.TextInputStyleShort,
