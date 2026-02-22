@@ -336,6 +336,7 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 		ID           snowflake.ID
 		MessageCount int
 		MemberCount  int
+		CreatedAt    time.Time
 	}
 	var threads []threadInfo
 	for _, t := range result.Threads {
@@ -351,6 +352,7 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 			ID:           t.ID(),
 			MessageCount: t.MessageCount,
 			MemberCount:  t.MemberCount,
+			CreatedAt:    t.ThreadMetadata.CreateTimestamp,
 		})
 	}
 
@@ -358,34 +360,40 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 		return false
 	}
 
+	// Sort by message count descending (most active first)
 	sort.Slice(threads, func(i, j int) bool {
-		return threads[i].Name < threads[j].Name
+		return threads[i].MessageCount > threads[j].MessageCount
 	})
 
+	// Limit to top 10
+	total := len(threads)
+	if len(threads) > 10 {
+		threads = threads[:10]
+	}
+
 	// Build description with thread links
+	now := time.Now()
 	const maxDescLen = 3900
 	var desc strings.Builder
-	var truncated int
-	for i, t := range threads {
-		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members\n", t.Name, r.GuildID, t.ID, t.MessageCount, t.MemberCount)
+	for _, t := range threads {
+		age := formatAge(now.Sub(t.CreatedAt))
+		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members, %s old\n", t.Name, r.GuildID, t.ID, t.MessageCount, t.MemberCount, age)
 		if desc.Len()+len(line) > maxDescLen {
-			truncated = len(threads) - i
 			break
 		}
 		desc.WriteString(line)
 	}
-	if truncated > 0 {
-		desc.WriteString(fmt.Sprintf("...and %d more threads\n", truncated))
+	if total > 10 {
+		desc.WriteString(fmt.Sprintf("...and %d more threads\n", total-10))
 	}
 
-	now := time.Now()
 	color := 0x5865F2 // Discord blurple
 	embed := discord.Embed{
 		Title:       "Active Threads",
 		Description: desc.String(),
 		Color:       color,
 		Footer: &discord.EmbedFooter{
-			Text: fmt.Sprintf("%d active thread(s)", len(threads)),
+			Text: fmt.Sprintf("%d active thread(s)", total),
 		},
 		Timestamp: &now,
 	}
@@ -417,4 +425,27 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 	r.LastPostTime = now
 	b.saveRemindersForGuild(r.GuildID)
 	return true
+}
+
+func formatAge(d time.Duration) string {
+	switch {
+	case d >= 24*time.Hour:
+		days := int(d.Hours() / 24)
+		if days == 1 {
+			return "1 day"
+		}
+		return fmt.Sprintf("%d days", days)
+	case d >= time.Hour:
+		hours := int(d.Hours())
+		if hours == 1 {
+			return "1 hour"
+		}
+		return fmt.Sprintf("%d hours", hours)
+	default:
+		mins := int(d.Minutes())
+		if mins <= 1 {
+			return "1 min"
+		}
+		return fmt.Sprintf("%d mins", mins)
+	}
 }
