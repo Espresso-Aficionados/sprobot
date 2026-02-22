@@ -204,8 +204,8 @@ func (b *Bot) stopAllStickyGoroutines() {
 // The idle trigger is "armed" by either MsgThreshold messages arriving or
 // TimeThresholdMins elapsing (whichever comes first). Once armed, the idle
 // timer (MinIdleMins) resets on each new message. When the idle timer fires
-// (no messages for MinIdleMins), the sticky is reposted. MaxIdleMins is a
-// hard cap that forces a repost regardless of arming state.
+// (no messages for MinIdleMins), the sticky is reposted. MaxIdleMins starts
+// counting from the moment of arming and forces a repost after that duration.
 func (b *Bot) runStickyGoroutine(s *stickyMessage) {
 	var msgsSinceLast int
 	var idleArmed bool
@@ -213,17 +213,18 @@ func (b *Bot) runStickyGoroutine(s *stickyMessage) {
 	maxIdle := time.Duration(s.MaxIdleMins) * time.Minute
 	minIdle := time.Duration(s.MinIdleMins) * time.Minute
 
-	maxTimer := time.NewTimer(maxIdle)
-
 	var timeThreshTimer *time.Timer
 	if s.TimeThresholdMins > 0 {
 		timeThreshTimer = time.NewTimer(time.Duration(s.TimeThresholdMins) * time.Minute)
 	}
 
 	var idleTimer *time.Timer
+	var maxTimer *time.Timer
 
 	defer func() {
-		maxTimer.Stop()
+		if maxTimer != nil {
+			maxTimer.Stop()
+		}
 		if timeThreshTimer != nil {
 			timeThreshTimer.Stop()
 		}
@@ -246,6 +247,13 @@ func (b *Bot) runStickyGoroutine(s *stickyMessage) {
 		return idleTimer.C
 	}
 
+	maxTimerC := func() <-chan time.Time {
+		if maxTimer == nil {
+			return nil
+		}
+		return maxTimer.C
+	}
+
 	arm := func() {
 		if idleArmed {
 			return
@@ -256,18 +264,20 @@ func (b *Bot) runStickyGoroutine(s *stickyMessage) {
 		} else {
 			idleTimer.Reset(minIdle)
 		}
+		if maxTimer == nil {
+			maxTimer = time.NewTimer(maxIdle)
+		} else {
+			maxTimer.Reset(maxIdle)
+		}
 	}
 
 	resetAll := func() {
 		msgsSinceLast = 0
 		idleArmed = false
-		if !maxTimer.Stop() {
-			select {
-			case <-maxTimer.C:
-			default:
-			}
+		if maxTimer != nil {
+			maxTimer.Stop()
+			maxTimer = nil
 		}
-		maxTimer.Reset(maxIdle)
 		if timeThreshTimer != nil {
 			if !timeThreshTimer.Stop() {
 				select {
@@ -316,7 +326,7 @@ func (b *Bot) runStickyGoroutine(s *stickyMessage) {
 				idleTimer = nil
 			}
 
-		case <-maxTimer.C:
+		case <-maxTimerC():
 			if msgsSinceLast >= 1 {
 				if b.repostSticky(s) {
 					resetAll()

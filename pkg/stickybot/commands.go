@@ -208,11 +208,6 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		respondEphemeral(e, "At least one of message threshold or time threshold must be greater than 0.")
 		return
 	}
-	if timeThreshold > 0 && timeThreshold >= maxIdle {
-		respondEphemeral(e, "Time threshold must be less than max idle.")
-		return
-	}
-
 	// Defer since fetching + re-hosting may take a moment
 	e.DeferCreateMessage(true)
 

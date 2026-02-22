@@ -196,14 +196,6 @@ func (b *Bot) runReminderGoroutine(r *threadReminder) {
 	maxIdle := time.Duration(r.MaxIdleMins) * time.Minute
 	minIdle := time.Duration(r.MinIdleMins) * time.Minute
 
-	// Calculate initial max idle based on time since last post
-	initialMax := maxIdle - time.Since(r.LastPostTime)
-	if initialMax <= 0 || r.LastPostTime.IsZero() {
-		initialMax = time.Second
-	}
-
-	maxTimer := time.NewTimer(initialMax)
-
 	var timeThreshTimer *time.Timer
 	if r.TimeThresholdMins > 0 {
 		initialTimeThresh := time.Duration(r.TimeThresholdMins)*time.Minute - time.Since(r.LastPostTime)
@@ -214,9 +206,12 @@ func (b *Bot) runReminderGoroutine(r *threadReminder) {
 	}
 
 	var idleTimer *time.Timer
+	var maxTimer *time.Timer
 
 	defer func() {
-		maxTimer.Stop()
+		if maxTimer != nil {
+			maxTimer.Stop()
+		}
 		if timeThreshTimer != nil {
 			timeThreshTimer.Stop()
 		}
@@ -239,6 +234,13 @@ func (b *Bot) runReminderGoroutine(r *threadReminder) {
 		return idleTimer.C
 	}
 
+	maxTimerC := func() <-chan time.Time {
+		if maxTimer == nil {
+			return nil
+		}
+		return maxTimer.C
+	}
+
 	arm := func() {
 		if idleArmed {
 			return
@@ -249,18 +251,20 @@ func (b *Bot) runReminderGoroutine(r *threadReminder) {
 		} else {
 			idleTimer.Reset(minIdle)
 		}
+		if maxTimer == nil {
+			maxTimer = time.NewTimer(maxIdle)
+		} else {
+			maxTimer.Reset(maxIdle)
+		}
 	}
 
 	resetAll := func() {
 		msgsSinceLast = 0
 		idleArmed = false
-		if !maxTimer.Stop() {
-			select {
-			case <-maxTimer.C:
-			default:
-			}
+		if maxTimer != nil {
+			maxTimer.Stop()
+			maxTimer = nil
 		}
-		maxTimer.Reset(maxIdle)
 		if timeThreshTimer != nil {
 			if !timeThreshTimer.Stop() {
 				select {
@@ -309,7 +313,7 @@ func (b *Bot) runReminderGoroutine(r *threadReminder) {
 				idleTimer = nil
 			}
 
-		case <-maxTimer.C:
+		case <-maxTimerC():
 			if msgsSinceLast >= 1 {
 				if b.repostReminder(r) {
 					resetAll()

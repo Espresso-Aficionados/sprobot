@@ -17,7 +17,14 @@ const (
 	subDisable = "disable"
 	subList    = "list"
 	subThreads = "threads"
+
+	optMinIdle       = "min_idle"
+	optMaxIdle       = "max_idle"
+	optMsgThreshold  = "msg_threshold"
+	optTimeThreshold = "time_threshold"
 )
+
+func intPtr(v int) *int { return &v }
 
 func (b *Bot) registerAllCommands() error {
 	perm := discord.PermissionManageMessages
@@ -31,6 +38,28 @@ func (b *Bot) registerAllCommands() error {
 				discord.ApplicationCommandOptionSubCommand{
 					Name:        subEnable,
 					Description: "Enable thread reminders in the current channel",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionInt{
+							Name:        optMinIdle,
+							Description: "Quiet minutes before repost (default 30)",
+							MinValue:    intPtr(0),
+						},
+						discord.ApplicationCommandOptionInt{
+							Name:        optMaxIdle,
+							Description: "Force repost after minutes (default 720)",
+							MinValue:    intPtr(1),
+						},
+						discord.ApplicationCommandOptionInt{
+							Name:        optMsgThreshold,
+							Description: "Messages to arm idle watch (default 500)",
+							MinValue:    intPtr(0),
+						},
+						discord.ApplicationCommandOptionInt{
+							Name:        optTimeThreshold,
+							Description: "Minutes to arm idle watch (default 720)",
+							MinValue:    intPtr(0),
+						},
+					},
 				},
 				discord.ApplicationCommandOptionSubCommand{
 					Name:        subDisable,
@@ -89,7 +118,33 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
+	data := e.Data.(discord.SlashCommandInteractionData)
 
+	minIdle := 30
+	if v, ok := data.OptInt(optMinIdle); ok {
+		minIdle = v
+	}
+	maxIdle := 720
+	if v, ok := data.OptInt(optMaxIdle); ok {
+		maxIdle = v
+	}
+	msgThreshold := 500
+	if v, ok := data.OptInt(optMsgThreshold); ok {
+		msgThreshold = v
+	}
+	timeThreshold := 720
+	if v, ok := data.OptInt(optTimeThreshold); ok {
+		timeThreshold = v
+	}
+
+	if maxIdle <= minIdle {
+		respondEphemeral(e, fmt.Sprintf("max_idle (%d) must be greater than min_idle (%d).", maxIdle, minIdle))
+		return
+	}
+	if msgThreshold == 0 && timeThreshold == 0 {
+		respondEphemeral(e, "At least one of msg_threshold or time_threshold must be > 0.")
+		return
+	}
 	// Replace any existing reminder in this channel
 	if b.reminders[guildID] == nil {
 		b.reminders[guildID] = make(map[snowflake.ID]*threadReminder)
@@ -103,10 +158,10 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 		GuildID:           guildID,
 		EnabledBy:         e.User().ID,
 		Enabled:           true,
-		MinIdleMins:       30,
-		MaxIdleMins:       720,
-		MsgThreshold:      30,
-		TimeThresholdMins: 60,
+		MinIdleMins:       minIdle,
+		MaxIdleMins:       maxIdle,
+		MsgThreshold:      msgThreshold,
+		TimeThresholdMins: timeThreshold,
 	}
 
 	b.reminders[guildID][channelID] = r
