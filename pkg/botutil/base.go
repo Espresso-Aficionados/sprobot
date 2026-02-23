@@ -46,9 +46,9 @@ func NewBaseBot(envVar string) (*BaseBot, error) {
 }
 
 // PingHealthcheck sends a GET to the configured healthcheck endpoint.
-// It is a no-op if no endpoint is configured.
+// It is a no-op in dev or if no endpoint is configured.
 func (b *BaseBot) PingHealthcheck() {
-	if b.healthcheckEndpoint == "" {
+	if b.Env != "prod" || b.healthcheckEndpoint == "" {
 		return
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
