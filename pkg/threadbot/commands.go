@@ -27,6 +27,12 @@ const (
 
 func intPtr(v int) *int { return &v }
 
+func isThread(ct discord.ChannelType) bool {
+	return ct == discord.ChannelTypeGuildPublicThread ||
+		ct == discord.ChannelTypeGuildPrivateThread ||
+		ct == discord.ChannelTypeGuildNewsThread
+}
+
 func (b *Bot) registerAllCommands() error {
 	perm := discord.PermissionManageMessages
 
@@ -95,6 +101,10 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 	case cmdListThreads:
 		b.handleThreads(e)
 	case cmdSlash:
+		if isThread(e.Channel().Type()) {
+			botutil.RespondEphemeral(e, "This command can only be used in channels, not threads.")
+			return
+		}
 		sub := d.SubCommandName
 		if sub == nil {
 			return
