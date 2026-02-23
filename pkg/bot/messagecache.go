@@ -26,6 +26,8 @@ type cappedGroupedCache struct {
 	mu      sync.RWMutex
 	data    map[snowflake.ID]map[snowflake.ID]discord.Message
 	order   []cacheKey
+	head    int
+	size    int
 	maxSize int
 }
 
@@ -55,40 +57,50 @@ func (c *cappedGroupedCache) Put(groupID snowflake.ID, id snowflake.ID, entity d
 	if group, ok := c.data[groupID]; ok {
 		if _, exists := group[id]; !exists {
 			c.order = append(c.order, cacheKey{GroupID: groupID, ID: id})
+			c.size++
 		}
 		group[id] = entity
 	} else {
 		group = map[snowflake.ID]discord.Message{id: entity}
 		c.data[groupID] = group
 		c.order = append(c.order, cacheKey{GroupID: groupID, ID: id})
+		c.size++
 	}
 
 	c.evict()
 }
 
 func (c *cappedGroupedCache) evict() {
-	for c.len() > c.maxSize && len(c.order) > 0 {
-		key := c.order[0]
-		c.order = c.order[1:]
+	for c.size > c.maxSize && c.head < len(c.order) {
+		key := c.order[c.head]
+		c.order[c.head] = cacheKey{} // clear reference
+		c.head++
 		if group, ok := c.data[key.GroupID]; ok {
 			if _, ok := group[key.ID]; ok {
 				delete(group, key.ID)
+				c.size--
 				if len(group) == 0 {
 					delete(c.data, key.GroupID)
 				}
-				return
+				break
 			}
 		}
 		// Entry already removed — skip stale and continue loop
 	}
+
+	// Compact when the dead prefix is at least half the slice.
+	if c.head >= len(c.order)/2 && c.head > 0 {
+		remaining := copy(c.order, c.order[c.head:])
+		for i := remaining; i < len(c.order); i++ {
+			c.order[i] = cacheKey{}
+		}
+		c.order = c.order[:remaining]
+		c.head = 0
+	}
 }
 
 func (c *cappedGroupedCache) len() int {
-	total := 0
-	for _, group := range c.data {
-		total += len(group)
-	}
-	return total
+	return c.size
 }
 
 func (c *cappedGroupedCache) Remove(groupID snowflake.ID, id snowflake.ID) (discord.Message, bool) {
@@ -97,6 +109,7 @@ func (c *cappedGroupedCache) Remove(groupID snowflake.ID, id snowflake.ID) (disc
 	if group, ok := c.data[groupID]; ok {
 		if msg, ok := group[id]; ok {
 			delete(group, id)
+			c.size--
 			if len(group) == 0 {
 				delete(c.data, groupID)
 			}
@@ -110,7 +123,10 @@ func (c *cappedGroupedCache) Remove(groupID snowflake.ID, id snowflake.ID) (disc
 func (c *cappedGroupedCache) GroupRemove(groupID snowflake.ID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.data, groupID)
+	if group, ok := c.data[groupID]; ok {
+		c.size -= len(group)
+		delete(c.data, groupID)
+	}
 }
 
 func (c *cappedGroupedCache) RemoveIf(filterFunc cache.GroupedFilterFunc[discord.Message]) {
@@ -120,6 +136,7 @@ func (c *cappedGroupedCache) RemoveIf(filterFunc cache.GroupedFilterFunc[discord
 		for id, entity := range group {
 			if filterFunc(groupID, entity) {
 				delete(group, id)
+				c.size--
 			}
 		}
 		if len(group) == 0 {
@@ -135,6 +152,7 @@ func (c *cappedGroupedCache) GroupRemoveIf(groupID snowflake.ID, filterFunc cach
 		for id, entity := range group {
 			if filterFunc(groupID, entity) {
 				delete(group, id)
+				c.size--
 			}
 		}
 		if len(group) == 0 {
@@ -205,6 +223,8 @@ func (c *cappedGroupedCache) load(msgs []discord.Message) {
 	defer c.mu.Unlock()
 	c.data = make(map[snowflake.ID]map[snowflake.ID]discord.Message)
 	c.order = nil
+	c.head = 0
+	c.size = 0
 	for _, msg := range msgs {
 		groupID := msg.ChannelID
 		id := msg.ID
@@ -213,6 +233,7 @@ func (c *cappedGroupedCache) load(msgs []discord.Message) {
 		}
 		c.data[groupID][id] = msg
 		c.order = append(c.order, cacheKey{GroupID: groupID, ID: id})
+		c.size++
 	}
 }
 

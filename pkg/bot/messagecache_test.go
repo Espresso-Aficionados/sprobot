@@ -196,3 +196,108 @@ func TestCappedCache_RemoveIf(t *testing.T) {
 		t.Fatal("expected message 11 to be removed")
 	}
 }
+
+func TestCappedCache_SizeTracking(t *testing.T) {
+	c := newCappedGroupedCache(100)
+	ch1 := snowflake.ID(1)
+	ch2 := snowflake.ID(2)
+
+	// Put several entries
+	c.Put(ch1, 10, makeMessage(ch1, 10))
+	c.Put(ch1, 11, makeMessage(ch1, 11))
+	c.Put(ch2, 20, makeMessage(ch2, 20))
+	if c.Len() != 3 {
+		t.Fatalf("len after puts = %d, want 3", c.Len())
+	}
+
+	// Overwrite should not change size
+	c.Put(ch1, 10, discord.Message{ChannelID: ch1, ID: 10, Content: "updated"})
+	if c.Len() != 3 {
+		t.Fatalf("len after overwrite = %d, want 3", c.Len())
+	}
+
+	// Remove one
+	c.Remove(ch1, 11)
+	if c.Len() != 2 {
+		t.Fatalf("len after Remove = %d, want 2", c.Len())
+	}
+
+	// Remove non-existent should not change size
+	c.Remove(ch1, 999)
+	if c.Len() != 2 {
+		t.Fatalf("len after Remove non-existent = %d, want 2", c.Len())
+	}
+
+	// GroupRemove
+	c.Put(ch1, 12, makeMessage(ch1, 12))
+	c.Put(ch1, 13, makeMessage(ch1, 13))
+	// ch1 now has 10, 12, 13; ch2 has 20 → total 4
+	if c.Len() != 4 {
+		t.Fatalf("len before GroupRemove = %d, want 4", c.Len())
+	}
+	c.GroupRemove(ch1)
+	if c.Len() != 1 {
+		t.Fatalf("len after GroupRemove = %d, want 1", c.Len())
+	}
+
+	// GroupRemove on non-existent group
+	c.GroupRemove(snowflake.ID(999))
+	if c.Len() != 1 {
+		t.Fatalf("len after GroupRemove non-existent = %d, want 1", c.Len())
+	}
+
+	// RemoveIf
+	c.Put(ch2, 21, discord.Message{ChannelID: ch2, ID: 21, Content: "drop"})
+	c.Put(ch2, 22, discord.Message{ChannelID: ch2, ID: 22, Content: "keep"})
+	// ch2 has 20 (test), 21 (drop), 22 (keep) → total 3
+	if c.Len() != 3 {
+		t.Fatalf("len before RemoveIf = %d, want 3", c.Len())
+	}
+	c.RemoveIf(func(_ snowflake.ID, msg discord.Message) bool {
+		return msg.Content == "drop"
+	})
+	if c.Len() != 2 {
+		t.Fatalf("len after RemoveIf = %d, want 2", c.Len())
+	}
+
+	// GroupRemoveIf
+	c.GroupRemoveIf(ch2, func(_ snowflake.ID, msg discord.Message) bool {
+		return msg.Content == "keep"
+	})
+	if c.Len() != 1 {
+		t.Fatalf("len after GroupRemoveIf = %d, want 1", c.Len())
+	}
+}
+
+func TestCappedCache_EvictionCompaction(t *testing.T) {
+	const cap = 50
+	c := newCappedGroupedCache(cap)
+	ch := snowflake.ID(1)
+
+	// Fill and overflow many times to trigger repeated evictions and compactions.
+	totalInserts := cap * 10
+	for i := 1; i <= totalInserts; i++ {
+		c.Put(ch, snowflake.ID(i), makeMessage(ch, snowflake.ID(i)))
+	}
+
+	if c.Len() != cap {
+		t.Fatalf("len = %d, want %d", c.Len(), cap)
+	}
+
+	// The order slice (from head onward) should not be much larger than size.
+	// With compaction, len(order) - head should equal size (no stale entries
+	// remain because we only insert into one group, so evict never skips).
+	active := len(c.order) - c.head
+	if active > cap*2 {
+		t.Fatalf("order active region = %d, want <= %d (head=%d, len=%d)",
+			active, cap*2, c.head, len(c.order))
+	}
+
+	// head should have been compacted at least once (not still 0 only if
+	// no compaction happened, but after 10x overflow it definitely did).
+	// After the final compaction head resets to 0, so just verify the slice
+	// isn't unbounded.
+	if len(c.order) > cap*2 {
+		t.Fatalf("order slice length = %d, should be bounded near cap (%d)", len(c.order), cap)
+	}
+}
