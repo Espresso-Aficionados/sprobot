@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,12 +25,23 @@ type posterRoleConfig struct {
 }
 
 func getPosterRoleConfig(env string) map[snowflake.ID]posterRoleConfig {
+	thresholdStr := os.Getenv("SPROBOT_POSTER_ROLE_THRESHOLD")
+	if thresholdStr == "" {
+		slog.Info("SPROBOT_POSTER_ROLE_THRESHOLD not set, poster role disabled")
+		return nil
+	}
+	threshold, err := strconv.Atoi(thresholdStr)
+	if err != nil || threshold <= 0 {
+		slog.Error("Invalid SPROBOT_POSTER_ROLE_THRESHOLD", "value", thresholdStr)
+		return nil
+	}
+
 	switch env {
 	case "prod":
 		return map[snowflake.ID]posterRoleConfig{
 			726985544038612993: {
 				RoleID:       1367728202885365821,
-				Threshold:    100,
+				Threshold:    threshold,
 				SkipChannels: map[snowflake.ID]bool{},
 			},
 		}
