@@ -138,7 +138,7 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 		Content: response,
 		Embeds: []discord.Embed{{
 			Footer: &discord.EmbedFooter{
-				Text:    fmt.Sprintf("%s used /s %s", username, name),
+				Text:    fmt.Sprintf("@%s used /s %s", username, name),
 				IconURL: e.User().EffectiveAvatarURL(),
 			},
 		}},
