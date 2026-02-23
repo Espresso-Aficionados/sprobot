@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
@@ -143,11 +144,11 @@ func (b *Bot) onMessageUpdate(e *events.GuildMessageUpdate) {
 	})
 	if e.OldMessage.Content != "" {
 		embed.Fields = append(embed.Fields, discord.EmbedField{
-			Name: "Before", Value: truncate(e.OldMessage.Content, 1024),
+			Name: "Before", Value: "```\n" + truncate(e.OldMessage.Content, 1016) + "\n```",
 		})
 	}
 	embed.Fields = append(embed.Fields, discord.EmbedField{
-		Name: "After", Value: truncate(e.Message.Content, 1024),
+		Name: "After", Value: "```\n" + truncate(e.Message.Content, 1016) + "\n```",
 	})
 	b.postEventLog(e.GuildID, embed)
 }
@@ -263,6 +264,10 @@ func (b *Bot) onAuditLogEntry(e *events.GuildAuditLogEntryCreate) {
 		b.handleKickEntry(e.GuildID, entry)
 	case discord.AuditLogEventMemberUpdate:
 		b.handleMemberUpdateEntry(e.GuildID, entry)
+	case discord.AuditLogEventChannelOverwriteCreate,
+		discord.AuditLogEventChannelOverwriteUpdate,
+		discord.AuditLogEventChannelOverwriteDelete:
+		b.handleChannelOverwriteEntry(e.GuildID, entry)
 	}
 }
 
@@ -362,6 +367,162 @@ func (b *Bot) handleMemberUpdateEntry(guildID snowflake.ID, entry discord.AuditL
 	}
 }
 
+func (b *Bot) handleChannelOverwriteEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	if entry.TargetID == nil {
+		return
+	}
+	channelID := *entry.TargetID
+
+	// Determine action label
+	var action string
+	switch entry.ActionType {
+	case discord.AuditLogEventChannelOverwriteCreate:
+		action = "Created"
+	case discord.AuditLogEventChannelOverwriteUpdate:
+		action = "Updated"
+	case discord.AuditLogEventChannelOverwriteDelete:
+		action = "Deleted"
+	}
+
+	// Get channel name for the title
+	channelName := fmt.Sprintf("%d", channelID)
+	if ch, err := b.Client.Rest.GetChannel(channelID); err == nil {
+		channelName = ch.Name()
+	}
+
+	// Determine target (role or member)
+	var targetMention string
+	if entry.Options != nil {
+		id := ""
+		if entry.Options.ID != nil {
+			id = *entry.Options.ID
+		}
+		if entry.Options.Type != nil && *entry.Options.Type == "0" {
+			// Role
+			if entry.Options.RoleName != nil && *entry.Options.RoleName != "" {
+				targetMention = "@" + *entry.Options.RoleName
+			} else {
+				targetMention = fmt.Sprintf("<@&%s>", id)
+			}
+		} else {
+			// Member
+			targetMention = fmt.Sprintf("<@%s>", id)
+		}
+	}
+
+	// Extract old/new allow/deny from changes
+	var oldAllow, oldDeny, newAllow, newDeny discord.Permissions
+	for _, change := range entry.Changes {
+		switch change.Key {
+		case discord.AuditLogChangeKeyAllow:
+			_ = change.UnmarshalOldValue(&oldAllow)
+			_ = change.UnmarshalNewValue(&newAllow)
+		case discord.AuditLogChangeKeyDeny:
+			_ = change.UnmarshalOldValue(&oldDeny)
+			_ = change.UnmarshalNewValue(&newDeny)
+		}
+	}
+
+	// Build permission diff description
+	var desc strings.Builder
+	desc.WriteString("Permissions:\n")
+	if targetMention != "" {
+		desc.WriteString("⬋ ")
+		desc.WriteString(targetMention)
+		desc.WriteString("\n")
+	}
+	desc.WriteString(formatPermissionDiff(entry.ActionType, oldAllow, oldDeny, newAllow, newDeny))
+
+	embed := discord.Embed{
+		Title:       fmt.Sprintf("Channel Permissions %s: %s", action, channelName),
+		Color:       colorYellow,
+		Description: desc.String(),
+		Fields: []discord.EmbedField{
+			{Name: "Channel", Value: channelMention(channelID), Inline: boolPtr(true)},
+		},
+	}
+	if entry.UserID != 0 {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Responsible Moderator", Value: userMention(entry.UserID), Inline: boolPtr(true),
+		})
+	}
+	b.postEventLog(guildID, embed)
+}
+
+// channelPermissionBits is an ordered list of channel-relevant permission bits and their display names.
+var channelPermissionBits = []struct {
+	Bit  discord.Permissions
+	Name string
+}{
+	{discord.PermissionViewChannel, "View Channel"},
+	{discord.PermissionManageChannels, "Manage Channels"},
+	{discord.PermissionManageRoles, "Manage Permissions"},
+	{discord.PermissionCreateInstantInvite, "Create Invite"},
+	{discord.PermissionSendMessages, "Send Messages"},
+	{discord.PermissionSendMessagesInThreads, "Send Messages in Threads"},
+	{discord.PermissionCreatePublicThreads, "Create Public Threads"},
+	{discord.PermissionCreatePrivateThreads, "Create Private Threads"},
+	{discord.PermissionEmbedLinks, "Embed Links"},
+	{discord.PermissionAttachFiles, "Attach Files"},
+	{discord.PermissionAddReactions, "Add Reactions"},
+	{discord.PermissionUseExternalEmojis, "Use External Emojis"},
+	{discord.PermissionUseExternalStickers, "Use External Stickers"},
+	{discord.PermissionMentionEveryone, "Mention Everyone"},
+	{discord.PermissionManageMessages, "Manage Messages"},
+	{discord.PermissionManageThreads, "Manage Threads"},
+	{discord.PermissionReadMessageHistory, "Read Message History"},
+	{discord.PermissionSendTTSMessages, "Send TTS Messages"},
+	{discord.PermissionSendVoiceMessages, "Send Voice Messages"},
+	{discord.PermissionSendPolls, "Create Polls"},
+	{discord.PermissionUseApplicationCommands, "Use Application Commands"},
+	{discord.PermissionConnect, "Connect"},
+	{discord.PermissionSpeak, "Speak"},
+	{discord.PermissionStream, "Video"},
+	{discord.PermissionUseSoundboard, "Use Soundboard"},
+	{discord.PermissionUseExternalSounds, "Use External Sounds"},
+	{discord.PermissionUseVAD, "Use Voice Activity"},
+	{discord.PermissionPrioritySpeaker, "Priority Speaker"},
+	{discord.PermissionMuteMembers, "Mute Members"},
+	{discord.PermissionDeafenMembers, "Deafen Members"},
+	{discord.PermissionMoveMembers, "Move Members"},
+	{discord.PermissionManageEvents, "Manage Events"},
+	{discord.PermissionUseEmbeddedActivities, "Use Activities"},
+}
+
+func formatPermissionDiff(action discord.AuditLogEvent, oldAllow, oldDeny, newAllow, newDeny discord.Permissions) string {
+	var lines []string
+	for _, p := range channelPermissionBits {
+		switch action {
+		case discord.AuditLogEventChannelOverwriteCreate:
+			if newAllow.Has(p.Bit) {
+				lines = append(lines, "✅ "+p.Name)
+			} else if newDeny.Has(p.Bit) {
+				lines = append(lines, "❌ "+p.Name)
+			}
+		case discord.AuditLogEventChannelOverwriteDelete:
+			if oldAllow.Has(p.Bit) || oldDeny.Has(p.Bit) {
+				lines = append(lines, "↩️ "+p.Name)
+			}
+		case discord.AuditLogEventChannelOverwriteUpdate:
+			wasAllowed := oldAllow.Has(p.Bit)
+			wasDenied := oldDeny.Has(p.Bit)
+			nowAllowed := newAllow.Has(p.Bit)
+			nowDenied := newDeny.Has(p.Bit)
+			if nowAllowed && !wasAllowed {
+				lines = append(lines, "✅ "+p.Name)
+			} else if nowDenied && !wasDenied {
+				lines = append(lines, "❌ "+p.Name)
+			} else if (wasAllowed && !nowAllowed) || (wasDenied && !nowDenied) {
+				lines = append(lines, "↩️ "+p.Name)
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return "*No recognizable permission changes*"
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (b *Bot) crossPostToModLog(guildID snowflake.ID, user discord.User, embed discord.Embed) {
 	modLogConfig := getModLogCfg(b.Env)
 	if modLogConfig == nil {
@@ -405,10 +566,9 @@ func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
 			)
 		}
 	}
+	// If nothing changed besides permission overwrites, skip — the audit log handler covers those.
 	if len(fields) == 0 {
-		fields = append(fields, discord.EmbedField{
-			Name: "Channel", Value: channelMention(e.ChannelID),
-		})
+		return
 	}
 
 	embed := discord.Embed{
@@ -441,6 +601,7 @@ func (b *Bot) onThreadCreate(e *events.ThreadCreate) {
 			{Name: "Thread", Value: channelMention(e.ThreadID), Inline: boolPtr(true)},
 			{Name: "Name", Value: e.Thread.Name(), Inline: boolPtr(true)},
 			{Name: "Parent", Value: channelMention(e.ParentID), Inline: boolPtr(true)},
+			{Name: "Creator", Value: userMention(e.Thread.OwnerID), Inline: boolPtr(true)},
 		},
 	}
 	b.postEventLog(e.GuildID, embed)
