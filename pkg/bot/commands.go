@@ -103,6 +103,39 @@ func (b *Bot) registerAllCommands() error {
 			},
 		})
 
+		// /welcome
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "welcome",
+			Description:              "Configure welcome DM for new members",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "set",
+					Description: "Set the welcome message",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "clear",
+					Description: "Clear the welcome message",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "show",
+					Description: "Show the current welcome message",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "test",
+					Description: "Send yourself the welcome DM",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "enable",
+					Description: "Enable welcome DM for new members",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "disable",
+					Description: "Disable welcome DM without clearing the message",
+				},
+			},
+		})
+
 		// /topposters
 		if _, ok := b.topPostersConfig[guildID]; ok {
 			commands = append(commands, discord.SlashCommandCreate{
@@ -230,6 +263,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleShortcut(e)
 	case "sconfig":
 		b.handleShortcutConfig(e)
+	case "welcome":
+		b.handleWelcome(e)
 	}
 }
 
@@ -252,6 +287,11 @@ func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
 
 	if strings.HasPrefix(customID, "sconfig_set_") {
 		b.handleShortcutConfigSetModal(e)
+		return
+	}
+
+	if customID == "welcome_set" {
+		b.handleWelcomeSetModal(e)
 		return
 	}
 

@@ -19,6 +19,7 @@ func getAutoRoleID(env string) snowflake.ID {
 
 func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
 	b.logMemberJoin(e.GuildID, e.Member)
+	b.sendWelcomeDM(e.GuildID, e.Member.User.ID)
 
 	roleID := b.autoRoleID
 	if roleID == 0 {

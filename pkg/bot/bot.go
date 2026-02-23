@@ -24,6 +24,7 @@ type Bot struct {
 	posterRole       map[snowflake.ID]*posterRoleState
 	tickets          map[snowflake.ID]*ticketState
 	shortcuts        map[snowflake.ID]*shortcutState
+	welcome          map[snowflake.ID]*welcomeState
 	msgCache         *cappedGroupedCache
 	topPostersConfig map[snowflake.ID]topPostersConfig
 	posterRoleConfig map[snowflake.ID]posterRoleConfig
@@ -48,6 +49,7 @@ func New(token string) (*Bot, error) {
 		posterRole:       make(map[snowflake.ID]*posterRoleState),
 		tickets:          make(map[snowflake.ID]*ticketState),
 		shortcuts:        make(map[snowflake.ID]*shortcutState),
+		welcome:          make(map[snowflake.ID]*welcomeState),
 		msgCache:         msgCache,
 		topPostersConfig: getTopPostersConfig(base.Env),
 		posterRoleConfig: getPosterRoleConfig(base.Env),
@@ -118,6 +120,7 @@ func (b *Bot) Run() error {
 	b.loadPosterRole()
 	b.loadTickets()
 	b.loadShortcuts()
+	b.loadWelcome()
 	b.ensureTicketPanels()
 	if err := b.registerAllCommands(); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
@@ -127,6 +130,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTopPosters)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.savePosterRole)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveShortcuts)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveWelcome)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMessageCache)
 
 	botutil.WaitForShutdown(b.Log, "Bot")
@@ -135,6 +139,7 @@ func (b *Bot) Run() error {
 	b.savePosterRole()
 	b.saveTickets()
 	b.saveShortcuts()
+	b.saveWelcome()
 	b.saveMessageCache()
 	return nil
 }
