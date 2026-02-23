@@ -63,6 +63,17 @@ func (b *Bot) loadShortcuts() {
 	}
 }
 
+// persistShortcuts marshals the shortcut state under the lock and saves to S3.
+func (b *Bot) persistShortcuts(guildID snowflake.ID, st *shortcutState) error {
+	st.mu.Lock()
+	data, err := json.Marshal(st)
+	st.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	return b.S3.SaveGuildJSON(context.Background(), "shortcuts", fmt.Sprintf("%d", guildID), data)
+}
+
 func (b *Bot) saveShortcuts() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -70,18 +81,8 @@ func (b *Bot) saveShortcuts() {
 		}
 	}()
 
-	ctx := context.Background()
 	for guildID, st := range b.shortcuts {
-		st.mu.Lock()
-		data, err := json.Marshal(st)
-		st.mu.Unlock()
-
-		if err != nil {
-			b.Log.Error("Failed to marshal shortcut data", "guild_id", guildID, "error", err)
-			continue
-		}
-
-		if err := b.S3.SaveGuildJSON(ctx, "shortcuts", fmt.Sprintf("%d", guildID), data); err != nil {
+		if err := b.persistShortcuts(guildID, st); err != nil {
 			b.Log.Error("Failed to save shortcut data", "guild_id", guildID, "error", err)
 		} else {
 			b.Log.Info("Saved shortcut state", "guild_id", guildID)
@@ -194,7 +195,10 @@ func (b *Bot) handleShortcutConfig(e *events.ApplicationCommandInteractionCreate
 }
 
 func (b *Bot) handleShortcutConfigSet(e *events.ApplicationCommandInteractionCreate) {
-	data := e.Data.(discord.SlashCommandInteractionData)
+	data, ok := e.Data.(discord.SlashCommandInteractionData)
+	if !ok {
+		return
+	}
 
 	name := data.String("shortcut")
 	if name == "" {
@@ -278,16 +282,9 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 	st.mu.Lock()
 	st.Shortcuts[name] = shortcutEntry{Responses: responses}
 	st.indices[name] = 0
-	data, err := json.Marshal(st)
 	st.mu.Unlock()
 
-	if err != nil {
-		b.Log.Error("Failed to marshal shortcut data", "guild_id", *guildID, "error", err)
-		respondEphemeral(e, "Failed to save shortcut.")
-		return
-	}
-
-	if err := b.S3.SaveGuildJSON(context.Background(), "shortcuts", fmt.Sprintf("%d", *guildID), data); err != nil {
+	if err := b.persistShortcuts(*guildID, st); err != nil {
 		b.Log.Error("Failed to save shortcut data", "guild_id", *guildID, "error", err)
 		respondEphemeral(e, "Failed to save shortcut.")
 		return
@@ -297,7 +294,10 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 }
 
 func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteractionCreate) {
-	data := e.Data.(discord.SlashCommandInteractionData)
+	data, ok := e.Data.(discord.SlashCommandInteractionData)
+	if !ok {
+		return
+	}
 
 	name := data.String("shortcut")
 	if name == "" {
@@ -322,19 +322,11 @@ func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteraction
 		respondEphemeral(e, fmt.Sprintf("Shortcut %q not found.", name))
 		return
 	}
-
 	delete(st.Shortcuts, name)
 	delete(st.indices, name)
-	marshaledData, err := json.Marshal(st)
 	st.mu.Unlock()
 
-	if err != nil {
-		b.Log.Error("Failed to marshal shortcut data", "guild_id", *guildID, "error", err)
-		respondEphemeral(e, "Failed to save shortcut.")
-		return
-	}
-
-	if err := b.S3.SaveGuildJSON(context.Background(), "shortcuts", fmt.Sprintf("%d", *guildID), marshaledData); err != nil {
+	if err := b.persistShortcuts(*guildID, st); err != nil {
 		b.Log.Error("Failed to save shortcut data", "guild_id", *guildID, "error", err)
 		respondEphemeral(e, "Failed to save shortcut.")
 		return
@@ -350,12 +342,17 @@ func (b *Bot) handleShortcutConfigList(e *events.ApplicationCommandInteractionCr
 	}
 
 	st := b.shortcuts[*guildID]
-	if st == nil || len(st.Shortcuts) == 0 {
+	if st == nil {
 		respondEphemeral(e, "No shortcuts configured.")
 		return
 	}
 
 	st.mu.Lock()
+	if len(st.Shortcuts) == 0 {
+		st.mu.Unlock()
+		respondEphemeral(e, "No shortcuts configured.")
+		return
+	}
 	var lines []string
 	for name, entry := range st.Shortcuts {
 		lines = append(lines, fmt.Sprintf("**%s** — %d response(s)", name, len(entry.Responses)))
