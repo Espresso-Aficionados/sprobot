@@ -3,6 +3,7 @@ package threadbot
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo"
@@ -16,6 +17,8 @@ import (
 
 type Bot struct {
 	*botutil.BaseBot
+	mu        sync.Mutex
+	stop      chan struct{}
 	reminders map[snowflake.ID]map[snowflake.ID]*threadReminder // guild -> channel -> reminder
 }
 
@@ -27,6 +30,7 @@ func New(token string) (*Bot, error) {
 
 	b := &Bot{
 		BaseBot:   base,
+		stop:      make(chan struct{}),
 		reminders: make(map[snowflake.ID]map[snowflake.ID]*threadReminder),
 	}
 
@@ -63,10 +67,11 @@ func (b *Bot) Run() error {
 	if err := b.registerAllCommands(); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
 	}
-	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.PingHealthcheck)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.saveAllReminders)
+	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveAllReminders)
 
 	botutil.WaitForShutdown(b.Log, "Threadbot")
+	close(b.stop)
 	b.stopAllReminderGoroutines()
 	b.saveAllReminders()
 	return nil
@@ -81,15 +86,17 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	}
 
 	guildID := *e.GuildID
+	b.mu.Lock()
 	channels, ok := b.reminders[guildID]
 	if !ok {
+		b.mu.Unlock()
 		return
 	}
-
 	r, ok := channels[e.ChannelID]
 	if !ok || !r.Enabled {
+		b.mu.Unlock()
 		return
 	}
-
+	b.mu.Unlock()
 	r.handle.Signal()
 }

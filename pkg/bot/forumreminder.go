@@ -43,7 +43,11 @@ func getThreadHelpConfig(env string) map[snowflake.ID]threadHelpInfo {
 func (b *Bot) forumReminderLoop() {
 	// Wait for the bot to be ready
 	for !b.Ready.Load() {
-		time.Sleep(1 * time.Second)
+		select {
+		case <-b.stop:
+			return
+		case <-time.After(1 * time.Second):
+		}
 	}
 
 	ticker := time.NewTicker(30 * time.Minute)
@@ -51,8 +55,13 @@ func (b *Bot) forumReminderLoop() {
 
 	// Run immediately once, then on ticker
 	b.sendForumReminders()
-	for range ticker.C {
-		b.sendForumReminders()
+	for {
+		select {
+		case <-b.stop:
+			return
+		case <-ticker.C:
+			b.sendForumReminders()
+		}
 	}
 }
 

@@ -65,7 +65,10 @@ func (b *Bot) handleModLogMenu(e *events.ApplicationCommandInteractionCreate) {
 
 func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, channelID, messageID snowflake.ID) {
 	// Defer the response since this might take a while
-	e.DeferCreateMessage(true)
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer mod log modal response", "error", err)
+		return
+	}
 
 	msg, err := b.Client.Rest.GetMessage(channelID, messageID)
 	if err != nil {

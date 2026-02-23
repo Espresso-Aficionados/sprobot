@@ -16,10 +16,12 @@ type MessageResponder interface {
 }
 
 func RespondEphemeral(e MessageResponder, content string) {
-	e.CreateMessage(discord.MessageCreate{
+	if err := e.CreateMessage(discord.MessageCreate{
 		Content: content,
 		Flags:   discord.MessageFlagEphemeral,
-	})
+	}); err != nil {
+		slog.Error("Failed to send ephemeral response", "error", err)
+	}
 }
 
 // PostWithRetry attempts to create a message up to 3 times with exponential backoff.

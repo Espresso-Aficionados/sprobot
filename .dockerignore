@@ -1,0 +1,7 @@
+.git
+.github
+LICENSE
+*.md
+.env*
+.vscode
+.idea

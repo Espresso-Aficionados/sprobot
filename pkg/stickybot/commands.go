@@ -204,7 +204,10 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		return
 	}
 	// Defer since fetching + re-hosting may take a moment
-	e.DeferCreateMessage(true)
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer sticky config response", "error", err)
+		return
+	}
 
 	// Fetch the original message
 	msg, err := b.Client.Rest.GetMessage(channelID, messageID)
@@ -264,16 +267,20 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	s.LastMessageID = sent.ID
 
 	// Replace any existing sticky in this channel
+	b.mu.Lock()
 	if b.stickies[guildID] == nil {
 		b.stickies[guildID] = make(map[snowflake.ID]*stickyMessage)
 	}
-	if old, ok := b.stickies[guildID][channelID]; ok {
+	old := b.stickies[guildID][channelID]
+	b.stickies[guildID][channelID] = s
+	b.mu.Unlock()
+
+	if old != nil {
 		b.stopStickyGoroutine(old)
 		if old.LastMessageID != 0 {
 			_ = b.Client.Rest.DeleteMessage(channelID, old.LastMessageID)
 		}
 	}
-	b.stickies[guildID][channelID] = s
 	b.startStickyGoroutine(s)
 
 	// Save to S3 immediately
@@ -286,15 +293,17 @@ func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
 
+	b.mu.Lock()
 	s := b.getSticky(guildID, channelID)
 	if s == nil {
+		b.mu.Unlock()
 		botutil.RespondEphemeral(e, "No sticky in this channel.")
 		return
 	}
+	s.Active = false
+	b.mu.Unlock()
 
 	b.stopStickyGoroutine(s)
-	s.Active = false
-
 	b.saveStickiesForGuild(guildID)
 	botutil.RespondEphemeral(e, "Sticky paused.")
 }
@@ -303,19 +312,22 @@ func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
 
+	b.mu.Lock()
 	s := b.getSticky(guildID, channelID)
 	if s == nil {
+		b.mu.Unlock()
 		botutil.RespondEphemeral(e, "No sticky in this channel.")
 		return
 	}
 	if s.Active {
+		b.mu.Unlock()
 		botutil.RespondEphemeral(e, "Sticky is already active.")
 		return
 	}
-
 	s.Active = true
-	b.startStickyGoroutine(s)
+	b.mu.Unlock()
 
+	b.startStickyGoroutine(s)
 	b.saveStickiesForGuild(guildID)
 	botutil.RespondEphemeral(e, "Sticky resumed.")
 }
@@ -324,26 +336,26 @@ func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) 
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
 
+	b.mu.Lock()
 	channels, ok := b.stickies[guildID]
 	if !ok {
+		b.mu.Unlock()
 		botutil.RespondEphemeral(e, "No sticky in this channel.")
 		return
 	}
-
 	s, ok := channels[channelID]
 	if !ok {
+		b.mu.Unlock()
 		botutil.RespondEphemeral(e, "No sticky in this channel.")
 		return
 	}
+	delete(channels, channelID)
+	b.mu.Unlock()
 
 	b.stopStickyGoroutine(s)
-
-	// Delete the current sticky message (best-effort)
 	if s.LastMessageID != 0 {
 		_ = b.Client.Rest.DeleteMessage(channelID, s.LastMessageID)
 	}
-
-	delete(channels, channelID)
 	b.saveStickiesForGuild(guildID)
 	botutil.RespondEphemeral(e, "Sticky removed.")
 }
@@ -351,12 +363,13 @@ func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) 
 func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 
+	b.mu.Lock()
 	channels, ok := b.stickies[guildID]
 	if !ok || len(channels) == 0 {
+		b.mu.Unlock()
 		botutil.RespondEphemeral(e, "No stickies in this server.")
 		return
 	}
-
 	var lines []string
 	for _, s := range channels {
 		status := "active"
@@ -366,6 +379,7 @@ func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {
 		previewStr := truncatePreview(s.Content, 50)
 		lines = append(lines, fmt.Sprintf("<#%d> — %s — %q", s.ChannelID, status, previewStr))
 	}
+	b.mu.Unlock()
 
 	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
 }

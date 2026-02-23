@@ -3,6 +3,7 @@ package stickybot
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo"
@@ -16,6 +17,8 @@ import (
 
 type Bot struct {
 	*botutil.BaseBot
+	mu       sync.Mutex
+	stop     chan struct{}
 	stickies map[snowflake.ID]map[snowflake.ID]*stickyMessage // guild -> channel -> sticky
 }
 
@@ -27,6 +30,7 @@ func New(token string) (*Bot, error) {
 
 	b := &Bot{
 		BaseBot:  base,
+		stop:     make(chan struct{}),
 		stickies: make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
 	}
 
@@ -63,11 +67,12 @@ func (b *Bot) Run() error {
 	if err := b.registerAllCommands(); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
 	}
-	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.PingHealthcheck)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.saveAllStickies)
+	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveAllStickies)
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
 	botutil.WaitForShutdown(b.Log, "Stickybot")
+	close(b.stop)
 	b.stopAllStickyGoroutines()
 	b.saveAllStickies()
 	return nil
@@ -82,15 +87,17 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	}
 
 	guildID := *e.GuildID
+	b.mu.Lock()
 	channels, ok := b.stickies[guildID]
 	if !ok {
+		b.mu.Unlock()
 		return
 	}
-
 	s, ok := channels[e.ChannelID]
 	if !ok || !s.Active {
+		b.mu.Unlock()
 		return
 	}
-
+	b.mu.Unlock()
 	s.handle.Signal()
 }

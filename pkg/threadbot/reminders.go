@@ -77,17 +77,19 @@ func (b *Bot) loadReminders() {
 }
 
 func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) {
+	b.mu.Lock()
 	channels, ok := b.reminders[guildID]
 	if !ok {
+		b.mu.Unlock()
 		return
 	}
-
 	toSave := make(map[string]*threadReminder, len(channels))
 	for chID, r := range channels {
 		toSave[fmt.Sprintf("%d", chID)] = r
 	}
-
 	data, err := json.Marshal(toSave)
+	b.mu.Unlock()
+
 	if err != nil {
 		b.Log.Error("Failed to marshal thread reminders", "guild_id", guildID, "error", err)
 		return
@@ -108,7 +110,14 @@ func (b *Bot) saveAllReminders() {
 		}
 	}()
 
-	for guildID := range b.reminders {
+	b.mu.Lock()
+	guildIDs := make([]snowflake.ID, 0, len(b.reminders))
+	for id := range b.reminders {
+		guildIDs = append(guildIDs, id)
+	}
+	b.mu.Unlock()
+
+	for _, guildID := range guildIDs {
 		b.saveRemindersForGuild(guildID)
 	}
 }
@@ -130,6 +139,8 @@ func (b *Bot) stopReminderGoroutine(r *threadReminder) {
 }
 
 func (b *Bot) stopAllReminderGoroutines() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	for _, channels := range b.reminders {
 		for _, r := range channels {
 			r.handle.Stop()
@@ -236,8 +247,10 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 	}
 
 	now := time.Now()
+	b.mu.Lock()
 	r.LastMessageID = sent.ID
 	r.LastPostTime = now
+	b.mu.Unlock()
 	b.saveRemindersForGuild(r.GuildID)
 	return true
 }

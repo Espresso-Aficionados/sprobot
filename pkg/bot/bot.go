@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/disgoorg/disgo"
@@ -15,7 +16,9 @@ import (
 
 type Bot struct {
 	*botutil.BaseBot
-	skipList         map[int]string // forum reminder skip list, keyed by thread ID
+	stop             chan struct{}
+	searchClient     *http.Client
+	skipList         map[int]string // goroutine-confined to forumReminderLoop
 	topPosters       map[snowflake.ID]*guildPostCounts
 	posterRole       map[snowflake.ID]*posterRoleState
 	tickets          map[snowflake.ID]*ticketState
@@ -33,6 +36,8 @@ func New(token string) (*Bot, error) {
 
 	b := &Bot{
 		BaseBot:          base,
+		stop:             make(chan struct{}),
+		searchClient:     &http.Client{Timeout: 30 * time.Second},
 		skipList:         make(map[int]string),
 		topPosters:       make(map[snowflake.ID]*guildPostCounts),
 		posterRole:       make(map[snowflake.ID]*posterRoleState),
@@ -87,12 +92,13 @@ func (b *Bot) Run() error {
 		return fmt.Errorf("registering commands: %w", err)
 	}
 	go b.forumReminderLoop()
-	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.PingHealthcheck)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.saveTopPosters)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.savePosterRole)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.saveShortcuts)
+	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTopPosters)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.savePosterRole)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveShortcuts)
 
 	botutil.WaitForShutdown(b.Log, "Bot")
+	close(b.stop)
 	b.saveTopPosters()
 	b.savePosterRole()
 	b.saveTickets()

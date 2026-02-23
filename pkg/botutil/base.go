@@ -22,6 +22,7 @@ type BaseBot struct {
 	Log                 *slog.Logger
 	Ready               atomic.Bool
 	healthcheckEndpoint string
+	httpClient          *http.Client
 }
 
 // NewBaseBot creates a BaseBot by reading the given env var and initializing S3.
@@ -42,6 +43,7 @@ func NewBaseBot(envVar string) (*BaseBot, error) {
 		Env:                 os.Getenv(envVar),
 		Log:                 slog.Default(),
 		healthcheckEndpoint: os.Getenv(healthcheckVar),
+		httpClient:          &http.Client{Timeout: 10 * time.Second},
 	}, nil
 }
 
@@ -51,8 +53,7 @@ func (b *BaseBot) PingHealthcheck() {
 	if b.Env != "prod" || b.healthcheckEndpoint == "" {
 		return
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(b.healthcheckEndpoint)
+	resp, err := b.httpClient.Get(b.healthcheckEndpoint)
 	if err != nil {
 		b.Log.Info("Healthcheck ping failed", "error", err)
 		return

@@ -10,7 +10,6 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
@@ -41,6 +40,14 @@ func getPosterRoleConfig(env string) map[snowflake.ID]posterRoleConfig {
 		return map[snowflake.ID]posterRoleConfig{
 			726985544038612993: {
 				RoleID:       1367728202885365821,
+				Threshold:    threshold,
+				SkipChannels: map[snowflake.ID]bool{},
+			},
+		}
+	case "dev":
+		return map[snowflake.ID]posterRoleConfig{
+			1013566342345019512: {
+				RoleID:       1475379099307343882,
 				Threshold:    threshold,
 				SkipChannels: map[snowflake.ID]bool{},
 			},
@@ -130,8 +137,7 @@ func (b *Bot) searchAndGrantPosterRole(guildID snowflake.ID, userID snowflake.ID
 	}
 	req.Header.Set("Authorization", "Bot "+b.Client.Token)
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := b.searchClient.Do(req)
 	if err != nil {
 		b.Log.Error("Failed to execute search request", "user_id", userID, "error", err)
 		b.clearPosterRoleSearching(guildID, userIDStr)
@@ -139,6 +145,12 @@ func (b *Bot) searchAndGrantPosterRole(guildID snowflake.ID, userID snowflake.ID
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusAccepted {
+		resp.Body.Close()
+		b.Log.Info("Search index not ready, will retry on next message", "user_id", userID)
+		b.clearPosterRoleSearching(guildID, userIDStr)
+		return
+	}
 	if resp.StatusCode != http.StatusOK {
 		b.Log.Error("Search API returned non-200", "user_id", userID, "status", resp.StatusCode)
 		b.clearPosterRoleSearching(guildID, userIDStr)

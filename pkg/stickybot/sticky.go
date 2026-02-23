@@ -76,17 +76,19 @@ func (b *Bot) loadStickies() {
 }
 
 func (b *Bot) saveStickiesForGuild(guildID snowflake.ID) {
+	b.mu.Lock()
 	channels, ok := b.stickies[guildID]
 	if !ok {
+		b.mu.Unlock()
 		return
 	}
-
 	toSave := make(map[string]*stickyMessage, len(channels))
 	for chID, s := range channels {
 		toSave[fmt.Sprintf("%d", chID)] = s
 	}
-
 	data, err := json.Marshal(toSave)
+	b.mu.Unlock()
+
 	if err != nil {
 		b.Log.Error("Failed to marshal stickies", "guild_id", guildID, "error", err)
 		return
@@ -107,7 +109,14 @@ func (b *Bot) saveAllStickies() {
 		}
 	}()
 
-	for guildID := range b.stickies {
+	b.mu.Lock()
+	guildIDs := make([]snowflake.ID, 0, len(b.stickies))
+	for id := range b.stickies {
+		guildIDs = append(guildIDs, id)
+	}
+	b.mu.Unlock()
+
+	for _, guildID := range guildIDs {
 		b.saveStickiesForGuild(guildID)
 	}
 }
@@ -128,6 +137,8 @@ func (b *Bot) stopStickyGoroutine(s *stickyMessage) {
 }
 
 func (b *Bot) stopAllStickyGoroutines() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	for _, channels := range b.stickies {
 		for _, s := range channels {
 			s.handle.Stop()
@@ -153,7 +164,9 @@ func (b *Bot) repostSticky(s *stickyMessage) bool {
 		return false
 	}
 
+	b.mu.Lock()
 	s.LastMessageID = sent.ID
+	b.mu.Unlock()
 	b.saveStickiesForGuild(s.GuildID)
 	return true
 }

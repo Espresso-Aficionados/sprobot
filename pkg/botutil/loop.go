@@ -6,15 +6,25 @@ import (
 )
 
 // RunSaveLoop waits for ready to become true, then calls fn on each tick of interval.
-func RunSaveLoop(ready *atomic.Bool, interval time.Duration, fn func()) {
+// It returns when stop is closed.
+func RunSaveLoop(ready *atomic.Bool, interval time.Duration, stop <-chan struct{}, fn func()) {
 	for !ready.Load() {
-		time.Sleep(1 * time.Second)
+		select {
+		case <-stop:
+			return
+		case <-time.After(1 * time.Second):
+		}
 	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		fn()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			fn()
+		}
 	}
 }

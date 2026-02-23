@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -117,10 +118,12 @@ type messageResponder interface {
 }
 
 func respondEphemeral(e messageResponder, content string) {
-	e.CreateMessage(discord.MessageCreate{
+	if err := e.CreateMessage(discord.MessageCreate{
 		Content: content,
 		Flags:   discord.MessageFlagEphemeral,
-	})
+	}); err != nil {
+		slog.Error("Failed to send ephemeral response", "error", err)
+	}
 }
 
 func getNickOrName(member *discord.ResolvedMember) string {
