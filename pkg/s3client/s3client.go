@@ -72,21 +72,21 @@ type Client struct {
 }
 
 func New() (*Client, error) {
-	key := os.Getenv("SPROBOT_S3_KEY")
+	key := os.Getenv("S3_KEY")
 	if key == "" {
-		return nil, fmt.Errorf("SPROBOT_S3_KEY env var is undefined")
+		return nil, fmt.Errorf("S3_KEY env var is undefined")
 	}
-	secret := os.Getenv("SPROBOT_S3_SECRET")
+	secret := os.Getenv("S3_SECRET")
 	if secret == "" {
-		return nil, fmt.Errorf("SPROBOT_S3_SECRET env var is undefined")
+		return nil, fmt.Errorf("S3_SECRET env var is undefined")
 	}
-	endpoint := os.Getenv("SPROBOT_S3_ENDPOINT")
+	endpoint := os.Getenv("S3_ENDPOINT")
 	if endpoint == "" {
-		return nil, fmt.Errorf("SPROBOT_S3_ENDPOINT env var is undefined")
+		return nil, fmt.Errorf("S3_ENDPOINT env var is undefined")
 	}
-	bucket := os.Getenv("SPROBOT_S3_BUCKET")
+	bucket := os.Getenv("S3_BUCKET")
 	if bucket == "" {
-		return nil, fmt.Errorf("SPROBOT_S3_BUCKET env var is undefined")
+		return nil, fmt.Errorf("S3_BUCKET env var is undefined")
 	}
 
 	cache, err := lru.New[string, map[string]string](500)

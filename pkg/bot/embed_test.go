@@ -117,7 +117,7 @@ func TestBuildProfileEmbedWithoutImage(t *testing.T) {
 }
 
 func TestBuildProfileEmbedURL(t *testing.T) {
-	t.Setenv("SPROBOT_S3_BUCKET", "my-bucket")
+	t.Setenv("S3_BUCKET", "my-bucket")
 
 	profile := map[string]string{}
 	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456")

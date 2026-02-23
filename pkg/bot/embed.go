@@ -52,7 +52,7 @@ func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[strin
 }
 
 func buildProfileURL(tmpl sprobot.Template, guildID, userID string) string {
-	bucket := os.Getenv("SPROBOT_S3_BUCKET")
+	bucket := os.Getenv("S3_BUCKET")
 	s3Path := "profiles/" + guildID + "/" + tmpl.Name + "/" + userID + ".json"
 	return sprobot.WebEndpoint + url.PathEscape(bucket+"/"+s3Path)
 }

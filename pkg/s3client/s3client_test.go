@@ -731,16 +731,16 @@ func TestNewMissingEnvVars(t *testing.T) {
 		envs map[string]string
 		want string
 	}{
-		{"missing key", map[string]string{}, "SPROBOT_S3_KEY"},
-		{"missing secret", map[string]string{"SPROBOT_S3_KEY": "k"}, "SPROBOT_S3_SECRET"},
-		{"missing endpoint", map[string]string{"SPROBOT_S3_KEY": "k", "SPROBOT_S3_SECRET": "s"}, "SPROBOT_S3_ENDPOINT"},
-		{"missing bucket", map[string]string{"SPROBOT_S3_KEY": "k", "SPROBOT_S3_SECRET": "s", "SPROBOT_S3_ENDPOINT": "e"}, "SPROBOT_S3_BUCKET"},
+		{"missing key", map[string]string{}, "S3_KEY"},
+		{"missing secret", map[string]string{"S3_KEY": "k"}, "S3_SECRET"},
+		{"missing endpoint", map[string]string{"S3_KEY": "k", "S3_SECRET": "s"}, "S3_ENDPOINT"},
+		{"missing bucket", map[string]string{"S3_KEY": "k", "S3_SECRET": "s", "S3_ENDPOINT": "e"}, "S3_BUCKET"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear all
-			for _, k := range []string{"SPROBOT_S3_KEY", "SPROBOT_S3_SECRET", "SPROBOT_S3_ENDPOINT", "SPROBOT_S3_BUCKET"} {
+			for _, k := range []string{"S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_BUCKET"} {
 				t.Setenv(k, "")
 			}
 			for k, v := range tt.envs {
