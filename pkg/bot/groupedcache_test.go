@@ -18,7 +18,7 @@ func makeMessage(channelID, messageID snowflake.ID) discord.Message {
 }
 
 func TestCappedCache_PutGet(t *testing.T) {
-	c := newCappedGroupedCache(100)
+	c := newCappedGroupedCache[discord.Message](100)
 
 	ch := snowflake.ID(1)
 	msg := makeMessage(ch, 10)
@@ -40,7 +40,7 @@ func TestCappedCache_PutGet(t *testing.T) {
 
 func TestCappedCache_Eviction(t *testing.T) {
 	const cap = 100
-	c := newCappedGroupedCache(cap)
+	c := newCappedGroupedCache[discord.Message](cap)
 	ch := snowflake.ID(1)
 
 	for i := 1; i <= cap+1; i++ {
@@ -64,7 +64,7 @@ func TestCappedCache_Eviction(t *testing.T) {
 
 func TestCappedCache_RemoveThenEvict(t *testing.T) {
 	const cap = 10
-	c := newCappedGroupedCache(cap)
+	c := newCappedGroupedCache[discord.Message](cap)
 	ch := snowflake.ID(1)
 
 	// Fill to capacity
@@ -90,7 +90,7 @@ func TestCappedCache_RemoveThenEvict(t *testing.T) {
 }
 
 func TestCappedCache_SnapshotLoad(t *testing.T) {
-	c := newCappedGroupedCache(100)
+	c := newCappedGroupedCache[discord.Message](100)
 	ch1 := snowflake.ID(1)
 	ch2 := snowflake.ID(2)
 
@@ -103,8 +103,10 @@ func TestCappedCache_SnapshotLoad(t *testing.T) {
 		t.Fatalf("snapshot len = %d, want 3", len(msgs))
 	}
 
-	c2 := newCappedGroupedCache(100)
-	c2.load(msgs)
+	c2 := newCappedGroupedCache[discord.Message](100)
+	c2.load(msgs, func(msg discord.Message) (snowflake.ID, snowflake.ID) {
+		return msg.ChannelID, msg.ID
+	})
 
 	if c2.Len() != 3 {
 		t.Fatalf("loaded len = %d, want 3", c2.Len())
@@ -118,7 +120,7 @@ func TestCappedCache_SnapshotLoad(t *testing.T) {
 }
 
 func TestCappedCache_PutOverwrite(t *testing.T) {
-	c := newCappedGroupedCache(100)
+	c := newCappedGroupedCache[discord.Message](100)
 	ch := snowflake.ID(1)
 
 	c.Put(ch, 10, discord.Message{ChannelID: ch, ID: 10, Content: "first"})
@@ -140,7 +142,7 @@ func TestLoadMessageCache_MissingFile(t *testing.T) {
 	// Ensure file doesn't exist
 	_ = os.Remove(path)
 
-	c := newCappedGroupedCache(100)
+	c := newCappedGroupedCache[discord.Message](100)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -157,7 +159,7 @@ func TestLoadMessageCache_MissingFile(t *testing.T) {
 }
 
 func TestCappedCache_GroupRemove(t *testing.T) {
-	c := newCappedGroupedCache(100)
+	c := newCappedGroupedCache[discord.Message](100)
 	ch1 := snowflake.ID(1)
 	ch2 := snowflake.ID(2)
 
@@ -178,7 +180,7 @@ func TestCappedCache_GroupRemove(t *testing.T) {
 }
 
 func TestCappedCache_RemoveIf(t *testing.T) {
-	c := newCappedGroupedCache(100)
+	c := newCappedGroupedCache[discord.Message](100)
 	ch := snowflake.ID(1)
 
 	c.Put(ch, 10, discord.Message{ChannelID: ch, ID: 10, Content: "keep"})
@@ -198,7 +200,7 @@ func TestCappedCache_RemoveIf(t *testing.T) {
 }
 
 func TestCappedCache_SizeTracking(t *testing.T) {
-	c := newCappedGroupedCache(100)
+	c := newCappedGroupedCache[discord.Message](100)
 	ch1 := snowflake.ID(1)
 	ch2 := snowflake.ID(2)
 
@@ -271,7 +273,7 @@ func TestCappedCache_SizeTracking(t *testing.T) {
 
 func TestCappedCache_EvictionCompaction(t *testing.T) {
 	const cap = 50
-	c := newCappedGroupedCache(cap)
+	c := newCappedGroupedCache[discord.Message](cap)
 	ch := snowflake.ID(1)
 
 	// Fill and overflow many times to trigger repeated evictions and compactions.

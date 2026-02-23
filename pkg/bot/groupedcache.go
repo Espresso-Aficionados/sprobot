@@ -12,45 +12,47 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
-const messageCacheDir = "/sprobot-cache"
+const cacheDir = "/sprobot-cache"
 const messageCacheFile = "messagecache.json"
+const memberCacheFile = "membercache.json"
 
 type cacheKey struct {
 	GroupID snowflake.ID
 	ID      snowflake.ID
 }
 
-var _ cache.GroupedCache[discord.Message] = (*cappedGroupedCache)(nil)
+var _ cache.GroupedCache[discord.Message] = (*cappedGroupedCache[discord.Message])(nil)
+var _ cache.GroupedCache[discord.Member] = (*cappedGroupedCache[discord.Member])(nil)
 
-type cappedGroupedCache struct {
+type cappedGroupedCache[T any] struct {
 	mu      sync.RWMutex
-	data    map[snowflake.ID]map[snowflake.ID]discord.Message
+	data    map[snowflake.ID]map[snowflake.ID]T
 	order   []cacheKey
 	head    int
 	size    int
 	maxSize int
 }
 
-func newCappedGroupedCache(maxSize int) *cappedGroupedCache {
-	return &cappedGroupedCache{
-		data:    make(map[snowflake.ID]map[snowflake.ID]discord.Message),
+func newCappedGroupedCache[T any](maxSize int) *cappedGroupedCache[T] {
+	return &cappedGroupedCache[T]{
+		data:    make(map[snowflake.ID]map[snowflake.ID]T),
 		maxSize: maxSize,
 	}
 }
 
-func (c *cappedGroupedCache) Get(groupID snowflake.ID, id snowflake.ID) (discord.Message, bool) {
+func (c *cappedGroupedCache[T]) Get(groupID snowflake.ID, id snowflake.ID) (T, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if group, ok := c.data[groupID]; ok {
-		if msg, ok := group[id]; ok {
-			return msg, true
+		if entity, ok := group[id]; ok {
+			return entity, true
 		}
 	}
-	var zero discord.Message
+	var zero T
 	return zero, false
 }
 
-func (c *cappedGroupedCache) Put(groupID snowflake.ID, id snowflake.ID, entity discord.Message) {
+func (c *cappedGroupedCache[T]) Put(groupID snowflake.ID, id snowflake.ID, entity T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -61,7 +63,7 @@ func (c *cappedGroupedCache) Put(groupID snowflake.ID, id snowflake.ID, entity d
 		}
 		group[id] = entity
 	} else {
-		group = map[snowflake.ID]discord.Message{id: entity}
+		group = map[snowflake.ID]T{id: entity}
 		c.data[groupID] = group
 		c.order = append(c.order, cacheKey{GroupID: groupID, ID: id})
 		c.size++
@@ -70,7 +72,7 @@ func (c *cappedGroupedCache) Put(groupID snowflake.ID, id snowflake.ID, entity d
 	c.evict()
 }
 
-func (c *cappedGroupedCache) evict() {
+func (c *cappedGroupedCache[T]) evict() {
 	for c.size > c.maxSize && c.head < len(c.order) {
 		key := c.order[c.head]
 		c.order[c.head] = cacheKey{} // clear reference
@@ -99,28 +101,28 @@ func (c *cappedGroupedCache) evict() {
 	}
 }
 
-func (c *cappedGroupedCache) len() int {
+func (c *cappedGroupedCache[T]) len() int {
 	return c.size
 }
 
-func (c *cappedGroupedCache) Remove(groupID snowflake.ID, id snowflake.ID) (discord.Message, bool) {
+func (c *cappedGroupedCache[T]) Remove(groupID snowflake.ID, id snowflake.ID) (T, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if group, ok := c.data[groupID]; ok {
-		if msg, ok := group[id]; ok {
+		if entity, ok := group[id]; ok {
 			delete(group, id)
 			c.size--
 			if len(group) == 0 {
 				delete(c.data, groupID)
 			}
-			return msg, true
+			return entity, true
 		}
 	}
-	var zero discord.Message
+	var zero T
 	return zero, false
 }
 
-func (c *cappedGroupedCache) GroupRemove(groupID snowflake.ID) {
+func (c *cappedGroupedCache[T]) GroupRemove(groupID snowflake.ID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if group, ok := c.data[groupID]; ok {
@@ -129,7 +131,7 @@ func (c *cappedGroupedCache) GroupRemove(groupID snowflake.ID) {
 	}
 }
 
-func (c *cappedGroupedCache) RemoveIf(filterFunc cache.GroupedFilterFunc[discord.Message]) {
+func (c *cappedGroupedCache[T]) RemoveIf(filterFunc cache.GroupedFilterFunc[T]) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for groupID, group := range c.data {
@@ -145,7 +147,7 @@ func (c *cappedGroupedCache) RemoveIf(filterFunc cache.GroupedFilterFunc[discord
 	}
 }
 
-func (c *cappedGroupedCache) GroupRemoveIf(groupID snowflake.ID, filterFunc cache.GroupedFilterFunc[discord.Message]) {
+func (c *cappedGroupedCache[T]) GroupRemoveIf(groupID snowflake.ID, filterFunc cache.GroupedFilterFunc[T]) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if group, ok := c.data[groupID]; ok {
@@ -161,13 +163,13 @@ func (c *cappedGroupedCache) GroupRemoveIf(groupID snowflake.ID, filterFunc cach
 	}
 }
 
-func (c *cappedGroupedCache) Len() int {
+func (c *cappedGroupedCache[T]) Len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.len()
 }
 
-func (c *cappedGroupedCache) GroupLen(groupID snowflake.ID) int {
+func (c *cappedGroupedCache[T]) GroupLen(groupID snowflake.ID) int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if group, ok := c.data[groupID]; ok {
@@ -176,13 +178,13 @@ func (c *cappedGroupedCache) GroupLen(groupID snowflake.ID) int {
 	return 0
 }
 
-func (c *cappedGroupedCache) All() iter.Seq2[snowflake.ID, discord.Message] {
-	return func(yield func(snowflake.ID, discord.Message) bool) {
+func (c *cappedGroupedCache[T]) All() iter.Seq2[snowflake.ID, T] {
+	return func(yield func(snowflake.ID, T) bool) {
 		c.mu.RLock()
 		defer c.mu.RUnlock()
 		for groupID, group := range c.data {
-			for _, msg := range group {
-				if !yield(groupID, msg) {
+			for _, entity := range group {
+				if !yield(groupID, entity) {
 					return
 				}
 			}
@@ -190,13 +192,13 @@ func (c *cappedGroupedCache) All() iter.Seq2[snowflake.ID, discord.Message] {
 	}
 }
 
-func (c *cappedGroupedCache) GroupAll(groupID snowflake.ID) iter.Seq[discord.Message] {
-	return func(yield func(discord.Message) bool) {
+func (c *cappedGroupedCache[T]) GroupAll(groupID snowflake.ID) iter.Seq[T] {
+	return func(yield func(T) bool) {
 		c.mu.RLock()
 		defer c.mu.RUnlock()
 		if group, ok := c.data[groupID]; ok {
-			for _, msg := range group {
-				if !yield(msg) {
+			for _, entity := range group {
+				if !yield(entity) {
 					return
 				}
 			}
@@ -204,34 +206,34 @@ func (c *cappedGroupedCache) GroupAll(groupID snowflake.ID) iter.Seq[discord.Mes
 	}
 }
 
-// snapshot returns all cached messages for persistence.
-func (c *cappedGroupedCache) snapshot() []discord.Message {
+// snapshot returns all cached entities for persistence.
+func (c *cappedGroupedCache[T]) snapshot() []T {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	var msgs []discord.Message
+	var items []T
 	for _, group := range c.data {
-		for _, msg := range group {
-			msgs = append(msgs, msg)
+		for _, entity := range group {
+			items = append(items, entity)
 		}
 	}
-	return msgs
+	return items
 }
 
-// load populates the cache from a slice of messages.
-func (c *cappedGroupedCache) load(msgs []discord.Message) {
+// load populates the cache from a slice of entities.
+// keyFn extracts the group ID and entity ID from each item.
+func (c *cappedGroupedCache[T]) load(items []T, keyFn func(T) (groupID, id snowflake.ID)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.data = make(map[snowflake.ID]map[snowflake.ID]discord.Message)
+	c.data = make(map[snowflake.ID]map[snowflake.ID]T)
 	c.order = nil
 	c.head = 0
 	c.size = 0
-	for _, msg := range msgs {
-		groupID := msg.ChannelID
-		id := msg.ID
+	for _, item := range items {
+		groupID, id := keyFn(item)
 		if _, ok := c.data[groupID]; !ok {
-			c.data[groupID] = make(map[snowflake.ID]discord.Message)
+			c.data[groupID] = make(map[snowflake.ID]T)
 		}
-		c.data[groupID][id] = msg
+		c.data[groupID][id] = item
 		c.order = append(c.order, cacheKey{GroupID: groupID, ID: id})
 		c.size++
 	}
@@ -239,7 +241,7 @@ func (c *cappedGroupedCache) load(msgs []discord.Message) {
 
 // loadMessageCache reads the message cache from disk.
 func (b *Bot) loadMessageCache() {
-	path := filepath.Join(messageCacheDir, messageCacheFile)
+	path := filepath.Join(cacheDir, messageCacheFile)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -252,7 +254,9 @@ func (b *Bot) loadMessageCache() {
 		b.Log.Error("Failed to decode message cache", "error", err)
 		return
 	}
-	b.msgCache.load(msgs)
+	b.msgCache.load(msgs, func(msg discord.Message) (snowflake.ID, snowflake.ID) {
+		return msg.ChannelID, msg.ID
+	})
 	b.Log.Info("Loaded message cache", "count", len(msgs))
 }
 
@@ -264,7 +268,7 @@ func (b *Bot) saveMessageCache() {
 		}
 	}()
 
-	if err := os.MkdirAll(messageCacheDir, 0o755); err != nil {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		b.Log.Error("Failed to create cache directory", "error", err)
 		return
 	}
@@ -276,8 +280,55 @@ func (b *Bot) saveMessageCache() {
 		return
 	}
 
-	path := filepath.Join(messageCacheDir, messageCacheFile)
+	path := filepath.Join(cacheDir, messageCacheFile)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		b.Log.Error("Failed to write message cache file", "error", err)
+	}
+}
+
+// loadMemberCache reads the member cache from disk.
+func (b *Bot) loadMemberCache() {
+	path := filepath.Join(cacheDir, memberCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read member cache file", "error", err)
+		}
+		return
+	}
+	var members []discord.Member
+	if err := json.Unmarshal(data, &members); err != nil {
+		b.Log.Error("Failed to decode member cache", "error", err)
+		return
+	}
+	b.memberCache.load(members, func(m discord.Member) (snowflake.ID, snowflake.ID) {
+		return m.GuildID, m.User.ID
+	})
+	b.Log.Info("Loaded member cache", "count", len(members))
+}
+
+// saveMemberCache writes the member cache to disk.
+func (b *Bot) saveMemberCache() {
+	defer func() {
+		if r := recover(); r != nil {
+			b.Log.Error("Panic in member cache save", "error", r)
+		}
+	}()
+
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+
+	members := b.memberCache.snapshot()
+	data, err := json.Marshal(members)
+	if err != nil {
+		b.Log.Error("Failed to marshal member cache", "error", err)
+		return
+	}
+
+	path := filepath.Join(cacheDir, memberCacheFile)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		b.Log.Error("Failed to write member cache file", "error", err)
 	}
 }

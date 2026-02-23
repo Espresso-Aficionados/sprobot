@@ -197,6 +197,10 @@ func (b *Bot) onMemberLeave(e *events.GuildMemberLeave) {
 }
 
 func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
+	// Skip if old member wasn't in cache (zero value)
+	if e.OldMember.User.ID == 0 {
+		return
+	}
 	oldNick := e.OldMember.Nick
 	newNick := e.Member.Nick
 	if derefStr(oldNick) == derefStr(newNick) {

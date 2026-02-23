@@ -9,6 +9,7 @@ import (
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/cache"
+	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 
@@ -26,7 +27,8 @@ type Bot struct {
 	shortcuts        map[snowflake.ID]*shortcutState
 	welcome          map[snowflake.ID]*welcomeState
 	welcomeSent      map[snowflake.ID]time.Time
-	msgCache         *cappedGroupedCache
+	msgCache         *cappedGroupedCache[discord.Message]
+	memberCache      *cappedGroupedCache[discord.Member]
 	topPostersConfig map[snowflake.ID]topPostersConfig
 	posterRoleConfig map[snowflake.ID]posterRoleConfig
 	eventLogConfig   map[snowflake.ID]eventLogChannelConfig
@@ -39,7 +41,8 @@ func New(token string) (*Bot, error) {
 		return nil, err
 	}
 
-	msgCache := newCappedGroupedCache(1000000)
+	msgCache := newCappedGroupedCache[discord.Message](1000000)
+	memberCache := newCappedGroupedCache[discord.Member](100000)
 
 	b := &Bot{
 		BaseBot:          base,
@@ -53,6 +56,7 @@ func New(token string) (*Bot, error) {
 		welcome:          make(map[snowflake.ID]*welcomeState),
 		welcomeSent:      make(map[snowflake.ID]time.Time),
 		msgCache:         msgCache,
+		memberCache:      memberCache,
 		topPostersConfig: getTopPostersConfig(base.Env),
 		posterRoleConfig: getPosterRoleConfig(base.Env),
 		eventLogConfig:   getEventLogConfig(base.Env),
@@ -60,11 +64,13 @@ func New(token string) (*Bot, error) {
 	}
 
 	b.loadMessageCache()
+	b.loadMemberCache()
 
 	client, err := disgo.New(token,
 		bot.WithCacheConfigOpts(
-			cache.WithCaches(cache.FlagMessages),
+			cache.WithCaches(cache.FlagMessages|cache.FlagMembers),
 			cache.WithMessageCache(cache.NewMessageCache(msgCache)),
+			cache.WithMemberCache(cache.NewMemberCache(memberCache)),
 		),
 		bot.WithGatewayConfigOpts(
 			gateway.WithIntents(
@@ -136,6 +142,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTickets)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveWelcome)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMessageCache)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCache)
 
 	botutil.WaitForShutdown(b.Log, "Bot")
 	close(b.stop)
@@ -145,5 +152,6 @@ func (b *Bot) Run() error {
 	b.saveShortcuts()
 	b.saveWelcome()
 	b.saveMessageCache()
+	b.saveMemberCache()
 	return nil
 }
