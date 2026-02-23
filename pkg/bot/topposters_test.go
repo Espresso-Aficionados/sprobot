@@ -205,9 +205,9 @@ func TestGuildPostCountsConcurrent(t *testing.T) {
 func TestTemplateCommandsCount(t *testing.T) {
 	cmds := templateCommands(sprobot.ProfileTemplate)
 
-	// 3 slash commands + 1 user menu + 2 message menus = 6
-	if len(cmds) != 6 {
-		t.Errorf("templateCommands returned %d commands, want 6", len(cmds))
+	// 3 slash commands + 1 user menu + 1 message menu = 5
+	if len(cmds) != 5 {
+		t.Errorf("templateCommands returned %d commands, want 5", len(cmds))
 	}
 }
 
@@ -231,7 +231,6 @@ func TestTemplateCommandsNames(t *testing.T) {
 		"getprofile",
 		"deleteprofile",
 		"Get Coffee Setup Profile",
-		"Save as Coffee Setup Image",
 	}
 	for _, name := range expected {
 		if !names[name] {
@@ -261,8 +260,8 @@ func TestTemplateCommandsTypes(t *testing.T) {
 	if userCount != 1 {
 		t.Errorf("user commands = %d, want 1", userCount)
 	}
-	if msgCount != 2 {
-		t.Errorf("message commands = %d, want 2", msgCount)
+	if msgCount != 1 {
+		t.Errorf("message commands = %d, want 1", msgCount)
 	}
 }
 
@@ -286,7 +285,6 @@ func TestTemplateCommandsRoaster(t *testing.T) {
 		"getroaster",
 		"deleteroaster",
 		"Get Roasting Setup Profile",
-		"Save as Roasting Setup Image",
 	}
 	for _, name := range expected {
 		if !names[name] {

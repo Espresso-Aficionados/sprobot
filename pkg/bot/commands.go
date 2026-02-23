@@ -220,10 +220,6 @@ func templateCommands(tmpl sprobot.Template) []discord.ApplicationCommandCreate 
 		discord.MessageCommandCreate{
 			Name: fmt.Sprintf("Get %s Profile", tmpl.Name),
 		},
-		// Context menu: "Save as <Name> Image"
-		discord.MessageCommandCreate{
-			Name: fmt.Sprintf("Save as %s Image", tmpl.Name),
-		},
 	}
 }
 
@@ -264,9 +260,6 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			return
 		case fmt.Sprintf("Get %s Profile", tmpl.Name):
 			b.handleGetMenu(e, tmpl)
-			return
-		case fmt.Sprintf("Save as %s Image", tmpl.Name):
-			b.handleSaveImageMenu(e, tmpl)
 			return
 		}
 	}
