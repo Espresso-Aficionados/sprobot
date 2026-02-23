@@ -38,8 +38,8 @@ func getPosterRoleConfig(env string) map[snowflake.ID]posterRoleConfig {
 
 type posterRoleState struct {
 	mu        sync.Mutex
-	Tracked   map[string]int  `json:"tracked"`
-	History   map[string]int  `json:"history"`
+	Tracked   map[string]int `json:"tracked"`
+	History   map[string]int `json:"history"`
 	searching map[string]bool
 }
 

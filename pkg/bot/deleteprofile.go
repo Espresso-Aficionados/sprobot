@@ -45,6 +45,23 @@ func (b *Bot) handleDelete(e *events.ApplicationCommandInteractionCreate, tmpl s
 func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
 	customID := e.Data.CustomID()
 
+	if customID == "ticket_open" {
+		b.handleTicketOpen(e)
+		return
+	}
+	if customID == "ticket_close" {
+		b.handleTicketCloseConfirm(e)
+		return
+	}
+	if customID == "ticket_close_yes" {
+		b.handleTicketClose(e)
+		return
+	}
+	if customID == "ticket_close_no" {
+		b.handleTicketCloseCancel(e)
+		return
+	}
+
 	if customID == "del_cancel" {
 		content := "No worries!"
 		e.UpdateMessage(discord.MessageUpdate{
