@@ -30,7 +30,7 @@ func getSelfroleConfig(env string) map[snowflake.ID][]selfroleConfig {
 					ChannelID: 727325278820368456,
 					Message: `Want to share your pronouns? Clicking the reaction below will add a role that will allow other people to click your username and identify your pronouns! Please note that there is no need to share your pronouns if you don't want to for any reason.
 
-:one: "Ask Me/Check .getespresso"
+:one: "Ask Me/Check Profile"
 :two: "They/them"
 :three: "She/her"
 :four: "He/him"
@@ -40,7 +40,7 @@ If your chosen pronouns are not present and you would like them to be please mak
 
 Made a mistake? Just click again to remove the role`,
 					Buttons: []selfroleButton{
-						{Label: "Ask Me/Check .getespresso", Emoji: "1️⃣", RoleID: 807495977362653214},
+						{Label: "Ask Me/Check Profile", Emoji: "1️⃣", RoleID: 807495977362653214},
 						{Label: "They/them", Emoji: "2️⃣", RoleID: 807495948405178379},
 						{Label: "She/her", Emoji: "3️⃣", RoleID: 807495895499014165},
 						{Label: "He/him", Emoji: "4️⃣", RoleID: 807495784756936745},
