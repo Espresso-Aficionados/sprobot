@@ -112,11 +112,11 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
-		// /posterprogress
+		// /marketprogress
 		if _, ok := b.posterRoleConfig[guildID]; ok {
 			commands = append(commands, discord.SlashCommandCreate{
-				Name:                     "posterprogress",
-				Description:              "Check a user's progress toward the poster role",
+				Name:                     "marketprogress",
+				Description:              "Check a user's progress toward marketplace access",
 				DefaultMemberPermissions: omit.NewPtr(perm),
 				Options: []discord.ApplicationCommandOption{
 					discord.ApplicationCommandOptionUser{
@@ -224,8 +224,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleModLogMenu(e)
 	case "topposters":
 		b.handleTopPosters(e)
-	case "posterprogress":
-		b.handlePosterProgress(e)
+	case "marketprogress":
+		b.handleMarketProgress(e)
 	case "s":
 		b.handleShortcut(e)
 	case "sconfig":

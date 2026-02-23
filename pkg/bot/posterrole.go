@@ -234,7 +234,7 @@ func (b *Bot) loadPosterRole() {
 	}
 }
 
-func (b *Bot) handlePosterProgress(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate) {
 	if e.GuildID() == nil {
 		return
 	}
