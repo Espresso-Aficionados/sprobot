@@ -8,6 +8,7 @@ import (
 
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 
@@ -23,8 +24,10 @@ type Bot struct {
 	posterRole       map[snowflake.ID]*posterRoleState
 	tickets          map[snowflake.ID]*ticketState
 	shortcuts        map[snowflake.ID]*shortcutState
+	msgCache         *cappedGroupedCache
 	topPostersConfig map[snowflake.ID]topPostersConfig
 	posterRoleConfig map[snowflake.ID]posterRoleConfig
+	eventLogConfig   map[snowflake.ID]eventLogChannelConfig
 	autoRoleID       snowflake.ID
 }
 
@@ -33,6 +36,8 @@ func New(token string) (*Bot, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	msgCache := newCappedGroupedCache(100000)
 
 	b := &Bot{
 		BaseBot:          base,
@@ -43,16 +48,25 @@ func New(token string) (*Bot, error) {
 		posterRole:       make(map[snowflake.ID]*posterRoleState),
 		tickets:          make(map[snowflake.ID]*ticketState),
 		shortcuts:        make(map[snowflake.ID]*shortcutState),
+		msgCache:         msgCache,
 		topPostersConfig: getTopPostersConfig(base.Env),
 		posterRoleConfig: getPosterRoleConfig(base.Env),
+		eventLogConfig:   getEventLogConfig(base.Env),
 		autoRoleID:       getAutoRoleID(base.Env),
 	}
 
+	b.loadMessageCache()
+
 	client, err := disgo.New(token,
+		bot.WithCacheConfigOpts(
+			cache.WithCaches(cache.FlagMessages),
+			cache.WithMessageCache(cache.NewMessageCache(msgCache)),
+		),
 		bot.WithGatewayConfigOpts(
 			gateway.WithIntents(
 				gateway.IntentGuilds,
 				gateway.IntentGuildMembers,
+				gateway.IntentGuildModeration,
 				gateway.IntentGuildMessages,
 				gateway.IntentMessageContent,
 			),
@@ -64,6 +78,23 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onAutocomplete),
 		bot.WithEventListenerFunc(b.onMessage),
 		bot.WithEventListenerFunc(b.onMemberJoin),
+		bot.WithEventListenerFunc(b.onMessageDelete),
+		bot.WithEventListenerFunc(b.onMessageUpdate),
+		bot.WithEventListenerFunc(b.onMemberLeave),
+		bot.WithEventListenerFunc(b.onMemberUpdate),
+		bot.WithEventListenerFunc(b.onGuildBan),
+		bot.WithEventListenerFunc(b.onGuildUnban),
+		bot.WithEventListenerFunc(b.onAuditLogEntry),
+		bot.WithEventListenerFunc(b.onChannelCreate),
+		bot.WithEventListenerFunc(b.onChannelUpdate),
+		bot.WithEventListenerFunc(b.onChannelDelete),
+		bot.WithEventListenerFunc(b.onThreadCreate),
+		bot.WithEventListenerFunc(b.onThreadUpdate),
+		bot.WithEventListenerFunc(b.onThreadDelete),
+		bot.WithEventListenerFunc(b.onRoleCreate),
+		bot.WithEventListenerFunc(b.onRoleUpdate),
+		bot.WithEventListenerFunc(b.onRoleDelete),
+		bot.WithEventListenerFunc(b.onGuildUpdate),
 	)
 	if err != nil {
 		return nil, err
@@ -76,7 +107,7 @@ func New(token string) (*Bot, error) {
 func (b *Bot) Run() error {
 	ctx := context.Background()
 
-	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045756928", b.Client.ApplicationID))
+	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045773440", b.Client.ApplicationID))
 
 	if err := b.Client.OpenGateway(ctx); err != nil {
 		return err
@@ -96,6 +127,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTopPosters)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.savePosterRole)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveShortcuts)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMessageCache)
 
 	botutil.WaitForShutdown(b.Log, "Bot")
 	close(b.stop)
@@ -103,5 +135,6 @@ func (b *Bot) Run() error {
 	b.savePosterRole()
 	b.saveTickets()
 	b.saveShortcuts()
+	b.saveMessageCache()
 	return nil
 }

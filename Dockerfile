@@ -25,6 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM ${TARGET_DIST} AS prod
 ENV SPROBOT_ENV=prod
+VOLUME /sprobot-cache
 COPY --from=build-sprobot /sprobot /sprobot
 CMD ["/sprobot"]
 
@@ -36,6 +37,7 @@ CMD ["/sprobot-web"]
 
 FROM build-sprobot AS dev
 ENV SPROBOT_ENV=dev
+VOLUME /sprobot-cache
 CMD ["/sprobot"]
 
 FROM build-sprobot-web AS devweb

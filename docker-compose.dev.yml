@@ -5,6 +5,8 @@ services:
       target: dev
     init: true
     env_file: ./config/config.env
+    volumes:
+      - sprobot-cache:/sprobot-cache
 
   sprobot-web:
     build:
@@ -27,3 +29,6 @@ services:
       target: devthreadbot
     init: true
     env_file: ./config/config.env
+
+volumes:
+  sprobot-cache:
