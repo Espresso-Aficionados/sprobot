@@ -113,6 +113,12 @@ func (b *Bot) onMessageUpdate(e *events.GuildMessageUpdate) {
 	if e.Message.Author.Bot {
 		return
 	}
+	// Skip if old message wasn't in cache (zero value) — we can't tell if
+	// content actually changed, so avoid false "edited" logs from embed
+	// unfurls, link previews, etc.
+	if e.OldMessage.Author.ID == 0 {
+		return
+	}
 	// Skip embed-only updates (content unchanged)
 	if e.OldMessage.Content == e.Message.Content {
 		return
