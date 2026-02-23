@@ -12,8 +12,10 @@ import (
 	"sync"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
@@ -230,6 +232,70 @@ func (b *Bot) loadPosterRole() {
 		b.posterRole[guildID] = st
 		b.Log.Info("Loaded poster role state", "guild_id", guildID, "tracked", len(st.Tracked), "history", len(st.History))
 	}
+}
+
+func (b *Bot) handlePosterProgress(e *events.ApplicationCommandInteractionCreate) {
+	if e.GuildID() == nil {
+		return
+	}
+	guildID := *e.GuildID()
+
+	cfg, ok := b.posterRoleConfig[guildID]
+	if !ok {
+		botutil.RespondEphemeral(e, "Poster role is not configured.")
+		return
+	}
+
+	data, ok := e.Data.(discord.SlashCommandInteractionData)
+	if !ok {
+		return
+	}
+
+	user, ok := data.OptUser("user")
+	if !ok {
+		botutil.RespondEphemeral(e, "Please specify a user.")
+		return
+	}
+
+	st := b.posterRole[guildID]
+	if st == nil {
+		botutil.RespondEphemeral(e, "No tracking data yet.")
+		return
+	}
+
+	userIDStr := fmt.Sprintf("%d", user.ID)
+	mention := fmt.Sprintf("<@%d>", user.ID)
+
+	// Check if user already has the role
+	member, err := b.Client.Rest.GetMember(guildID, user.ID)
+	if err == nil {
+		for _, roleID := range member.RoleIDs {
+			if roleID == cfg.RoleID {
+				botutil.RespondEphemeral(e, fmt.Sprintf("%s already has the poster role.", mention))
+				return
+			}
+		}
+	}
+
+	st.mu.Lock()
+	tracked := st.Tracked[userIDStr]
+	history := st.History[userIDStr]
+	st.mu.Unlock()
+
+	total := tracked + history
+	pct := 0
+	if cfg.Threshold > 0 {
+		pct = total * 100 / cfg.Threshold
+	}
+	remaining := cfg.Threshold - total
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	msg := fmt.Sprintf("Poster role progress for %s:\n- Historical posts: %d\n- Session posts: %d\n- Total: %d / %d (%d%%)\n- %d more posts needed",
+		mention, history, tracked, total, cfg.Threshold, pct, remaining)
+
+	botutil.RespondEphemeral(e, msg)
 }
 
 func (b *Bot) savePosterRole() {

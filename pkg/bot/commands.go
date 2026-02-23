@@ -112,6 +112,22 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
+		// /posterprogress
+		if _, ok := b.posterRoleConfig[guildID]; ok {
+			commands = append(commands, discord.SlashCommandCreate{
+				Name:                     "posterprogress",
+				Description:              "Check a user's progress toward the poster role",
+				DefaultMemberPermissions: omit.NewPtr(perm),
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionUser{
+						Name:        "user",
+						Description: "User to check progress for",
+						Required:    true,
+					},
+				},
+			})
+		}
+
 		if _, err := b.Client.Rest.SetGuildCommands(b.Client.ApplicationID, guildID, commands); err != nil {
 			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
 		}
@@ -208,6 +224,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleModLogMenu(e)
 	case "topposters":
 		b.handleTopPosters(e)
+	case "posterprogress":
+		b.handlePosterProgress(e)
 	case "s":
 		b.handleShortcut(e)
 	case "sconfig":
