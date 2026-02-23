@@ -43,7 +43,14 @@ func getPosterRoleConfig(env string) map[snowflake.ID]posterRoleConfig {
 			726985544038612993: {
 				RoleID:       1367728202885365821,
 				Threshold:    threshold,
-				SkipChannels: map[snowflake.ID]bool{},
+				SkipChannels: map[snowflake.ID]bool{
+					837161791137513524: true,
+					727195533936164944: true,
+					727186774622994535: true,
+					729492001233567785: true,
+					792586872140070981: true,
+					733016849561944156: true,
+				},
 			},
 		}
 	case "dev":
