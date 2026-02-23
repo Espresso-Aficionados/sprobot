@@ -3,12 +3,11 @@ package bot
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
-	"github.com/disgoorg/disgo/rest"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
@@ -93,12 +92,12 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	_, userErr, err := b.S3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
 	if err != nil {
 		b.Log.Error("Failed to save profile", "error", err)
-		respondEphemeral(e, "Oops! Something went wrong.")
+		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
 		return
 	}
 
 	if userErr != "" {
-		respondEphemeral(e, userErr)
+		botutil.RespondEphemeral(e, userErr)
 		return
 	}
 
@@ -110,19 +109,6 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	})
 	if err != nil {
 		b.Log.Error("Failed to respond with embed", "error", err)
-	}
-}
-
-type messageResponder interface {
-	CreateMessage(discord.MessageCreate, ...rest.RequestOpt) error
-}
-
-func respondEphemeral(e messageResponder, content string) {
-	if err := e.CreateMessage(discord.MessageCreate{
-		Content: content,
-		Flags:   discord.MessageFlagEphemeral,
-	}); err != nil {
-		slog.Error("Failed to send ephemeral response", "error", err)
 	}
 }
 

@@ -422,6 +422,31 @@ func TestLoadStickiesInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestTruncatePreview(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		max      int
+		expected string
+	}{
+		{"short string", "hello", 10, "hello"},
+		{"exact length", "hello", 5, "hello"},
+		{"truncated", "hello world", 5, "hello..."},
+		{"empty", "", 5, ""},
+		{"cut inside discord token", "see <#123456>", 7, "see ..."},
+		{"complete token preserved", "see <#123456> ok", 14, "see <#123456> ..."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncatePreview(tt.input, tt.max)
+			if got != tt.expected {
+				t.Errorf("truncatePreview(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestSaveStickiesMultipleChannels(t *testing.T) {
 	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)

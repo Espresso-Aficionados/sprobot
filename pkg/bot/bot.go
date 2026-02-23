@@ -18,7 +18,7 @@ type Bot struct {
 	*botutil.BaseBot
 	stop             chan struct{}
 	searchClient     *http.Client
-	skipList         map[int]string // goroutine-confined to forumReminderLoop
+	skipList         map[snowflake.ID]string // goroutine-confined to forumReminderLoop
 	topPosters       map[snowflake.ID]*guildPostCounts
 	posterRole       map[snowflake.ID]*posterRoleState
 	tickets          map[snowflake.ID]*ticketState
@@ -38,7 +38,7 @@ func New(token string) (*Bot, error) {
 		BaseBot:          base,
 		stop:             make(chan struct{}),
 		searchClient:     &http.Client{Timeout: 30 * time.Second},
-		skipList:         make(map[int]string),
+		skipList:         make(map[snowflake.ID]string),
 		topPosters:       make(map[snowflake.ID]*guildPostCounts),
 		posterRole:       make(map[snowflake.ID]*posterRoleState),
 		tickets:          make(map[snowflake.ID]*ticketState),

@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/sadbox/sprobot/pkg/s3client"
@@ -80,11 +82,7 @@ func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 		templateName := r.PathValue("templateName")
 		userIDRaw := r.PathValue("userID")
 
-		// Strip .json suffix
-		userID := userIDRaw
-		if len(userID) > 5 && userID[len(userID)-5:] == ".json" {
-			userID = userID[:len(userID)-5]
-		}
+		userID := strings.TrimSuffix(userIDRaw, ".json")
 
 		profile, err := s3.FetchProfileSimple(r.Context(), guildID, templateName, userID)
 		if err != nil {
@@ -94,7 +92,13 @@ func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 
 		var fields []profileField
 		var imageURL string
-		for key, value := range profile {
+		keys := make([]string, 0, len(profile))
+		for k := range profile {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			value := profile[key]
 			if key == sprobot.ImageField && value != "" {
 				imageURL = value
 			} else {

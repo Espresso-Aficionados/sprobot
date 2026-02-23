@@ -20,11 +20,7 @@ func (b *Bot) registerAllCommands() error {
 		return nil
 	}
 
-	topPostersConfigs := getTopPostersConfig(b.Env)
-
 	for guildID, tmpls := range templates {
-		guildSnowflake := snowflake.ID(guildID)
-
 		var commands []discord.ApplicationCommandCreate
 
 		for _, tmpl := range tmpls {
@@ -108,7 +104,7 @@ func (b *Bot) registerAllCommands() error {
 		})
 
 		// /topposters
-		if _, ok := topPostersConfigs[guildSnowflake]; ok {
+		if _, ok := b.topPostersConfig[guildID]; ok {
 			commands = append(commands, discord.SlashCommandCreate{
 				Name:                     "topposters",
 				Description:              "Show top message posters over the last 7 days",
@@ -116,10 +112,10 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
-		if _, err := b.Client.Rest.SetGuildCommands(b.Client.ApplicationID, guildSnowflake, commands); err != nil {
-			return fmt.Errorf("registering guild commands for %d: %w", guildSnowflake, err)
+		if _, err := b.Client.Rest.SetGuildCommands(b.Client.ApplicationID, guildID, commands); err != nil {
+			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
 		}
-		b.Log.Info("Registered guild commands", "guild_id", guildSnowflake, "count", len(commands))
+		b.Log.Info("Registered guild commands", "guild_id", guildID, "count", len(commands))
 	}
 	return nil
 }
@@ -180,7 +176,7 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 	}
 
 	templates := sprobot.AllTemplates(b.Env)
-	tmpls, ok := templates[int64(guildID)]
+	tmpls, ok := templates[guildID]
 	if !ok {
 		return
 	}
@@ -226,7 +222,7 @@ func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
 	if e.GuildID() == nil {
 		return
 	}
-	guildID := int64(*e.GuildID())
+	guildID := *e.GuildID()
 	tmpls := templates[guildID]
 
 	for _, tmpl := range tmpls {
@@ -244,8 +240,16 @@ func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
 	if strings.HasPrefix(customID, "modlog_") {
 		parts := strings.SplitN(strings.TrimPrefix(customID, "modlog_"), "_", 2)
 		if len(parts) == 2 {
-			channelID, _ := snowflake.Parse(parts[0])
-			messageID, _ := snowflake.Parse(parts[1])
+			channelID, err := snowflake.Parse(parts[0])
+			if err != nil {
+				b.Log.Error("Invalid channel ID in mod log modal", "value", parts[0], "error", err)
+				return
+			}
+			messageID, err := snowflake.Parse(parts[1])
+			if err != nil {
+				b.Log.Error("Invalid message ID in mod log modal", "value", parts[1], "error", err)
+				return
+			}
 			b.handleModLogModalSubmit(e, channelID, messageID)
 			return
 		}

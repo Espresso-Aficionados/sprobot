@@ -94,12 +94,8 @@ func newTestClient(t *testing.T, server *httptest.Server) *Client {
 		bucket:   bucket,
 		endpoint: endpoint,
 		cache:    cache,
-		log:      discardLogger(),
+		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-}
-
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func seedProfile(t *testing.T, fake *fakeS3, bucket, guildID, templateName, userID string, profile map[string]string) {
@@ -755,5 +751,14 @@ func TestNewMissingEnvVars(t *testing.T) {
 				t.Errorf("error %q should mention %q", err.Error(), tt.want)
 			}
 		})
+	}
+}
+
+func TestIsNotFound(t *testing.T) {
+	if isNotFound(fmt.Errorf("random error")) {
+		t.Error("should not match random error")
+	}
+	if !isNotFound(fmt.Errorf("operation: NoSuchKey")) {
+		t.Error("should match NoSuchKey in error string")
 	}
 }

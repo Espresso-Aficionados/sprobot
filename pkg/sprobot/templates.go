@@ -1,5 +1,7 @@
 package sprobot
 
+import "github.com/disgoorg/snowflake/v2"
+
 type TextStyle int
 
 const (
@@ -41,7 +43,7 @@ var ProfileTemplate = Template{
 var RoasterTemplate = Template{
 	Name:        "Roasting Setup",
 	ShortName:   "roaster",
-	Description: "Edit or Create your profile",
+	Description: "Edit or Create your roasting profile",
 	Fields: []Field{
 		{"Roasting Machine", "A description of your machine(s).", TextStyleLong},
 		{"Favorite Greens", "What are your favorite greens to work with?", TextStyleLong},
@@ -55,14 +57,14 @@ var RoasterTemplate = Template{
 	},
 }
 
-func AllTemplates(env string) map[int64][]Template {
+func AllTemplates(env string) map[snowflake.ID][]Template {
 	switch env {
 	case "dev":
-		return map[int64][]Template{
+		return map[snowflake.ID][]Template{
 			1013566342345019512: {ProfileTemplate, RoasterTemplate},
 		}
 	case "prod":
-		return map[int64][]Template{
+		return map[snowflake.ID][]Template{
 			726985544038612993: {ProfileTemplate, RoasterTemplate},
 		}
 	default:

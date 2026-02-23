@@ -367,6 +367,33 @@ func TestLoadRemindersInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestFormatAge(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration time.Duration
+		expected string
+	}{
+		{"one minute", time.Minute, "1 min"},
+		{"zero", 0, "1 min"},
+		{"30 seconds", 30 * time.Second, "1 min"},
+		{"5 minutes", 5 * time.Minute, "5 mins"},
+		{"1 hour", time.Hour, "1 hour"},
+		{"3 hours", 3 * time.Hour, "3 hours"},
+		{"1 day", 24 * time.Hour, "1 day"},
+		{"7 days", 7 * 24 * time.Hour, "7 days"},
+		{"1.5 days", 36 * time.Hour, "1 day"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatAge(tt.duration)
+			if got != tt.expected {
+				t.Errorf("formatAge(%v) = %q, want %q", tt.duration, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestSaveRemindersMultipleChannels(t *testing.T) {
 	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)

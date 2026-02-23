@@ -9,6 +9,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/s3client"
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
@@ -25,7 +26,7 @@ func (b *Bot) handleSaveImageMenu(e *events.ApplicationCommandInteractionCreate,
 
 	data, ok := e.Data.(discord.MessageCommandInteractionData)
 	if !ok {
-		respondEphemeral(e, "Oops! Something went wrong.")
+		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
 		return
 	}
 	msg := data.TargetMessage()
@@ -60,28 +61,28 @@ func (b *Bot) handleSaveImageMenu(e *events.ApplicationCommandInteractionCreate,
 	}
 
 	if videoError != "" && foundAttachments == 0 {
-		respondEphemeral(e, videoError)
+		botutil.RespondEphemeral(e, videoError)
 		return
 	}
 
 	if foundAttachments > 1 {
-		respondEphemeral(e, fmt.Sprintf("I found %d images in that post, but I'm not sure which one to use! Please make a post with just a single image.", foundAttachments))
+		botutil.RespondEphemeral(e, fmt.Sprintf("I found %d images in that post, but I'm not sure which one to use! Please make a post with just a single image.", foundAttachments))
 		return
 	}
 
 	if foundAttachments == 0 {
-		respondEphemeral(e, "I didn't find an image to save in that post :(")
+		botutil.RespondEphemeral(e, "I didn't find an image to save in that post :(")
 		return
 	}
 
 	_, userErr, err := b.S3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
 	if err != nil {
 		b.Log.Error("Failed to save profile", "error", err)
-		respondEphemeral(e, "Oops! Something went wrong.")
+		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
 		return
 	}
 	if userErr != "" {
-		respondEphemeral(e, userErr)
+		botutil.RespondEphemeral(e, userErr)
 		return
 	}
 

@@ -13,6 +13,7 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
@@ -185,19 +186,19 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 
 	configs := b.topPostersConfig
 	if _, ok := configs[guildID]; !ok {
-		respondEphemeral(e, "This command is not configured for this server.")
+		botutil.RespondEphemeral(e, "This command is not configured for this server.")
 		return
 	}
 
 	// Check ManageMessages permission
 	if member := e.Member(); member == nil || member.Permissions&discord.PermissionManageMessages == 0 {
-		respondEphemeral(e, "You don't have permission to use this command.")
+		botutil.RespondEphemeral(e, "You don't have permission to use this command.")
 		return
 	}
 
 	gc := b.topPosters[guildID]
 	if gc == nil {
-		respondEphemeral(e, "No data available yet.")
+		botutil.RespondEphemeral(e, "No data available yet.")
 		return
 	}
 

@@ -167,8 +167,18 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		botutil.RespondEphemeral(e, "Something went wrong.")
 		return
 	}
-	channelID, _ := snowflake.Parse(parts[0])
-	messageID, _ := snowflake.Parse(parts[1])
+	channelID, err := snowflake.Parse(parts[0])
+	if err != nil {
+		b.Log.Error("Invalid channel ID in sticky config modal", "value", parts[0], "error", err)
+		botutil.RespondEphemeral(e, "Something went wrong.")
+		return
+	}
+	messageID, err := snowflake.Parse(parts[1])
+	if err != nil {
+		b.Log.Error("Invalid message ID in sticky config modal", "value", parts[1], "error", err)
+		botutil.RespondEphemeral(e, "Something went wrong.")
+		return
+	}
 
 	minIdleStr := e.Data.Text(fieldMinIdle)
 	maxIdleStr := e.Data.Text(fieldMaxIdle)

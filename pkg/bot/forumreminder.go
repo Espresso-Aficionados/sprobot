@@ -9,7 +9,7 @@ import (
 )
 
 type threadHelpInfo struct {
-	HelperID     string
+	HelperID     snowflake.ID
 	LinkToPost   string
 	MaxThreadAge time.Duration
 	HistoryLimit int
@@ -20,7 +20,7 @@ func getThreadHelpConfig(env string) map[snowflake.ID]threadHelpInfo {
 	case "prod":
 		return map[snowflake.ID]threadHelpInfo{
 			1019753326469980262: {
-				HelperID:     "1020401507121774722",
+				HelperID:     1020401507121774722,
 				LinkToPost:   "https://discord.com/channels/726985544038612993/727325278820368456/1020402429717663854",
 				MaxThreadAge: 24 * time.Hour,
 				HistoryLimit: 50,
@@ -29,7 +29,7 @@ func getThreadHelpConfig(env string) map[snowflake.ID]threadHelpInfo {
 	case "dev":
 		return map[snowflake.ID]threadHelpInfo{
 			1019680268229021807: {
-				HelperID:     "1015493549430685706",
+				HelperID:     1015493549430685706,
 				LinkToPost:   "https://discord.com/channels/1013566342345019512/1019680095893471322/1020431232129048667",
 				MaxThreadAge: 5 * time.Minute,
 				HistoryLimit: 5,
@@ -118,7 +118,7 @@ func (b *Bot) sendForumReminders() {
 }
 
 func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
-	threadID := int(thread.ID())
+	threadID := thread.ID()
 	if reason, ok := b.skipList[threadID]; ok {
 		b.Log.Info("Thread is in the skip_list",
 			"reason", reason,
@@ -181,13 +181,13 @@ func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
 
 	helpMessage := fmt.Sprintf(
 		"It looks like nobody has responded even though this thread has been open for a while. "+
-			"Maybe one of our <@&%s> could help?",
+			"Maybe one of our <@&%d> could help?",
 		info.HelperID,
 	)
 
 	embed := discord.Embed{
 		Description: fmt.Sprintf(
-			"Want to be part of the <@&%s>? Sign up by reacting to this [post in #info](%s)",
+			"Want to be part of the <@&%d>? Sign up by reacting to this [post in #info](%s)",
 			info.HelperID,
 			info.LinkToPost,
 		),
@@ -202,10 +202,4 @@ func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
 	}
 
 	b.skipList[threadID] = fmt.Sprintf("Already sent a response to %s", thread.Name())
-}
-
-func snowflakeToTime(id int64) time.Time {
-	const discordEpoch = 1420070400000
-	ms := (id >> 22) + discordEpoch
-	return time.UnixMilli(ms)
 }

@@ -146,7 +146,6 @@ func (b *Bot) searchAndGrantPosterRole(guildID snowflake.ID, userID snowflake.ID
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusAccepted {
-		resp.Body.Close()
 		b.Log.Info("Search index not ready, will retry on next message", "user_id", userID)
 		b.clearPosterRoleSearching(guildID, userIDStr)
 		return

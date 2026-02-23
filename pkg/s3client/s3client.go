@@ -63,6 +63,11 @@ func validateImageURL(rawURL string) error {
 
 var ErrNotFound = errors.New("profile not found")
 
+func isNotFound(err error) bool {
+	var nsk *s3types.NoSuchKey
+	return errors.As(err, &nsk) || strings.Contains(err.Error(), "NoSuchKey")
+}
+
 type Client struct {
 	s3       *s3.Client
 	bucket   string
@@ -147,12 +152,7 @@ func (c *Client) FetchProfile(ctx context.Context, tmpl sprobot.Template, guildI
 		Key:    &s3Path,
 	})
 	if err != nil {
-		var nsk *s3types.NoSuchKey
-		if errors.As(err, &nsk) {
-			return nil, ErrNotFound
-		}
-		// Also check for the generic "NoSuchKey" error code string
-		if strings.Contains(err.Error(), "NoSuchKey") {
+		if isNotFound(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("fetching profile from s3: %w", err)
@@ -183,11 +183,7 @@ func (c *Client) FetchProfileSimple(ctx context.Context, guildID, templateName, 
 		Key:    &s3Path,
 	})
 	if err != nil {
-		var nsk *s3types.NoSuchKey
-		if errors.As(err, &nsk) {
-			return nil, ErrNotFound
-		}
-		if strings.Contains(err.Error(), "NoSuchKey") {
+		if isNotFound(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("fetching profile from s3: %w", err)
@@ -394,8 +390,7 @@ func (c *Client) FetchTopPosters(ctx context.Context, guildID string) (map[strin
 		Key:    &s3Path,
 	})
 	if err != nil {
-		var nsk *s3types.NoSuchKey
-		if errors.As(err, &nsk) || strings.Contains(err.Error(), "NoSuchKey") {
+		if isNotFound(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("fetching top posters from s3: %w", err)
@@ -437,8 +432,7 @@ func (c *Client) FetchGuildJSON(ctx context.Context, prefix, guildID string) ([]
 		Key:    &s3Path,
 	})
 	if err != nil {
-		var nsk *s3types.NoSuchKey
-		if errors.As(err, &nsk) || strings.Contains(err.Error(), "NoSuchKey") {
+		if isNotFound(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("fetching %s from s3: %w", prefix, err)

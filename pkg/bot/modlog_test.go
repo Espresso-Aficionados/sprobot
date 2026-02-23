@@ -3,7 +3,7 @@ package bot
 import "testing"
 
 func TestGetModLogConfigDev(t *testing.T) {
-	config := getModLogConfig("dev")
+	config := getModLogCfg("dev")
 	if config == nil {
 		t.Fatal("dev config is nil")
 	}
@@ -13,7 +13,7 @@ func TestGetModLogConfigDev(t *testing.T) {
 }
 
 func TestGetModLogConfigProd(t *testing.T) {
-	config := getModLogConfig("prod")
+	config := getModLogCfg("prod")
 	if config == nil {
 		t.Fatal("prod config is nil")
 	}
@@ -23,10 +23,10 @@ func TestGetModLogConfigProd(t *testing.T) {
 }
 
 func TestGetModLogConfigUnknown(t *testing.T) {
-	if getModLogConfig("staging") != nil {
+	if getModLogCfg("staging") != nil {
 		t.Error("expected nil for unknown env")
 	}
-	if getModLogConfig("") != nil {
+	if getModLogCfg("") != nil {
 		t.Error("expected nil for empty env")
 	}
 }

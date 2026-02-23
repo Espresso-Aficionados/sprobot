@@ -9,20 +9,22 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/botutil"
 )
 
 const embedSplitSize = 1024
 
-type modLogInfo struct {
+type modLogConfig struct {
 	ChannelID snowflake.ID
 }
 
-func getModLogConfig(env string) *modLogInfo {
+func getModLogCfg(env string) *modLogConfig {
 	switch env {
 	case "prod":
-		return &modLogInfo{ChannelID: 1141477354129080361}
+		return &modLogConfig{ChannelID: 1141477354129080361}
 	case "dev":
-		return &modLogInfo{ChannelID: 1142519200682876938}
+		return &modLogConfig{ChannelID: 1142519200682876938}
 	default:
 		return nil
 	}
@@ -31,7 +33,7 @@ func getModLogConfig(env string) *modLogInfo {
 func (b *Bot) handleModLogMenu(e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.MessageCommandInteractionData)
 	if !ok {
-		respondEphemeral(e, "Oops! Something went wrong.")
+		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
 		return
 	}
 	msg := data.TargetMessage()
@@ -160,7 +162,7 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		})
 	}
 
-	modLogConfig := getModLogConfig(b.Env)
+	modLogConfig := getModLogCfg(b.Env)
 	if modLogConfig == nil {
 		b.Log.Info("No mod log config found")
 		return

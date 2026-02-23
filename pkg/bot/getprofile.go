@@ -9,6 +9,7 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/s3client"
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
@@ -51,18 +52,20 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 			} else {
 				msg = fmt.Sprintf("Whoops! Unable to find a profile for %s.", targetName)
 			}
-			respondEphemeral(e, msg)
+			botutil.RespondEphemeral(e, msg)
 			return
 		}
 		b.Log.Error("Failed to fetch profile", "error", err)
-		respondEphemeral(e, "Oops! Something went wrong.")
+		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
 		return
 	}
 
 	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr)
-	e.CreateMessage(discord.MessageCreate{
+	if err := e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
-	})
+	}); err != nil {
+		b.Log.Error("Failed to send profile embed", "error", err)
+	}
 }
 
 func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
@@ -79,7 +82,7 @@ func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl 
 		targetUser = msg.Author
 		targetID = msg.Author.ID
 	default:
-		respondEphemeral(e, "Oops! Something went wrong.")
+		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
 		return
 	}
 
@@ -94,18 +97,20 @@ func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl 
 	if err != nil {
 		if errors.Is(err, s3client.ErrNotFound) {
 			if targetID == e.User().ID {
-				respondEphemeral(e, fmt.Sprintf("Whoops! Unable to find a profile for you. To set one up run /edit%s", tmpl.ShortName))
+				botutil.RespondEphemeral(e, fmt.Sprintf("Whoops! Unable to find a profile for you. To set one up run /edit%s", tmpl.ShortName))
 			} else {
-				respondEphemeral(e, fmt.Sprintf("Whoops! Unable to find a %s profile for %s.", tmpl.Name, targetName))
+				botutil.RespondEphemeral(e, fmt.Sprintf("Whoops! Unable to find a %s profile for %s.", tmpl.Name, targetName))
 			}
 			return
 		}
-		respondEphemeral(e, "Oops! Something went wrong.")
+		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
 		return
 	}
 
 	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr)
-	e.CreateMessage(discord.MessageCreate{
+	if err := e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
-	})
+	}); err != nil {
+		b.Log.Error("Failed to send profile embed", "error", err)
+	}
 }

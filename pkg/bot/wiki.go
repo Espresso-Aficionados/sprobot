@@ -7,6 +7,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
@@ -18,7 +19,7 @@ func (b *Bot) handleWiki(e *events.ApplicationCommandInteractionCreate) {
 
 	page := data.String("page")
 	if page == "" {
-		respondEphemeral(e, "Please provide a page name.")
+		botutil.RespondEphemeral(e, "Please provide a page name.")
 		return
 	}
 
@@ -31,7 +32,7 @@ func (b *Bot) handleWiki(e *events.ApplicationCommandInteractionCreate) {
 		}
 	}
 
-	respondEphemeral(e, fmt.Sprintf("Can't find a link for page %s!", page))
+	botutil.RespondEphemeral(e, fmt.Sprintf("Can't find a link for page %s!", page))
 }
 
 func (b *Bot) handleAutocomplete(e *events.AutocompleteInteractionCreate) {
@@ -45,7 +46,7 @@ func (b *Bot) handleAutocomplete(e *events.AutocompleteInteractionCreate) {
 	var choices []discord.AutocompleteChoice
 
 	for _, link := range sprobot.WikiLinks {
-		if len(choices) >= 20 {
+		if len(choices) >= 25 {
 			break
 		}
 
