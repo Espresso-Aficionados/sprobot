@@ -38,7 +38,7 @@ func New(token string) (*Bot, error) {
 		return nil, err
 	}
 
-	msgCache := newCappedGroupedCache(100000)
+	msgCache := newCappedGroupedCache(1000000)
 
 	b := &Bot{
 		BaseBot:          base,
