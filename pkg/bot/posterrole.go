@@ -271,7 +271,7 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	if err == nil {
 		for _, roleID := range member.RoleIDs {
 			if roleID == cfg.RoleID {
-				botutil.RespondEphemeral(e, fmt.Sprintf("%s already has the poster role.", mention))
+				botutil.RespondEphemeral(e, fmt.Sprintf("%s already has access to the marketplace.", mention))
 				return
 			}
 		}
