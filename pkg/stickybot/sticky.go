@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
@@ -123,11 +124,16 @@ func (b *Bot) saveAllStickies() {
 
 func (b *Bot) startStickyGoroutine(s *stickyMessage) {
 	s.handle = idleloop.NewHandle()
+	var lastPostTime time.Time
+	if s.LastMessageID != 0 {
+		lastPostTime = s.LastMessageID.Time()
+	}
 	s.handle.Start(idleloop.Config{
 		MinIdleMins:       s.MinIdleMins,
 		MaxIdleMins:       s.MaxIdleMins,
 		MsgThreshold:      s.MsgThreshold,
 		TimeThresholdMins: s.TimeThresholdMins,
+		LastPostTime:      lastPostTime,
 	}, func() bool { return b.repostSticky(s) })
 }
 
