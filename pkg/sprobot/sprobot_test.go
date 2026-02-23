@@ -23,7 +23,7 @@ func TestConstants(t *testing.T) {
 	if ImageField != "Gear Picture" {
 		t.Errorf("ImageField = %q, want %q", ImageField, "Gear Picture")
 	}
-	if WebEndpoint != "http://bot.espressoaf.com/" {
-		t.Errorf("WebEndpoint = %q, want %q", WebEndpoint, "http://bot.espressoaf.com/")
+	if WebEndpoint != "https://bot.espressoaf.com/" {
+		t.Errorf("WebEndpoint = %q, want %q", WebEndpoint, "https://bot.espressoaf.com/")
 	}
 }

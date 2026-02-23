@@ -53,6 +53,7 @@ func (b *Bot) registerAllCommands() error {
 		})
 
 		// /s
+		shortcutMaxLen := 80
 		commands = append(commands, discord.SlashCommandCreate{
 			Name:        "s",
 			Description: "Post a shortcut response",
@@ -62,6 +63,7 @@ func (b *Bot) registerAllCommands() error {
 					Description:  "Shortcut name",
 					Required:     true,
 					Autocomplete: true,
+					MaxLength:    &shortcutMaxLen,
 				},
 			},
 		})
@@ -81,6 +83,7 @@ func (b *Bot) registerAllCommands() error {
 							Description:  "Shortcut name",
 							Required:     true,
 							Autocomplete: true,
+							MaxLength:    &shortcutMaxLen,
 						},
 					},
 				},
@@ -93,6 +96,7 @@ func (b *Bot) registerAllCommands() error {
 							Description:  "Shortcut name",
 							Required:     true,
 							Autocomplete: true,
+							MaxLength:    &shortcutMaxLen,
 						},
 					},
 				},

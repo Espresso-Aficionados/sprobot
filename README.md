@@ -11,7 +11,9 @@ Profile bot. Members create and view profiles using slash commands that are dyna
 
 - `/edit<template>` / `/get<template>` / `/delete<template>` — edit, view, or delete a profile
 - `/wiki` — search the wiki (with autocomplete)
-- `/topposters` — show top posters for the guild
+- `/s` — post a shortcut response (round-robin through configured responses, with autocomplete)
+- `/sconfig set|remove|list` — manage shortcuts (requires Manage Messages)
+- `/topposters` — show top posters for the guild (requires Manage Messages)
 - Context menus for saving mod log images and viewing profiles
 
 ### stickybot

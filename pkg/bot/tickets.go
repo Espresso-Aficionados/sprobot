@@ -293,10 +293,8 @@ func (b *Bot) handleTicketOpen(e *events.ComponentInteractionCreate) {
 	st.mu.Lock()
 	ticketNum := st.Counter + cfg.CounterOffset
 	st.Counter++
-	st.mu.Unlock()
-
-	// Save counter immediately
 	data, err := json.Marshal(st)
+	st.mu.Unlock()
 	if err != nil {
 		b.Log.Error("Failed to marshal ticket data", "guild_id", *guildID, "error", err)
 	} else {

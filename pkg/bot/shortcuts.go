@@ -18,6 +18,7 @@ import (
 )
 
 const shortcutResponseSlots = 5
+const maxShortcutsPerGuild = 200
 
 type shortcutEntry struct {
 	Responses []string `json:"responses"`
@@ -125,8 +126,9 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 	if !started {
 		idx = rand.IntN(len(entry.Responses))
 	}
-	response := entry.Responses[idx%len(entry.Responses)]
-	st.indices[name] = idx + 1
+	n := len(entry.Responses)
+	response := entry.Responses[idx%n]
+	st.indices[name] = (idx + 1) % n
 	st.mu.Unlock()
 
 	username := getNickOrName(e.Member())
@@ -280,6 +282,11 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 	}
 
 	st.mu.Lock()
+	if _, exists := st.Shortcuts[name]; !exists && len(st.Shortcuts) >= maxShortcutsPerGuild {
+		st.mu.Unlock()
+		respondEphemeral(e, fmt.Sprintf("Maximum of %d shortcuts reached.", maxShortcutsPerGuild))
+		return
+	}
 	st.Shortcuts[name] = shortcutEntry{Responses: responses}
 	st.indices[name] = 0
 	st.mu.Unlock()

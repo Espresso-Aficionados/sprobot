@@ -427,6 +427,8 @@ func (c *Client) SaveTopPosters(ctx context.Context, guildID string, data map[st
 	return nil
 }
 
+const maxGuildJSONSize = 100 * 1024 * 1024 // 100 MB
+
 // FetchGuildJSON fetches {prefix}/{guildID}.json from S3.
 func (c *Client) FetchGuildJSON(ctx context.Context, prefix, guildID string) ([]byte, error) {
 	s3Path := fmt.Sprintf("%s/%s.json", prefix, guildID)
@@ -442,7 +444,7 @@ func (c *Client) FetchGuildJSON(ctx context.Context, prefix, guildID string) ([]
 		return nil, fmt.Errorf("fetching %s from s3: %w", prefix, err)
 	}
 	defer out.Body.Close()
-	return io.ReadAll(out.Body)
+	return io.ReadAll(io.LimitReader(out.Body, maxGuildJSONSize))
 }
 
 // SaveGuildJSON saves data to {prefix}/{guildID}.json in S3.

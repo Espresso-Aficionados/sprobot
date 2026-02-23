@@ -52,9 +52,10 @@ func TestShortcutRoundRobinAdvances(t *testing.T) {
 
 	var got []string
 	for range 6 {
-		idx := st.indices["faq"] % len(st.Shortcuts["faq"].Responses)
+		n := len(st.Shortcuts["faq"].Responses)
+		idx := st.indices["faq"] % n
 		got = append(got, st.Shortcuts["faq"].Responses[idx])
-		st.indices["faq"] = st.indices["faq"] + 1
+		st.indices["faq"] = (st.indices["faq"] + 1) % n
 	}
 
 	want := []string{"A", "B", "C", "A", "B", "C"}
@@ -98,9 +99,10 @@ func TestShortcutRoundRobinSingleResponse(t *testing.T) {
 	}
 
 	for range 3 {
-		idx := st.indices["faq"] % len(st.Shortcuts["faq"].Responses)
+		n := len(st.Shortcuts["faq"].Responses)
+		idx := st.indices["faq"] % n
 		got := st.Shortcuts["faq"].Responses[idx]
-		st.indices["faq"] = st.indices["faq"] + 1
+		st.indices["faq"] = (st.indices["faq"] + 1) % n
 		if got != "only one" {
 			t.Errorf("expected 'only one', got %q", got)
 		}
