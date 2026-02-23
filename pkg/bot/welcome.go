@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -56,7 +57,9 @@ func (b *Bot) persistWelcome(guildID snowflake.ID, st *welcomeState) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	return b.S3.SaveGuildJSON(context.Background(), "welcome", fmt.Sprintf("%d", guildID), data)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return b.S3.SaveGuildJSON(ctx, "welcome", fmt.Sprintf("%d", guildID), data)
 }
 
 func (b *Bot) saveWelcome() {
@@ -76,6 +79,17 @@ func (b *Bot) saveWelcome() {
 }
 
 func (b *Bot) sendWelcomeDM(guildID, userID snowflake.ID) {
+	// Clean up stale entries and check for recent welcome
+	now := time.Now()
+	for uid, t := range b.welcomeSent {
+		if now.Sub(t) > 5*time.Minute {
+			delete(b.welcomeSent, uid)
+		}
+	}
+	if _, seen := b.welcomeSent[userID]; seen {
+		return
+	}
+
 	st := b.welcome[guildID]
 	if st == nil {
 		return
@@ -89,6 +103,8 @@ func (b *Bot) sendWelcomeDM(guildID, userID snowflake.ID) {
 	if !enabled || msg == "" {
 		return
 	}
+
+	b.welcomeSent[userID] = now
 
 	ch, err := b.Client.Rest.CreateDMChannel(userID)
 	if err != nil {

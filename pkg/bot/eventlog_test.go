@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -145,5 +146,90 @@ func TestEmbedColors(t *testing.T) {
 	}
 	if colorTeal != 0x1ABC9C {
 		t.Errorf("colorTeal = %X, want 1ABC9C", colorTeal)
+	}
+}
+
+func TestChannelTypeNameAllCases(t *testing.T) {
+	tests := []struct {
+		ct   discord.ChannelType
+		want string
+	}{
+		{discord.ChannelTypeGuildText, "Text"},
+		{discord.ChannelTypeGuildVoice, "Voice"},
+		{discord.ChannelTypeGuildCategory, "Category"},
+		{discord.ChannelTypeGuildNews, "Announcement"},
+		{discord.ChannelTypeGuildStageVoice, "Stage"},
+		{discord.ChannelTypeGuildForum, "Forum"},
+		{discord.ChannelTypeGuildMedia, "Media"},
+		{discord.ChannelType(99), "Type 99"},
+	}
+	for _, tt := range tests {
+		got := channelTypeName(tt.ct)
+		if got != tt.want {
+			t.Errorf("channelTypeName(%d) = %q, want %q", tt.ct, got, tt.want)
+		}
+	}
+}
+
+func TestTruncateExactBoundary(t *testing.T) {
+	s := "abcde"
+	got := truncate(s, 5)
+	if got != "abcde" {
+		t.Errorf("truncate at exact boundary = %q, want %q", got, "abcde")
+	}
+	got = truncate(s, 4)
+	if got != "abc…" {
+		t.Errorf("truncate at len-1 = %q, want %q", got, "abc…")
+	}
+}
+
+func TestFormatPermissionDiffCreate(t *testing.T) {
+	allow := discord.PermissionViewChannel | discord.PermissionSendMessages
+	deny := discord.PermissionManageChannels
+	result := formatPermissionDiff(discord.AuditLogEventChannelOverwriteCreate, 0, 0, allow, deny)
+
+	if !strings.Contains(result, "✅ View Channel") {
+		t.Errorf("result %q should contain allowed View Channel", result)
+	}
+	if !strings.Contains(result, "✅ Send Messages") {
+		t.Errorf("result %q should contain allowed Send Messages", result)
+	}
+	if !strings.Contains(result, "❌ Manage Channels") {
+		t.Errorf("result %q should contain denied Manage Channels", result)
+	}
+}
+
+func TestFormatPermissionDiffDelete(t *testing.T) {
+	oldAllow := discord.PermissionViewChannel
+	oldDeny := discord.PermissionSendMessages
+	result := formatPermissionDiff(discord.AuditLogEventChannelOverwriteDelete, oldAllow, oldDeny, 0, 0)
+
+	if !strings.Contains(result, "↩️ View Channel") {
+		t.Errorf("result %q should contain reset View Channel", result)
+	}
+	if !strings.Contains(result, "↩️ Send Messages") {
+		t.Errorf("result %q should contain reset Send Messages", result)
+	}
+}
+
+func TestFormatPermissionDiffUpdate(t *testing.T) {
+	oldAllow := discord.PermissionViewChannel
+	newAllow := discord.PermissionViewChannel | discord.PermissionSendMessages
+	var oldDeny, newDeny discord.Permissions
+	result := formatPermissionDiff(discord.AuditLogEventChannelOverwriteUpdate, oldAllow, oldDeny, newAllow, newDeny)
+
+	if !strings.Contains(result, "✅ Send Messages") {
+		t.Errorf("result %q should contain newly allowed Send Messages", result)
+	}
+	// View Channel was already allowed — should not appear
+	if strings.Contains(result, "View Channel") {
+		t.Errorf("result %q should not mention unchanged View Channel", result)
+	}
+}
+
+func TestFormatPermissionDiffNoChanges(t *testing.T) {
+	result := formatPermissionDiff(discord.AuditLogEventChannelOverwriteUpdate, 0, 0, 0, 0)
+	if result != "*No recognizable permission changes*" {
+		t.Errorf("expected no-changes message, got %q", result)
 	}
 }

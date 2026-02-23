@@ -122,9 +122,12 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 	guildStr := guildIDStr(e)
 
 	if len(msg.Attachments) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
 		var permLinks []string
 		for _, att := range msg.Attachments {
-			permLink, err := b.S3.SaveModImage(context.Background(), guildStr, att.ProxyURL)
+			permLink, err := b.S3.SaveModImage(ctx, guildStr, att.ProxyURL)
 			if err != nil {
 				b.Log.Error("Failed to save mod image", "error", err)
 				permLinks = append(permLinks, att.ProxyURL)

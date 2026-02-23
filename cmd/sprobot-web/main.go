@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/sadbox/sprobot/pkg/s3client"
@@ -62,9 +65,22 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	log.Printf("Listening on :%s", port)
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("Server error: %v", err)
+	go func() {
+		log.Printf("Listening on :%s", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("Server shutdown error: %v", err)
 	}
 }
 

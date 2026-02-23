@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -21,8 +22,11 @@ func (b *Bot) handleEdit(e *events.ApplicationCommandInteractionCreate, tmpl spr
 		"guild_id", guildStr,
 	)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	profile := make(map[string]string)
-	existing, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
+	existing, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
 	if err == nil {
 		profile = existing
 	}
@@ -72,8 +76,11 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 
 	profile := make(map[string]string)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	// Preserve existing image URL from the saved profile
-	existing, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
+	existing, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
 	if err == nil {
 		if img, ok := existing[tmpl.Image.Name]; ok && img != "" {
 			profile[tmpl.Image.Name] = img
@@ -89,7 +96,7 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 		profile[tmpl.Image.Name] = attachments[0].ProxyURL
 	}
 
-	_, userErr, err := b.S3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
+	_, userErr, err := b.S3.SaveProfile(ctx, tmpl, guildStr, userStr, profile)
 	if err != nil {
 		b.Log.Error("Failed to save profile", "error", err)
 		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
@@ -102,7 +109,7 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	}
 
 	username := getNickOrName(e.Member())
-	embed := buildProfileEmbed(tmpl, username, profile, guildStr, userStr)
+	embed := buildProfileEmbed(tmpl, username, profile, guildStr, userStr, b.S3.Bucket())
 	err = e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 		Flags:  discord.MessageFlagEphemeral,

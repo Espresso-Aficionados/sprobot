@@ -42,11 +42,13 @@ func getThreadHelpConfig(env string) map[snowflake.ID]threadHelpInfo {
 
 func (b *Bot) forumReminderLoop() {
 	// Wait for the bot to be ready
+	readyTicker := time.NewTicker(1 * time.Second)
+	defer readyTicker.Stop()
 	for !b.Ready.Load() {
 		select {
 		case <-b.stop:
 			return
-		case <-time.After(1 * time.Second):
+		case <-readyTicker.C:
 		}
 	}
 

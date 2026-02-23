@@ -27,7 +27,7 @@ func (b *Bot) handleWarn(e *events.ApplicationCommandInteractionCreate) {
 	reason := data.String("reason")
 
 	// Post public warning embed in the channel
-	e.CreateMessage(discord.MessageCreate{
+	if err := e.CreateMessage(discord.MessageCreate{
 		Content: userMention(targetUser.ID),
 		Embeds: []discord.Embed{{
 			Title:       "Warning",
@@ -38,7 +38,10 @@ func (b *Bot) handleWarn(e *events.ApplicationCommandInteractionCreate) {
 				IconURL: e.User().EffectiveAvatarURL(),
 			},
 		}},
-	})
+	}); err != nil {
+		b.Log.Error("Failed to post warning message", "error", err, "target_user_id", targetUser.ID, "guild_id", *guildID)
+		return
+	}
 
 	// Build embed for event log + mod log
 	logEmbed := discord.Embed{

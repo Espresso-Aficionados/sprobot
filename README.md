@@ -13,8 +13,13 @@ Profile bot. Members create and view profiles using slash commands that are dyna
 - `/wiki` — search the wiki (with autocomplete)
 - `/s` — post a shortcut response (round-robin through configured responses, with autocomplete)
 - `/sconfig set|remove|list` — manage shortcuts (requires Manage Messages)
+- `/welcome set|clear|show|test|enable|disable` — manage welcome DMs for new members (requires Manage Messages)
+- `/warn` — issue a warning to a member (requires Manage Messages)
+- `/marketprogress` — check a member's poster role progress (requires Manage Messages)
 - `/topposters` — show top posters for the guild (requires Manage Messages)
-- Context menus for saving mod log images and viewing profiles
+- Context menus for saving messages to the mod log and viewing profiles
+
+**Features:** ticket system, self-assign role panels, event logging (join/leave/ban/kick/timeout/message edit and delete/channel and role changes), auto-role on join, poster role tracking, forum helper reminders, message cache for edit/delete logging.
 
 ### stickybot
 

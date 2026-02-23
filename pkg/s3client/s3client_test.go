@@ -762,3 +762,133 @@ func TestIsNotFound(t *testing.T) {
 		t.Error("should match NoSuchKey in error string")
 	}
 }
+
+func TestFetchTopPostersRoundTrip(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	data := map[string]map[string]int{
+		"123": {"456": 10, "789": 20},
+	}
+
+	if err := c.SaveTopPosters(context.Background(), "guild1", data); err != nil {
+		t.Fatalf("SaveTopPosters: %v", err)
+	}
+
+	got, err := c.FetchTopPosters(context.Background(), "guild1")
+	if err != nil {
+		t.Fatalf("FetchTopPosters: %v", err)
+	}
+
+	if got["123"]["456"] != 10 {
+		t.Errorf("got[123][456] = %d, want 10", got["123"]["456"])
+	}
+	if got["123"]["789"] != 20 {
+		t.Errorf("got[123][789] = %d, want 20", got["123"]["789"])
+	}
+}
+
+func TestFetchTopPostersNotFound(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	_, err := c.FetchTopPosters(context.Background(), "nonexistent")
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestValidateImageURLFileScheme(t *testing.T) {
+	err := validateImageURL("file:///etc/passwd")
+	if err == nil {
+		t.Error("expected error for file:// scheme")
+	}
+	if !strings.Contains(err.Error(), "unsupported URL scheme") {
+		t.Errorf("error %q should mention unsupported scheme", err.Error())
+	}
+}
+
+func TestValidateImageURLDataScheme(t *testing.T) {
+	err := validateImageURL("data:text/html,<script>alert(1)</script>")
+	if err == nil {
+		t.Error("expected error for data: scheme")
+	}
+	if !strings.Contains(err.Error(), "unsupported URL scheme") {
+		t.Errorf("error %q should mention unsupported scheme", err.Error())
+	}
+}
+
+func TestValidateImageURLLoopback(t *testing.T) {
+	err := validateImageURL("http://127.0.0.1/secret")
+	if err == nil {
+		t.Error("expected error for loopback IP")
+	}
+	if !strings.Contains(err.Error(), "blocked IP range") {
+		t.Errorf("error %q should mention blocked IP", err.Error())
+	}
+}
+
+func TestValidateImageURLLocalhost(t *testing.T) {
+	err := validateImageURL("http://localhost/secret")
+	if err == nil {
+		t.Error("expected error for localhost")
+	}
+}
+
+func TestValidateImageURLInvalidURL(t *testing.T) {
+	err := validateImageURL("://invalid")
+	if err == nil {
+		t.Error("expected error for invalid URL")
+	}
+}
+
+func TestBucket(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+	if c.Bucket() != "test-bucket" {
+		t.Errorf("Bucket() = %q, want %q", c.Bucket(), "test-bucket")
+	}
+}
+
+func TestFetchGuildJSONRoundTrip(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	data := []byte(`{"key":"value"}`)
+	if err := c.SaveGuildJSON(context.Background(), "testprefix", "guild1", data); err != nil {
+		t.Fatalf("SaveGuildJSON: %v", err)
+	}
+
+	got, err := c.FetchGuildJSON(context.Background(), "testprefix", "guild1")
+	if err != nil {
+		t.Fatalf("FetchGuildJSON: %v", err)
+	}
+	if string(got) != string(data) {
+		t.Errorf("got %q, want %q", string(got), string(data))
+	}
+}
+
+func TestFetchGuildJSONNotFound(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	_, err := c.FetchGuildJSON(context.Background(), "testprefix", "missing")
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}

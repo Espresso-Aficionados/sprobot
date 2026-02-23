@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -43,7 +44,11 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 	}
 
 	targetIDStr := fmt.Sprintf("%d", targetID)
-	profile, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, targetIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, targetIDStr)
 	if err != nil {
 		if errors.Is(err, s3client.ErrNotFound) {
 			var msg string
@@ -60,7 +65,7 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 		return
 	}
 
-	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr)
+	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr, b.S3.Bucket())
 	if err := e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}); err != nil {
@@ -93,7 +98,10 @@ func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl 
 		targetName = member.EffectiveName()
 	}
 
-	profile, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, targetIDStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, targetIDStr)
 	if err != nil {
 		if errors.Is(err, s3client.ErrNotFound) {
 			if targetID == e.User().ID {
@@ -107,7 +115,7 @@ func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl 
 		return
 	}
 
-	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr)
+	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr, b.S3.Bucket())
 	if err := e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}); err != nil {

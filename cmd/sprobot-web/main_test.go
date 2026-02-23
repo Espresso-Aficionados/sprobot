@@ -322,6 +322,37 @@ func TestProfileDataStruct(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersMiddleware(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := securityHeaders(inner)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	expected := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+	}
+	for header, want := range expected {
+		got := rec.Header().Get(header)
+		if got != want {
+			t.Errorf("header %q = %q, want %q", header, got, want)
+		}
+	}
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Error("Content-Security-Policy header should be set")
+	}
+	if !strings.Contains(csp, "default-src 'none'") {
+		t.Errorf("CSP %q should contain default-src 'none'", csp)
+	}
+}
+
 func TestProfileTemplateHTMLEscaping(t *testing.T) {
 	tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/profile.html")
 	if err != nil {

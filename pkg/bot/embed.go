@@ -3,7 +3,6 @@ package bot
 import (
 	"math/rand/v2"
 	"net/url"
-	"os"
 
 	"github.com/disgoorg/disgo/discord"
 
@@ -12,8 +11,8 @@ import (
 
 const footerIconURL = "https://profile-bot.us-southeast-1.linodeobjects.com/76916743.gif"
 
-func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[string]string, guildID, userID string) discord.Embed {
-	profileURL := buildProfileURL(tmpl, guildID, userID)
+func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[string]string, guildID, userID, bucket string) discord.Embed {
+	profileURL := buildProfileURL(tmpl, guildID, userID, bucket)
 
 	embed := discord.Embed{
 		Title: tmpl.Name + " for " + username,
@@ -51,9 +50,9 @@ func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[strin
 	return embed
 }
 
-func buildProfileURL(tmpl sprobot.Template, guildID, userID string) string {
+func buildProfileURL(tmpl sprobot.Template, guildID, userID, bucket string) string {
 	s3Path := "profiles/" + guildID + "/" + tmpl.Name + "/" + userID + ".json"
-	return sprobot.WebEndpoint + url.PathEscape(os.Getenv("S3_BUCKET")+"/"+s3Path)
+	return sprobot.WebEndpoint + url.PathEscape(bucket+"/"+s3Path)
 }
 
 func rgbToInt(r, g, b int) int {

@@ -16,7 +16,7 @@ func TestBuildProfileEmbedBasic(t *testing.T) {
 		"Gear Picture": "https://example.com/image.png",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "testuser", profile, "123", "456")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "testuser", profile, "123", "456", "test-bucket")
 
 	if embed.Title != "Coffee Setup for testuser" {
 		t.Errorf("Title = %q, want %q", embed.Title, "Coffee Setup for testuser")
@@ -42,7 +42,7 @@ func TestBuildProfileEmbedFields(t *testing.T) {
 		"Favorite Beans": "Ethiopian Yirgacheffe",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
 
 	fieldNames := make(map[string]string)
 	for _, f := range embed.Fields {
@@ -66,7 +66,7 @@ func TestBuildProfileEmbedSkipsEmptyFields(t *testing.T) {
 		"Grinder": "",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
 
 	for _, f := range embed.Fields {
 		if f.Name == "Grinder" {
@@ -80,7 +80,7 @@ func TestBuildProfileEmbedWithImage(t *testing.T) {
 		"Gear Picture": "https://example.com/photo.jpg",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
 
 	if embed.Image == nil {
 		t.Fatal("Image is nil when profile has image")
@@ -95,7 +95,7 @@ func TestBuildProfileEmbedWithoutImage(t *testing.T) {
 		"Machine": "Rocket",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
 
 	if embed.Image != nil {
 		t.Error("Image should be nil when no image in profile")
@@ -117,10 +117,8 @@ func TestBuildProfileEmbedWithoutImage(t *testing.T) {
 }
 
 func TestBuildProfileEmbedURL(t *testing.T) {
-	t.Setenv("S3_BUCKET", "my-bucket")
-
 	profile := map[string]string{}
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "my-bucket")
 
 	if !strings.HasPrefix(embed.URL, sprobot.WebEndpoint) {
 		t.Errorf("embed URL %q should start with %q", embed.URL, sprobot.WebEndpoint)
@@ -135,8 +133,8 @@ func TestBuildProfileEmbedImageCacheBuster(t *testing.T) {
 		"Gear Picture": "https://example.com/photo.jpg",
 	}
 
-	embed1 := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456")
-	embed2 := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456")
+	embed1 := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
+	embed2 := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
 
 	// The cache buster query param should differ between calls (probabilistically)
 	if embed1.Image.URL == embed2.Image.URL {

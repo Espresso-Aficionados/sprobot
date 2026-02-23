@@ -25,6 +25,7 @@ type Bot struct {
 	tickets          map[snowflake.ID]*ticketState
 	shortcuts        map[snowflake.ID]*shortcutState
 	welcome          map[snowflake.ID]*welcomeState
+	welcomeSent      map[snowflake.ID]time.Time
 	msgCache         *cappedGroupedCache
 	topPostersConfig map[snowflake.ID]topPostersConfig
 	posterRoleConfig map[snowflake.ID]posterRoleConfig
@@ -50,6 +51,7 @@ func New(token string) (*Bot, error) {
 		tickets:          make(map[snowflake.ID]*ticketState),
 		shortcuts:        make(map[snowflake.ID]*shortcutState),
 		welcome:          make(map[snowflake.ID]*welcomeState),
+		welcomeSent:      make(map[snowflake.ID]time.Time),
 		msgCache:         msgCache,
 		topPostersConfig: getTopPostersConfig(base.Env),
 		posterRoleConfig: getPosterRoleConfig(base.Env),
@@ -131,6 +133,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTopPosters)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.savePosterRole)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveShortcuts)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTickets)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveWelcome)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMessageCache)
 

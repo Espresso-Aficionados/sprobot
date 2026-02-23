@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -134,7 +135,10 @@ func (b *Bot) confirmDeleteProfile(e *events.ComponentInteractionCreate, tmpl sp
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	err := b.S3.DeleteProfile(context.Background(), tmpl, guildStr, userStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := b.S3.DeleteProfile(ctx, tmpl, guildStr, userStr)
 	if err != nil {
 		b.Log.Error("Failed to delete profile", "error", err)
 		content := "Oops! Something went wrong."
@@ -155,7 +159,10 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	profile, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
 	if err != nil {
 		if errors.Is(err, s3client.ErrNotFound) {
 			content := "Deleted!"
@@ -166,6 +173,11 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 			return
 		}
 		b.Log.Error("Failed to fetch profile for image delete", "error", err)
+		content := "Something went wrong, please try again."
+		e.UpdateMessage(discord.MessageUpdate{
+			Content:    &content,
+			Components: &[]discord.LayoutComponent{},
+		})
 		return
 	}
 
@@ -180,9 +192,14 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 	}
 
 	if hasFields {
-		_, userErr, err := b.S3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
+		_, userErr, err := b.S3.SaveProfile(ctx, tmpl, guildStr, userStr, profile)
 		if err != nil {
 			b.Log.Error("Failed to save profile after image delete", "error", err)
+			content := "Something went wrong, please try again."
+			e.UpdateMessage(discord.MessageUpdate{
+				Content:    &content,
+				Components: &[]discord.LayoutComponent{},
+			})
 			return
 		}
 		if userErr != "" {
@@ -194,8 +211,13 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 			return
 		}
 	} else {
-		if err := b.S3.DeleteProfile(context.Background(), tmpl, guildStr, userStr); err != nil {
+		if err := b.S3.DeleteProfile(ctx, tmpl, guildStr, userStr); err != nil {
 			b.Log.Error("Failed to delete empty profile", "error", err)
+			content := "Something went wrong, please try again."
+			e.UpdateMessage(discord.MessageUpdate{
+				Content:    &content,
+				Components: &[]discord.LayoutComponent{},
+			})
 			return
 		}
 	}
