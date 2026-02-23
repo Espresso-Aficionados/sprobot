@@ -99,6 +99,10 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 
 	switch d.CommandName() {
 	case cmdListThreads:
+		if isThread(e.Channel().Type()) {
+			botutil.RespondEphemeral(e, "This command only works in channels — it lists the threads under a channel.")
+			return
+		}
 		b.handleThreads(e)
 	case cmdSlash:
 		if isThread(e.Channel().Type()) {
