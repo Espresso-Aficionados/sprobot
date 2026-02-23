@@ -122,6 +122,7 @@ func (b *Bot) Run() error {
 	b.loadShortcuts()
 	b.loadWelcome()
 	b.ensureTicketPanels()
+	b.ensureSelfrolePanels()
 	if err := b.registerAllCommands(); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
 	}

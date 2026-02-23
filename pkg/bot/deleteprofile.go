@@ -45,6 +45,11 @@ func (b *Bot) handleDelete(e *events.ApplicationCommandInteractionCreate, tmpl s
 func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
 	customID := e.Data.CustomID()
 
+	if roleID, ok := isSelfroleInteraction(customID); ok {
+		b.handleSelfroleToggle(e, roleID)
+		return
+	}
+
 	if customID == "ticket_open" {
 		b.handleTicketOpen(e)
 		return
