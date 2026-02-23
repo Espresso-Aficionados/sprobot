@@ -127,6 +127,11 @@ func NewDirect(s3Client *s3.Client, bucket, endpoint string, cache *lru.Cache[st
 	}
 }
 
+// Bucket returns the configured S3 bucket name.
+func (c *Client) Bucket() string {
+	return c.bucket
+}
+
 func cacheKey(templateName, guildID, userID string) string {
 	return templateName + "/" + guildID + "/" + userID
 }
@@ -314,6 +319,56 @@ func (c *Client) SaveModImage(ctx context.Context, guildID string, fileURL strin
 
 	s3FinalURL := c.buildS3URL(s3Path)
 	c.log.Info("Mod image saved", "guild_id", guildID, "s3_url", s3FinalURL)
+	return s3FinalURL, nil
+}
+
+func (c *Client) SaveShortcutImage(ctx context.Context, guildID string, fileURL string) (string, error) {
+	c.log.Info("Saving shortcut image", "guild_id", guildID)
+
+	if strings.HasPrefix(fileURL, c.endpoint) {
+		return fileURL, nil
+	}
+
+	if err := urlValidator(fileURL); err != nil {
+		c.log.Info("URL validation failed", "url", fileURL, "error", err)
+		return fileURL, nil
+	}
+
+	resp, err := httpClient.Get(fileURL)
+	if err != nil {
+		c.log.Info("Unable to fetch from the link provided", "url", fileURL, "error", err)
+		return fileURL, nil
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize))
+	if err != nil {
+		c.log.Info("Unable to read response body", "url", fileURL, "error", err)
+		return fileURL, nil
+	}
+
+	randomID := randomString(30)
+	parsed, err := url.Parse(fileURL)
+	if err != nil {
+		c.log.Info("Unable to parse URL for extension", "url", fileURL, "error", err)
+		return fileURL, nil
+	}
+	ext := path.Ext(parsed.Path)
+	s3Path := fmt.Sprintf("shortcut_files/%s/%s%s", guildID, randomID, ext)
+
+	_, err = c.s3.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: &c.bucket,
+		Key:    &s3Path,
+		Body:   bytes.NewReader(data),
+		ACL:    s3types.ObjectCannedACLPublicRead,
+	})
+	if err != nil {
+		c.log.Info("Unable to upload to s3", "error", err)
+		return fileURL, nil
+	}
+
+	s3FinalURL := c.buildS3URL(s3Path)
+	c.log.Info("Shortcut image saved", "guild_id", guildID, "s3_url", s3FinalURL)
 	return s3FinalURL, nil
 }
 

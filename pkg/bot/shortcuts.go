@@ -311,6 +311,20 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 		return
 	}
 
+	// Re-host image URLs to S3 so they don't expire.
+	ctx := context.Background()
+	guildStr := fmt.Sprintf("%d", *guildID)
+	for i, resp := range responses {
+		if isImageURL(resp) {
+			s3URL, err := b.S3.SaveShortcutImage(ctx, guildStr, strings.TrimSpace(resp))
+			if err != nil {
+				b.Log.Error("Failed to re-host shortcut image", "error", err)
+				continue // keep original URL
+			}
+			responses[i] = s3URL
+		}
+	}
+
 	st := b.shortcuts[*guildID]
 	if st == nil {
 		botutil.RespondEphemeral(e, "Something went wrong.")
