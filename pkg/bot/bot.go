@@ -17,6 +17,7 @@ type Bot struct {
 	*botutil.BaseBot
 	skipList   map[int]string // forum reminder skip list, keyed by thread ID
 	topPosters map[snowflake.ID]*guildPostCounts
+	posterRole map[snowflake.ID]*posterRoleState
 }
 
 func New(token string) (*Bot, error) {
@@ -29,6 +30,7 @@ func New(token string) (*Bot, error) {
 		BaseBot:    base,
 		skipList:   make(map[int]string),
 		topPosters: make(map[snowflake.ID]*guildPostCounts),
+		posterRole: make(map[snowflake.ID]*posterRoleState),
 	}
 
 	client, err := disgo.New(token,
@@ -65,14 +67,17 @@ func (b *Bot) Run() error {
 	defer b.Client.Close(ctx)
 
 	b.loadTopPosters()
+	b.loadPosterRole()
 	if err := b.registerAllCommands(); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
 	}
 	go b.forumReminderLoop()
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.PingHealthcheck)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.saveTopPosters)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.savePosterRole)
 
 	botutil.WaitForShutdown(b.Log, "Bot")
 	b.saveTopPosters()
+	b.savePosterRole()
 	return nil
 }
