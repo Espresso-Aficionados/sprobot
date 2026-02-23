@@ -199,7 +199,7 @@ func (b *Bot) onMemberLeave(e *events.GuildMemberLeave) {
 func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
 	oldNick := e.OldMember.Nick
 	newNick := e.Member.Nick
-	if oldNick == newNick {
+	if derefStr(oldNick) == derefStr(newNick) {
 		return
 	}
 	oldDisplay := oldNick
@@ -739,6 +739,13 @@ func (b *Bot) onGuildUpdate(e *events.GuildUpdate) {
 // --- Helpers ---
 
 func boolPtr(v bool) *bool { return &v }
+
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
 
 func formatDuration(d time.Duration) string {
 	days := int(d.Hours() / 24)
