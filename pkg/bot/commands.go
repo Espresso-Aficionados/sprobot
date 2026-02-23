@@ -161,6 +161,27 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
+		// /warn
+		reasonMaxLen := 1024
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "warn",
+			Description:              "Warn a user",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionUser{
+					Name:        "user",
+					Description: "User to warn",
+					Required:    true,
+				},
+				discord.ApplicationCommandOptionString{
+					Name:        "reason",
+					Description: "Reason for the warning",
+					Required:    true,
+					MaxLength:   &reasonMaxLen,
+				},
+			},
+		})
+
 		if _, err := b.Client.Rest.SetGuildCommands(b.Client.ApplicationID, guildID, commands); err != nil {
 			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
 		}
@@ -265,6 +286,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleShortcutConfig(e)
 	case "welcome":
 		b.handleWelcome(e)
+	case "warn":
+		b.handleWarn(e)
 	}
 }
 
