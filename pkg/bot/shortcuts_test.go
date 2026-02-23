@@ -295,3 +295,34 @@ func filterShortcutResponses(inputs []string) []string {
 	}
 	return responses
 }
+
+func TestIsImageURL(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"https://example.com/photo.png", true},
+		{"https://example.com/photo.jpg", true},
+		{"https://example.com/photo.jpeg", true},
+		{"https://example.com/photo.gif", true},
+		{"https://example.com/photo.webp", true},
+		{"https://example.com/photo.PNG", true},
+		{"https://cdn.example.com/img.jpg?width=800", true},
+		{"https://cdn.example.com/img.png#fragment", true},
+		{"http://example.com/photo.jpg", true},
+		{"  https://example.com/photo.png  ", true},
+		{"https://example.com/page", false},
+		{"https://example.com/photo.pdf", false},
+		{"not a url at all", false},
+		{"https://example.com/a.png and more text", false},
+		{"https://example.com/a.png\nhttps://example.com/b.png", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := isImageURL(tt.input); got != tt.want {
+				t.Errorf("isImageURL(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}

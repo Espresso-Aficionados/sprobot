@@ -134,14 +134,19 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 	response = expandShortcutVars(response, e.User().ID)
 
 	username := getNickOrName(e.Member())
+	embed := discord.Embed{
+		Footer: &discord.EmbedFooter{
+			Text:    fmt.Sprintf("@%s used /s %s", username, name),
+			IconURL: e.User().EffectiveAvatarURL(),
+		},
+	}
+	if isImageURL(response) {
+		embed.Image = &discord.EmbedResource{URL: response}
+	} else {
+		embed.Description = response
+	}
 	e.CreateMessage(discord.MessageCreate{
-		Content: response,
-		Embeds: []discord.Embed{{
-			Footer: &discord.EmbedFooter{
-				Text:    fmt.Sprintf("@%s used /s %s", username, name),
-				IconURL: e.User().EffectiveAvatarURL(),
-			},
-		}},
+		Embeds: []discord.Embed{embed},
 	})
 }
 
@@ -149,6 +154,29 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 // Currently supports [user] → <@userID>.
 func expandShortcutVars(response string, userID snowflake.ID) string {
 	return strings.ReplaceAll(response, "[user]", fmt.Sprintf("<@%d>", userID))
+}
+
+// isImageURL returns true if s is a single HTTP(S) URL ending in a common image extension.
+func isImageURL(s string) bool {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		return false
+	}
+	if strings.ContainsAny(s, " \n\r\t") {
+		return false
+	}
+	// Strip query string / fragment before checking extension.
+	path := s
+	if i := strings.IndexAny(path, "?#"); i != -1 {
+		path = path[:i]
+	}
+	path = strings.ToLower(path)
+	for _, ext := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp"} {
+		if strings.HasSuffix(path, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Bot) handleShortcutAutocomplete(e *events.AutocompleteInteractionCreate) {
