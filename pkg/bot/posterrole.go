@@ -58,7 +58,7 @@ type posterRoleState struct {
 }
 
 func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg discord.Message) {
-	configs := getPosterRoleConfig(b.Env)
+	configs := b.posterRoleConfig
 	cfg, ok := configs[guildID]
 	if !ok {
 		return
@@ -185,7 +185,7 @@ func (b *Bot) clearPosterRoleSearching(guildID snowflake.ID, userIDStr string) {
 }
 
 func (b *Bot) loadPosterRole() {
-	configs := getPosterRoleConfig(b.Env)
+	configs := b.posterRoleConfig
 	if configs == nil {
 		return
 	}

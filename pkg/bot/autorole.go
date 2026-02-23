@@ -18,7 +18,7 @@ func getAutoRoleID(env string) snowflake.ID {
 }
 
 func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
-	roleID := getAutoRoleID(b.Env)
+	roleID := b.autoRoleID
 	if roleID == 0 {
 		return
 	}
@@ -28,7 +28,7 @@ func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
 }
 
 func (b *Bot) ensureAutoRole(guildID snowflake.ID, msg discord.Message) {
-	roleID := getAutoRoleID(b.Env)
+	roleID := b.autoRoleID
 	if roleID == 0 {
 		return
 	}

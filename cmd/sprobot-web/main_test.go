@@ -2,11 +2,25 @@ package main
 
 import (
 	"html/template"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	pageTemplates = make(map[string]*template.Template, 3)
+	for _, name := range []string{"index.html", "profile.html", "404.html"} {
+		t, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+name)
+		if err != nil {
+			log.Fatalf("Failed to parse template %s: %v", name, err)
+		}
+		pageTemplates[name] = t
+	}
+	os.Exit(m.Run())
+}
 
 func TestIndexTemplate(t *testing.T) {
 	tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/index.html")

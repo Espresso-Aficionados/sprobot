@@ -26,13 +26,16 @@ type profileData struct {
 	ImageURL     string
 }
 
-var templates *template.Template
+var pageTemplates map[string]*template.Template
 
 func main() {
-	var err error
-	templates, err = template.ParseFS(templateFS, "templates/base.html", "templates/index.html", "templates/profile.html", "templates/404.html")
-	if err != nil {
-		log.Fatalf("Failed to parse templates: %v", err)
+	pageTemplates = make(map[string]*template.Template, 3)
+	for _, name := range []string{"index.html", "profile.html", "404.html"} {
+		t, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+name)
+		if err != nil {
+			log.Fatalf("Failed to parse template %s: %v", name, err)
+		}
+		pageTemplates[name] = t
 	}
 
 	s3, err := s3client.New()
@@ -108,26 +111,8 @@ func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 }
 
 func renderPage(w http.ResponseWriter, name string, data any) {
-	// We need to execute base.html, which will invoke the blocks defined in the page template.
-	// Since all templates are parsed together, the last-defined blocks win.
-	// We need to re-parse for each page to get the right blocks.
-	var t *template.Template
-	var err error
-
-	switch name {
-	case "index.html":
-		t, err = template.ParseFS(templateFS, "templates/base.html", "templates/index.html")
-	case "profile.html":
-		t, err = template.ParseFS(templateFS, "templates/base.html", "templates/profile.html")
-	case "404.html":
-		t, err = template.ParseFS(templateFS, "templates/base.html", "templates/404.html")
-	default:
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	if err != nil {
-		log.Printf("Template parse error: %v", err)
+	t, ok := pageTemplates[name]
+	if !ok {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}

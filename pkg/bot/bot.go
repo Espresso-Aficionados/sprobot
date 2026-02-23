@@ -15,11 +15,14 @@ import (
 
 type Bot struct {
 	*botutil.BaseBot
-	skipList   map[int]string // forum reminder skip list, keyed by thread ID
-	topPosters map[snowflake.ID]*guildPostCounts
-	posterRole map[snowflake.ID]*posterRoleState
-	tickets    map[snowflake.ID]*ticketState
-	shortcuts  map[snowflake.ID]*shortcutState
+	skipList         map[int]string // forum reminder skip list, keyed by thread ID
+	topPosters       map[snowflake.ID]*guildPostCounts
+	posterRole       map[snowflake.ID]*posterRoleState
+	tickets          map[snowflake.ID]*ticketState
+	shortcuts        map[snowflake.ID]*shortcutState
+	topPostersConfig map[snowflake.ID]topPostersConfig
+	posterRoleConfig map[snowflake.ID]posterRoleConfig
+	autoRoleID       snowflake.ID
 }
 
 func New(token string) (*Bot, error) {
@@ -29,12 +32,15 @@ func New(token string) (*Bot, error) {
 	}
 
 	b := &Bot{
-		BaseBot:    base,
-		skipList:   make(map[int]string),
-		topPosters: make(map[snowflake.ID]*guildPostCounts),
-		posterRole: make(map[snowflake.ID]*posterRoleState),
-		tickets:    make(map[snowflake.ID]*ticketState),
-		shortcuts:  make(map[snowflake.ID]*shortcutState),
+		BaseBot:          base,
+		skipList:         make(map[int]string),
+		topPosters:       make(map[snowflake.ID]*guildPostCounts),
+		posterRole:       make(map[snowflake.ID]*posterRoleState),
+		tickets:          make(map[snowflake.ID]*ticketState),
+		shortcuts:        make(map[snowflake.ID]*shortcutState),
+		topPostersConfig: getTopPostersConfig(base.Env),
+		posterRoleConfig: getPosterRoleConfig(base.Env),
+		autoRoleID:       getAutoRoleID(base.Env),
 	}
 
 	client, err := disgo.New(token,

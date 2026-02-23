@@ -56,7 +56,7 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	b.ensureAutoRole(guildID, e.Message)
 	b.checkPosterRole(guildID, e.ChannelID, e.Message)
 
-	configs := getTopPostersConfig(b.Env)
+	configs := b.topPostersConfig
 	cfg, ok := configs[guildID]
 	if !ok {
 		return
@@ -89,7 +89,7 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 }
 
 func (b *Bot) loadTopPosters() {
-	configs := getTopPostersConfig(b.Env)
+	configs := b.topPostersConfig
 	if configs == nil {
 		return
 	}
@@ -183,7 +183,7 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 	}
 	guildID := *e.GuildID()
 
-	configs := getTopPostersConfig(b.Env)
+	configs := b.topPostersConfig
 	if _, ok := configs[guildID]; !ok {
 		respondEphemeral(e, "This command is not configured for this server.")
 		return
