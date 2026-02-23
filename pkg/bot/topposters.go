@@ -53,6 +53,8 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	}
 
 	guildID := *e.GuildID
+	b.ensureAutoRole(guildID, e.Message)
+
 	configs := getTopPostersConfig(b.Env)
 	cfg, ok := configs[guildID]
 	if !ok {

@@ -46,6 +46,7 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onComponent),
 		bot.WithEventListenerFunc(b.onAutocomplete),
 		bot.WithEventListenerFunc(b.onMessage),
+		bot.WithEventListenerFunc(b.onMemberJoin),
 	)
 	if err != nil {
 		return nil, err
