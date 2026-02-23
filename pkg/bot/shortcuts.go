@@ -135,8 +135,8 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 
 	username := getNickOrName(e.Member())
 	e.CreateMessage(discord.MessageCreate{
+		Content: response,
 		Embeds: []discord.Embed{{
-			Description: response,
 			Footer: &discord.EmbedFooter{
 				Text:    fmt.Sprintf("%s used /s %s", username, name),
 				IconURL: e.User().EffectiveAvatarURL(),
