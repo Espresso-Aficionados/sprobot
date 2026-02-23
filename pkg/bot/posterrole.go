@@ -73,7 +73,7 @@ type posterRoleState struct {
 	searching map[string]bool
 }
 
-func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg discord.Message) {
+func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, ch discord.GuildMessageChannel, msg discord.Message) {
 	configs := b.posterRoleConfig
 	cfg, ok := configs[guildID]
 	if !ok {
@@ -82,6 +82,11 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg 
 
 	if cfg.SkipChannels[channelID] {
 		return
+	}
+	if thread, ok := ch.(discord.GuildThread); ok {
+		if parentID := thread.ParentID(); parentID != nil && cfg.SkipChannels[*parentID] {
+			return
+		}
 	}
 
 	if msg.Member == nil {

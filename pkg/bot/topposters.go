@@ -55,7 +55,8 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 
 	guildID := *e.GuildID
 	b.ensureAutoRole(guildID, e.Message)
-	b.checkPosterRole(guildID, e.ChannelID, e.Message)
+	ch, _ := e.Channel()
+	b.checkPosterRole(guildID, e.ChannelID, ch, e.Message)
 
 	configs := b.topPostersConfig
 	cfg, ok := configs[guildID]
