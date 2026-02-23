@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 
@@ -119,8 +120,11 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	idx := st.indices[name] % len(entry.Responses)
-	response := entry.Responses[idx]
+	idx, started := st.indices[name]
+	if !started {
+		idx = rand.IntN(len(entry.Responses))
+	}
+	response := entry.Responses[idx%len(entry.Responses)]
 	st.indices[name] = idx + 1
 	st.mu.Unlock()
 
