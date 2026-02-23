@@ -62,6 +62,15 @@ type Config struct {
 // (no messages for MinIdleMins), repost is called. MaxIdleMins starts
 // counting from the moment of arming and forces a repost after that duration.
 func Run(cfg Config, msgCh <-chan struct{}, stopCh <-chan struct{}, repost func() bool) {
+	safeRepost := func() (ok bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				ok = false
+			}
+		}()
+		return repost()
+	}
+
 	var msgsSinceLast int
 	var idleArmed bool
 
@@ -174,12 +183,10 @@ func Run(cfg Config, msgCh <-chan struct{}, stopCh <-chan struct{}, repost func(
 			}
 
 		case <-timeThreshC():
-			if msgsSinceLast >= 1 {
-				arm()
-			}
+			arm()
 
 		case <-idleTimerC():
-			if repost() {
+			if safeRepost() {
 				resetAll()
 			} else {
 				idleTimer = nil
@@ -187,7 +194,7 @@ func Run(cfg Config, msgCh <-chan struct{}, stopCh <-chan struct{}, repost func(
 
 		case <-maxTimerC():
 			if msgsSinceLast >= 1 {
-				if repost() {
+				if safeRepost() {
 					resetAll()
 				} else {
 					maxTimer.Reset(maxIdle)
