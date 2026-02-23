@@ -52,6 +52,57 @@ func (b *Bot) registerAllCommands() error {
 			},
 		})
 
+		// /s
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:        "s",
+			Description: "Post a shortcut response",
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionString{
+					Name:         "shortcut",
+					Description:  "Shortcut name",
+					Required:     true,
+					Autocomplete: true,
+				},
+			},
+		})
+
+		// /sconfig
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "sconfig",
+			Description:              "Configure shortcuts",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "set",
+					Description: "Set a shortcut with one or more responses",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionString{
+							Name:         "shortcut",
+							Description:  "Shortcut name",
+							Required:     true,
+							Autocomplete: true,
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "remove",
+					Description: "Remove a shortcut",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionString{
+							Name:         "shortcut",
+							Description:  "Shortcut name",
+							Required:     true,
+							Autocomplete: true,
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "list",
+					Description: "List all shortcuts",
+				},
+			},
+		})
+
 		// /topposters
 		if _, ok := topPostersConfigs[guildSnowflake]; ok {
 			commands = append(commands, discord.SlashCommandCreate{
@@ -157,6 +208,10 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleModLogMenu(e)
 	case "topposters":
 		b.handleTopPosters(e)
+	case "s":
+		b.handleShortcut(e)
+	case "sconfig":
+		b.handleShortcutConfig(e)
 	}
 }
 
@@ -175,6 +230,11 @@ func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
 			b.handleEditModalSubmit(e, tmpl)
 			return
 		}
+	}
+
+	if strings.HasPrefix(customID, "sconfig_set_") {
+		b.handleShortcutConfigSetModal(e)
+		return
 	}
 
 	if strings.HasPrefix(customID, "modlog_") {

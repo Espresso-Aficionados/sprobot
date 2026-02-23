@@ -19,6 +19,7 @@ type Bot struct {
 	topPosters map[snowflake.ID]*guildPostCounts
 	posterRole map[snowflake.ID]*posterRoleState
 	tickets    map[snowflake.ID]*ticketState
+	shortcuts  map[snowflake.ID]*shortcutState
 }
 
 func New(token string) (*Bot, error) {
@@ -33,6 +34,7 @@ func New(token string) (*Bot, error) {
 		topPosters: make(map[snowflake.ID]*guildPostCounts),
 		posterRole: make(map[snowflake.ID]*posterRoleState),
 		tickets:    make(map[snowflake.ID]*ticketState),
+		shortcuts:  make(map[snowflake.ID]*shortcutState),
 	}
 
 	client, err := disgo.New(token,
@@ -73,6 +75,7 @@ func (b *Bot) Run() error {
 	b.loadTopPosters()
 	b.loadPosterRole()
 	b.loadTickets()
+	b.loadShortcuts()
 	b.ensureTicketPanels()
 	if err := b.registerAllCommands(); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
@@ -81,10 +84,12 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.PingHealthcheck)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.saveTopPosters)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.savePosterRole)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.saveShortcuts)
 
 	botutil.WaitForShutdown(b.Log, "Bot")
 	b.saveTopPosters()
 	b.savePosterRole()
 	b.saveTickets()
+	b.saveShortcuts()
 	return nil
 }

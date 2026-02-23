@@ -35,6 +35,12 @@ func (b *Bot) handleWiki(e *events.ApplicationCommandInteractionCreate) {
 }
 
 func (b *Bot) handleAutocomplete(e *events.AutocompleteInteractionCreate) {
+	switch e.Data.CommandName {
+	case "s", "sconfig":
+		b.handleShortcutAutocomplete(e)
+		return
+	}
+
 	current := strings.ToLower(e.Data.String("page"))
 	var choices []discord.AutocompleteChoice
 
