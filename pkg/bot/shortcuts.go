@@ -131,6 +131,8 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 	st.indices[name] = (idx + 1) % n
 	st.mu.Unlock()
 
+	response = expandShortcutVars(response, e.User().ID)
+
 	username := getNickOrName(e.Member())
 	e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{{
@@ -141,6 +143,12 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 			},
 		}},
 	})
+}
+
+// expandShortcutVars replaces template placeholders in a shortcut response.
+// Currently supports [user] → <@userID>.
+func expandShortcutVars(response string, userID snowflake.ID) string {
+	return strings.ReplaceAll(response, "[user]", fmt.Sprintf("<@%d>", userID))
 }
 
 func (b *Bot) handleShortcutAutocomplete(e *events.AutocompleteInteractionCreate) {

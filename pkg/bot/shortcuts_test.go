@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/disgoorg/snowflake/v2"
 )
 
 func TestShortcutStateJSONRoundTrip(t *testing.T) {
@@ -244,6 +246,27 @@ func TestShortcutResponseFilterPreservesMultiline(t *testing.T) {
 	}
 	if got[0] != "line 1\nline 2\nline 3" {
 		t.Errorf("multiline response should be preserved, got %q", got[0])
+	}
+}
+
+func TestExpandShortcutVars(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		userID   uint64
+		expected string
+	}{
+		{"basic", "Welcome [user]!", 123, "Welcome <@123>!"},
+		{"multiple", "[user] and [user]", 456, "<@456> and <@456>"},
+		{"no placeholder", "Hello world", 789, "Hello world"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := expandShortcutVars(tt.input, snowflake.ID(tt.userID))
+			if got != tt.expected {
+				t.Errorf("expandShortcutVars(%q, %d) = %q, want %q", tt.input, tt.userID, got, tt.expected)
+			}
+		})
 	}
 }
 
