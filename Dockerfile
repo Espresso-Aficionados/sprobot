@@ -6,6 +6,7 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd/ cmd/
 COPY pkg/ pkg/
+RUN mkdir /empty-dir
 
 FROM base AS build-sprobot
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
@@ -25,8 +26,9 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM ${TARGET_DIST} AS prod
 ENV SPROBOT_ENV=prod
-VOLUME /sprobot-cache
 COPY --from=build-sprobot /sprobot /sprobot
+COPY --from=base --chown=nonroot:nonroot /empty-dir /sprobot-cache
+VOLUME /sprobot-cache
 USER nonroot:nonroot
 CMD ["/sprobot"]
 
