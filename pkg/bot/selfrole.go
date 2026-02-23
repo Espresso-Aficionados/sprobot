@@ -28,7 +28,7 @@ func getSelfroleConfig(env string) map[snowflake.ID][]selfroleConfig {
 			726985544038612993: {
 				{
 					ChannelID: 727325278820368456,
-					Message: `Want to share your pronouns? Clicking the reaction below will add a role that will allow other people to click your username and identify your pronouns! Please note that there is no need to share your pronouns if you don't want to for any reason.
+					Message: `Want to share your pronouns? Clicking the buttons below will add a role that will allow other people to click your username and identify your pronouns! Please note that there is no need to share your pronouns if you don't want to for any reason.
 
 :one: "Ask Me/Check Profile"
 :two: "They/them"
@@ -36,7 +36,7 @@ func getSelfroleConfig(env string) map[snowflake.ID][]selfroleConfig {
 :four: "He/him"
 :five: "It/its"
 
-If your chosen pronouns are not present and you would like them to be please make a ticket to let us know. We do ask you to respect other people and not make a joke of pronouns here on in bot profiles.
+If your chosen pronouns are not present and you would like them to be, please make a ticket to let us know. We do ask you to respect other people and not make a joke of pronouns here or in bot profiles.
 
 Made a mistake? Just click again to remove the role`,
 					Buttons: []selfroleButton{
@@ -196,6 +196,23 @@ func selfrolePanelNeedsUpdate(msg discord.Message, cfg selfroleConfig) bool {
 func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID snowflake.ID) {
 	guildID := e.GuildID()
 	if guildID == nil {
+		return
+	}
+
+	configs := getSelfroleConfig(b.Env)
+	valid := false
+	for _, cfg := range configs[*guildID] {
+		for _, btn := range cfg.Buttons {
+			if btn.RoleID == roleID {
+				valid = true
+				break
+			}
+		}
+		if valid {
+			break
+		}
+	}
+	if !valid {
 		return
 	}
 
