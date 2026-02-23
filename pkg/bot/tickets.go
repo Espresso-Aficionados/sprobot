@@ -17,36 +17,72 @@ import (
 type ticketConfig struct {
 	ChannelID        snowflake.ID
 	StaffRoleID      snowflake.ID
+	FAQChannel1      snowflake.ID // referenced in panel message
+	FAQChannel2      snowflake.ID // referenced in panel message
 	CounterOffset    int
-	PanelMessage     string
 	PanelButtonLabel string
 	TicketIntro      string // supports %s for user mention
 	CloseButtonLabel string
 }
+
+// panelMessage returns the formatted panel text with role and channel mentions.
+func (cfg ticketConfig) panelMessage() string {
+	return fmt.Sprintf(`**Open a ticket!**
+Click the button below, and one of our <@&%d> will be with you shortly!
+
+Questions regarding buy/sell/trade have been answered in <#%d> and <#%d>. We do not make exceptions for the policy and will not answer questions about specific requirements for access.
+
+Possible Reasons to open a ticket are:
+- Make a private suggestion to the @Staff about a way we can improve the server!
+- Get some help working out an issue you have with a server member.
+- Report a technical problem to the @Staff.
+- Any other issue that needs resolved by a member of our team.
+- Apply for the professional role. Please send a couple lines about your experience so we know more about you!
+
+Please don't use the tickets for joke posts; we try to respond quickly to tickets so we'll get pulled away from something important to answer.`,
+		cfg.StaffRoleID, cfg.FAQChannel1, cfg.FAQChannel2)
+}
+
+const introMessage = `Hello, %s! Thank you for contacting support.
+Please describe your issue and wait for a response.
+
+We've had a lot of questions about access to buying, selling, and trading recently. If this question is in regards to that topic, please see the answers below.
+
+**Marketplace Access FAQ:**
+**How do I (re)gain access to the Marketplace?**
+Simple - by interacting in the rest of the server. We are first and foremost a community server, not a buy/sell/trade server. As a matter of protecting members from fraudulent activity as well as philosophically, we only want people who engage in the server otherwise to have access.
+
+**How much does it take to (re)gain access?**
+For what I should hope are fairly obvious reasons, we will not be revealing the exact parameters for gaining access so it is harder to game.
+
+**Will my access lapse if I don't interact in the server for some time?**
+No - once you have access you will always have access, unless removed manually by staff.`
 
 func getTicketConfig(env string) map[snowflake.ID]ticketConfig {
 	switch env {
 	case "prod":
 		return map[snowflake.ID]ticketConfig{
 			726985544038612993: {
-				ChannelID:        0, // TODO: fill in
-				StaffRoleID:      0, // TODO: fill in
-				CounterOffset:    0,
-				PanelMessage:     "Need help? Click the button below to open a private ticket.",
+				ChannelID:        733016849561944156,
+				StaffRoleID:      738986689749450769,
+				FAQChannel1:      727212292684644412,
+				FAQChannel2:      727325278820368456,
+				CounterOffset:    300,
 				PanelButtonLabel: "Open Ticket",
-				TicketIntro:      "Hello %s! A staff member will be with you shortly.",
+				TicketIntro:      introMessage,
 				CloseButtonLabel: "Close Ticket",
 			},
 		}
 	case "dev":
 		return map[snowflake.ID]ticketConfig{
 			1013566342345019512: {
-				ChannelID:        1475318848956661921, // TODO: fill in
-				StaffRoleID:      1015493549430685706, // TODO: fill in
+				ChannelID:        1475318848956661921,
+				StaffRoleID:      1015493549430685706,
+				FAQChannel1:      1019680095893471322,
+				FAQChannel2:      1013566342865092671,
 				CounterOffset:    40,
-				PanelMessage:     "Need help? Click the button below to open a private ticket.",
 				PanelButtonLabel: "Open Ticket",
-				TicketIntro:      "Hello %s! A staff member will be with you shortly.",
+				TicketIntro:      introMessage,
 				CloseButtonLabel: "Close Ticket",
 			},
 		}
@@ -130,7 +166,7 @@ func (b *Bot) ensureTicketPanels() {
 }
 
 func ticketPanelEmbed(cfg ticketConfig) discord.Embed {
-	return discord.Embed{Description: cfg.PanelMessage}
+	return discord.Embed{Description: cfg.panelMessage()}
 }
 
 func ticketPanelButton(cfg ticketConfig) discord.ButtonComponent {
