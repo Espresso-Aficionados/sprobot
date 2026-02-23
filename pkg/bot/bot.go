@@ -63,6 +63,8 @@ func New(token string) (*Bot, error) {
 func (b *Bot) Run() error {
 	ctx := context.Background()
 
+	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045764096", b.Client.ApplicationID))
+
 	if err := b.Client.OpenGateway(ctx); err != nil {
 		return err
 	}
