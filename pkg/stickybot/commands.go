@@ -8,9 +8,10 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
-	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/omit"
 	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/botutil"
 )
 
 const (
@@ -60,13 +61,7 @@ func (b *Bot) registerAllCommands() error {
 		},
 	}
 
-	for _, guildID := range getGuildIDs(b.env) {
-		if _, err := b.client.Rest.SetGuildCommands(b.client.ApplicationID, guildID, commands); err != nil {
-			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
-		}
-		b.log.Info("Registered guild commands", "guild_id", guildID, "count", len(commands))
-	}
-	return nil
+	return botutil.RegisterGuildCommands(b.Client, b.Env, commands, b.Log)
 }
 
 func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
@@ -111,7 +106,7 @@ func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
 func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.MessageCommandInteractionData)
 	if !ok {
-		respondEphemeral(e, "Something went wrong.")
+		botutil.RespondEphemeral(e, "Something went wrong.")
 		return
 	}
 	msg := data.TargetMessage()
@@ -160,7 +155,7 @@ func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 		},
 	})
 	if err != nil {
-		b.log.Error("Failed to show sticky config modal", "error", err)
+		b.Log.Error("Failed to show sticky config modal", "error", err)
 	}
 }
 
@@ -169,7 +164,7 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 
 	parts := strings.SplitN(strings.TrimPrefix(e.Data.CustomID, modalPrefix), "_", 2)
 	if len(parts) != 2 {
-		respondEphemeral(e, "Something went wrong.")
+		botutil.RespondEphemeral(e, "Something went wrong.")
 		return
 	}
 	channelID, _ := snowflake.Parse(parts[0])
@@ -182,39 +177,39 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 
 	minIdle, err := strconv.Atoi(minIdleStr)
 	if err != nil || minIdle < 0 {
-		respondEphemeral(e, "Min idle must be a non-negative number.")
+		botutil.RespondEphemeral(e, "Min idle must be a non-negative number.")
 		return
 	}
 	maxIdle, err := strconv.Atoi(maxIdleStr)
 	if err != nil || maxIdle < 1 {
-		respondEphemeral(e, "Max idle must be a positive number.")
+		botutil.RespondEphemeral(e, "Max idle must be a positive number.")
 		return
 	}
 	if maxIdle <= minIdle {
-		respondEphemeral(e, "Max idle must be greater than min idle.")
+		botutil.RespondEphemeral(e, "Max idle must be greater than min idle.")
 		return
 	}
 	threshold, err := strconv.Atoi(threshStr)
 	if err != nil || threshold < 0 {
-		respondEphemeral(e, "Message threshold must be a non-negative number.")
+		botutil.RespondEphemeral(e, "Message threshold must be a non-negative number.")
 		return
 	}
 	timeThreshold, err := strconv.Atoi(timeThreshStr)
 	if err != nil || timeThreshold < 0 {
-		respondEphemeral(e, "Time threshold must be a non-negative number.")
+		botutil.RespondEphemeral(e, "Time threshold must be a non-negative number.")
 		return
 	}
 	if threshold == 0 && timeThreshold == 0 {
-		respondEphemeral(e, "At least one of message threshold or time threshold must be greater than 0.")
+		botutil.RespondEphemeral(e, "At least one of message threshold or time threshold must be greater than 0.")
 		return
 	}
 	// Defer since fetching + re-hosting may take a moment
 	e.DeferCreateMessage(true)
 
 	// Fetch the original message
-	msg, err := b.client.Rest.GetMessage(channelID, messageID)
+	msg, err := b.Client.Rest.GetMessage(channelID, messageID)
 	if err != nil {
-		b.log.Error("Failed to fetch target message", "error", err)
+		b.Log.Error("Failed to fetch target message", "error", err)
 		b.followup(e, "Failed to fetch the target message.")
 		return
 	}
@@ -224,9 +219,9 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	guildStr := fmt.Sprintf("%d", guildID)
 	var fileURLs []string
 	for _, att := range msg.Attachments {
-		s3URL, err := b.s3.SaveStickyFile(ctx, guildStr, att.ProxyURL)
+		s3URL, err := b.S3.SaveStickyFile(ctx, guildStr, att.ProxyURL)
 		if err != nil {
-			b.log.Error("Failed to re-host attachment", "error", err, "url", att.ProxyURL)
+			b.Log.Error("Failed to re-host attachment", "error", err, "url", att.ProxyURL)
 			continue
 		}
 		fileURLs = append(fileURLs, s3URL)
@@ -256,12 +251,12 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	}
 
 	// Post the sticky immediately
-	sent, err := b.client.Rest.CreateMessage(channelID, discord.MessageCreate{
+	sent, err := b.Client.Rest.CreateMessage(channelID, discord.MessageCreate{
 		Content: s.Content,
 		Embeds:  s.Embeds,
 	})
 	if err != nil {
-		b.log.Error("Failed to post initial sticky", "error", err)
+		b.Log.Error("Failed to post initial sticky", "error", err)
 		b.followup(e, "Failed to post the sticky message.")
 		return
 	}
@@ -275,7 +270,7 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	if old, ok := b.stickies[guildID][channelID]; ok {
 		b.stopStickyGoroutine(old)
 		if old.LastMessageID != 0 {
-			_ = b.client.Rest.DeleteMessage(channelID, old.LastMessageID)
+			_ = b.Client.Rest.DeleteMessage(channelID, old.LastMessageID)
 		}
 	}
 	b.stickies[guildID][channelID] = s
@@ -293,7 +288,7 @@ func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {
 
 	s := b.getSticky(guildID, channelID)
 	if s == nil {
-		respondEphemeral(e, "No sticky in this channel.")
+		botutil.RespondEphemeral(e, "No sticky in this channel.")
 		return
 	}
 
@@ -301,7 +296,7 @@ func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {
 	s.Active = false
 
 	b.saveStickiesForGuild(guildID)
-	respondEphemeral(e, "Sticky paused.")
+	botutil.RespondEphemeral(e, "Sticky paused.")
 }
 
 func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
@@ -310,11 +305,11 @@ func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
 
 	s := b.getSticky(guildID, channelID)
 	if s == nil {
-		respondEphemeral(e, "No sticky in this channel.")
+		botutil.RespondEphemeral(e, "No sticky in this channel.")
 		return
 	}
 	if s.Active {
-		respondEphemeral(e, "Sticky is already active.")
+		botutil.RespondEphemeral(e, "Sticky is already active.")
 		return
 	}
 
@@ -322,7 +317,7 @@ func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
 	b.startStickyGoroutine(s)
 
 	b.saveStickiesForGuild(guildID)
-	respondEphemeral(e, "Sticky resumed.")
+	botutil.RespondEphemeral(e, "Sticky resumed.")
 }
 
 func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) {
@@ -331,13 +326,13 @@ func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) 
 
 	channels, ok := b.stickies[guildID]
 	if !ok {
-		respondEphemeral(e, "No sticky in this channel.")
+		botutil.RespondEphemeral(e, "No sticky in this channel.")
 		return
 	}
 
 	s, ok := channels[channelID]
 	if !ok {
-		respondEphemeral(e, "No sticky in this channel.")
+		botutil.RespondEphemeral(e, "No sticky in this channel.")
 		return
 	}
 
@@ -345,12 +340,12 @@ func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) 
 
 	// Delete the current sticky message (best-effort)
 	if s.LastMessageID != 0 {
-		_ = b.client.Rest.DeleteMessage(channelID, s.LastMessageID)
+		_ = b.Client.Rest.DeleteMessage(channelID, s.LastMessageID)
 	}
 
 	delete(channels, channelID)
 	b.saveStickiesForGuild(guildID)
-	respondEphemeral(e, "Sticky removed.")
+	botutil.RespondEphemeral(e, "Sticky removed.")
 }
 
 func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {
@@ -358,7 +353,7 @@ func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {
 
 	channels, ok := b.stickies[guildID]
 	if !ok || len(channels) == 0 {
-		respondEphemeral(e, "No stickies in this server.")
+		botutil.RespondEphemeral(e, "No stickies in this server.")
 		return
 	}
 
@@ -372,7 +367,7 @@ func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {
 		lines = append(lines, fmt.Sprintf("<#%d> — %s — %q", s.ChannelID, status, previewStr))
 	}
 
-	respondEphemeral(e, strings.Join(lines, "\n"))
+	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
 }
 
 func (b *Bot) getSticky(guildID, channelID snowflake.ID) *stickyMessage {
@@ -383,19 +378,8 @@ func (b *Bot) getSticky(guildID, channelID snowflake.ID) *stickyMessage {
 	return channels[channelID]
 }
 
-type messageResponder interface {
-	CreateMessage(discord.MessageCreate, ...rest.RequestOpt) error
-}
-
-func respondEphemeral(e messageResponder, content string) {
-	e.CreateMessage(discord.MessageCreate{
-		Content: content,
-		Flags:   discord.MessageFlagEphemeral,
-	})
-}
-
 func (b *Bot) followup(e *events.ModalSubmitInteractionCreate, content string) {
-	b.client.Rest.CreateFollowupMessage(b.client.ApplicationID, e.Token(), discord.MessageCreate{
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Content: content,
 		Flags:   discord.MessageFlagEphemeral,
 	})

@@ -3,41 +3,30 @@ package bot
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"os"
-	"os/signal"
-	"sync/atomic"
-	"syscall"
+	"time"
 
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
-	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/sadbox/sprobot/pkg/botutil"
 )
 
 type Bot struct {
-	client     *bot.Client
-	s3         *s3client.Client
-	env        string
-	log        *slog.Logger
+	*botutil.BaseBot
 	skipList   map[int]string // forum reminder skip list, keyed by thread ID
-	ready      atomic.Bool
 	topPosters map[snowflake.ID]*guildPostCounts
 }
 
 func New(token string) (*Bot, error) {
-	s3, err := s3client.New()
+	base, err := botutil.NewBaseBot("SPROBOT_ENV")
 	if err != nil {
 		return nil, err
 	}
 
 	b := &Bot{
-		s3:         s3,
-		env:        os.Getenv("SPROBOT_ENV"),
-		log:        slog.Default(),
+		BaseBot:    base,
 		skipList:   make(map[int]string),
 		topPosters: make(map[snowflake.ID]*guildPostCounts),
 	}
@@ -51,7 +40,7 @@ func New(token string) (*Bot, error) {
 				gateway.IntentMessageContent,
 			),
 		),
-		bot.WithEventListenerFunc(b.onReady),
+		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.onCommand),
 		bot.WithEventListenerFunc(b.onModal),
 		bot.WithEventListenerFunc(b.onComponent),
@@ -62,36 +51,27 @@ func New(token string) (*Bot, error) {
 		return nil, err
 	}
 
-	b.client = client
+	b.Client = client
 	return b, nil
 }
 
 func (b *Bot) Run() error {
 	ctx := context.Background()
 
-	if err := b.client.OpenGateway(ctx); err != nil {
+	if err := b.Client.OpenGateway(ctx); err != nil {
 		return err
 	}
-	defer b.client.Close(ctx)
+	defer b.Client.Close(ctx)
 
 	b.loadTopPosters()
 	if err := b.registerAllCommands(); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
 	}
 	go b.forumReminderLoop()
-	go b.healthcheckLoop()
-	go b.topPostersSaveLoop()
+	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.PingHealthcheck)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.saveTopPosters)
 
-	b.log.Info("Bot is running. Press Ctrl+C to exit.")
-	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM)
-	<-sc
-	b.log.Info("Shutting down.")
+	botutil.WaitForShutdown(b.Log, "Bot")
 	b.saveTopPosters()
 	return nil
-}
-
-func (b *Bot) onReady(_ *events.Ready) {
-	b.log.Info("Logged in")
-	b.ready.Store(true)
 }

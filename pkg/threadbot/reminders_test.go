@@ -2,100 +2,30 @@ package threadbot
 
 import (
 	"encoding/json"
-	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/disgoorg/snowflake/v2"
-	lru "github.com/hashicorp/golang-lru/v2"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/sadbox/sprobot/pkg/testutil"
 )
-
-// fakeS3 is an in-memory S3-compatible server for testing.
-type fakeS3 struct {
-	mu      sync.Mutex
-	objects map[string][]byte
-}
-
-func newFakeS3() *fakeS3 {
-	return &fakeS3{objects: make(map[string][]byte)}
-}
-
-func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	key := r.URL.Path
-
-	switch r.Method {
-	case http.MethodGet:
-		data, ok := f.objects[key]
-		if !ok {
-			w.Header().Set("Content-Type", "application/xml")
-			w.WriteHeader(http.StatusNotFound)
-			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>Not found</Message></Error>`)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write(data)
-
-	case http.MethodPut:
-		data, _ := io.ReadAll(r.Body)
-		f.objects[key] = data
-		w.WriteHeader(http.StatusOK)
-
-	case http.MethodDelete:
-		delete(f.objects, key)
-		w.WriteHeader(http.StatusNoContent)
-
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
-}
-
-func newTestS3Client(t *testing.T, server *httptest.Server) *s3client.Client {
-	t.Helper()
-	endpoint := server.URL
-	bucket := "test-bucket"
-
-	cache, err := lru.New[string, map[string]string](500)
-	if err != nil {
-		t.Fatalf("creating cache: %v", err)
-	}
-
-	client := s3.New(s3.Options{
-		Region:       "us-east-1",
-		BaseEndpoint: &endpoint,
-		Credentials:  credentials.NewStaticCredentialsProvider("key", "secret", ""),
-		UsePathStyle: true,
-	})
-
-	return s3client.NewDirect(client, bucket, endpoint, cache, discardLogger())
-}
-
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
 
 func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {
 	t.Helper()
 	return &Bot{
-		s3:        s3c,
-		env:       "dev",
-		log:       discardLogger(),
+		BaseBot: &botutil.BaseBot{
+			S3:  s3c,
+			Env: "dev",
+			Log: testutil.DiscardLogger(),
+		},
 		reminders: make(map[snowflake.ID]map[snowflake.ID]*threadReminder),
 	}
 }
 
-func TestToExportAndFromExport(t *testing.T) {
+func TestJSONRoundTrip(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	r := &threadReminder{
 		ChannelID:         100,
@@ -110,116 +40,70 @@ func TestToExportAndFromExport(t *testing.T) {
 		TimeThresholdMins: 60,
 	}
 
-	e := r.toExport()
-
-	if e.ChannelID != 100 {
-		t.Errorf("ChannelID = %d, want 100", e.ChannelID)
-	}
-	if e.GuildID != 200 {
-		t.Errorf("GuildID = %d, want 200", e.GuildID)
-	}
-	if e.EnabledBy != 300 {
-		t.Errorf("EnabledBy = %d, want 300", e.EnabledBy)
-	}
-	if !e.Enabled {
-		t.Error("Enabled should be true")
-	}
-	if e.LastMessageID != 400 {
-		t.Errorf("LastMessageID = %d, want 400", e.LastMessageID)
-	}
-	if !e.LastPostTime.Equal(now) {
-		t.Errorf("LastPostTime = %v, want %v", e.LastPostTime, now)
-	}
-	if e.MinIdleMins != 30 {
-		t.Errorf("MinIdleMins = %d, want 30", e.MinIdleMins)
-	}
-	if e.MaxIdleMins != 720 {
-		t.Errorf("MaxIdleMins = %d, want 720", e.MaxIdleMins)
-	}
-	if e.MsgThreshold != 30 {
-		t.Errorf("MsgThreshold = %d, want 30", e.MsgThreshold)
-	}
-	if e.TimeThresholdMins != 60 {
-		t.Errorf("TimeThresholdMins = %d, want 60", e.TimeThresholdMins)
-	}
-
-	// Round-trip through fromExport
-	r2 := fromExport(e)
-	if r2.ChannelID != r.ChannelID {
-		t.Error("round-trip ChannelID mismatch")
-	}
-	if r2.EnabledBy != r.EnabledBy {
-		t.Error("round-trip EnabledBy mismatch")
-	}
-	if r2.Enabled != r.Enabled {
-		t.Error("round-trip Enabled mismatch")
-	}
-	if !r2.LastPostTime.Equal(r.LastPostTime) {
-		t.Error("round-trip LastPostTime mismatch")
-	}
-	// Channel fields should be nil after fromExport
-	if r2.msgCh != nil {
-		t.Error("msgCh should be nil after fromExport")
-	}
-	if r2.stopCh != nil {
-		t.Error("stopCh should be nil after fromExport")
-	}
-}
-
-func TestExportJSONRoundTrip(t *testing.T) {
-	now := time.Now().Truncate(time.Second)
-	e := reminderExport{
-		ChannelID:         100,
-		GuildID:           200,
-		EnabledBy:         300,
-		Enabled:           true,
-		LastMessageID:     400,
-		LastPostTime:      now,
-		MinIdleMins:       30,
-		MaxIdleMins:       720,
-		MsgThreshold:      30,
-		TimeThresholdMins: 60,
-	}
-
-	data, err := json.Marshal(e)
+	data, err := json.Marshal(r)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	var e2 reminderExport
-	if err := json.Unmarshal(data, &e2); err != nil {
+	var r2 threadReminder
+	if err := json.Unmarshal(data, &r2); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if e2.ChannelID != e.ChannelID {
-		t.Errorf("ChannelID = %d, want %d", e2.ChannelID, e.ChannelID)
+	if r2.ChannelID != r.ChannelID {
+		t.Errorf("ChannelID = %d, want %d", r2.ChannelID, r.ChannelID)
 	}
-	if e2.Enabled != e.Enabled {
-		t.Errorf("Enabled = %v, want %v", e2.Enabled, e.Enabled)
+	if r2.Enabled != r.Enabled {
+		t.Errorf("Enabled = %v, want %v", r2.Enabled, r.Enabled)
 	}
-	if e2.MinIdleMins != e.MinIdleMins {
-		t.Errorf("MinIdleMins = %d, want %d", e2.MinIdleMins, e.MinIdleMins)
+	if r2.MinIdleMins != r.MinIdleMins {
+		t.Errorf("MinIdleMins = %d, want %d", r2.MinIdleMins, r.MinIdleMins)
 	}
-	if e2.MaxIdleMins != e.MaxIdleMins {
-		t.Errorf("MaxIdleMins = %d, want %d", e2.MaxIdleMins, e.MaxIdleMins)
+	if r2.MaxIdleMins != r.MaxIdleMins {
+		t.Errorf("MaxIdleMins = %d, want %d", r2.MaxIdleMins, r.MaxIdleMins)
 	}
-	if e2.MsgThreshold != e.MsgThreshold {
-		t.Errorf("MsgThreshold = %d, want %d", e2.MsgThreshold, e.MsgThreshold)
+	if r2.MsgThreshold != r.MsgThreshold {
+		t.Errorf("MsgThreshold = %d, want %d", r2.MsgThreshold, r.MsgThreshold)
 	}
-	if e2.TimeThresholdMins != e.TimeThresholdMins {
-		t.Errorf("TimeThresholdMins = %d, want %d", e2.TimeThresholdMins, e.TimeThresholdMins)
+	if r2.TimeThresholdMins != r.TimeThresholdMins {
+		t.Errorf("TimeThresholdMins = %d, want %d", r2.TimeThresholdMins, r.TimeThresholdMins)
 	}
-	if !e2.LastPostTime.Equal(e.LastPostTime) {
+	if !r2.LastPostTime.Equal(r.LastPostTime) {
 		t.Errorf("LastPostTime mismatch after JSON round-trip")
+	}
+	// handle should be nil after unmarshal
+	if r2.handle != nil {
+		t.Error("handle should be nil after unmarshal")
+	}
+}
+
+func TestApplyDefaults(t *testing.T) {
+	r := &threadReminder{}
+	r.applyDefaults()
+	if r.MinIdleMins != 30 {
+		t.Errorf("MinIdleMins = %d, want 30", r.MinIdleMins)
+	}
+	if r.MaxIdleMins != 720 {
+		t.Errorf("MaxIdleMins = %d, want 720", r.MaxIdleMins)
+	}
+	if r.MsgThreshold != 30 {
+		t.Errorf("MsgThreshold = %d, want 30", r.MsgThreshold)
+	}
+
+	// Non-zero values should not be overwritten
+	r2 := &threadReminder{MinIdleMins: 5, MaxIdleMins: 10, MsgThreshold: 2}
+	r2.applyDefaults()
+	if r2.MinIdleMins != 5 {
+		t.Errorf("MinIdleMins = %d, want 5", r2.MinIdleMins)
 	}
 }
 
 func TestLoadRemindersNotFound(t *testing.T) {
-	fake := newFakeS3()
+	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
 
-	c := newTestS3Client(t, server)
+	c := testutil.NewTestS3Client(t, server)
 	b := newTestBot(t, c)
 
 	// Should not panic or error on missing data
@@ -232,14 +116,14 @@ func TestLoadRemindersNotFound(t *testing.T) {
 }
 
 func TestLoadRemindersFromS3(t *testing.T) {
-	fake := newFakeS3()
+	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
 
-	c := newTestS3Client(t, server)
+	c := testutil.NewTestS3Client(t, server)
 
 	// Seed some reminders data — Enabled: false so no goroutine is started
-	exports := map[string]reminderExport{
+	reminders := map[string]*threadReminder{
 		"111": {
 			ChannelID:    111,
 			GuildID:      1013566342345019512,
@@ -250,10 +134,10 @@ func TestLoadRemindersFromS3(t *testing.T) {
 			MsgThreshold: 30,
 		},
 	}
-	data, _ := json.Marshal(exports)
-	fake.mu.Lock()
-	fake.objects["/test-bucket/threadreminders/1013566342345019512.json"] = data
-	fake.mu.Unlock()
+	data, _ := json.Marshal(reminders)
+	fake.Mu.Lock()
+	fake.Objects["/test-bucket/threadreminders/1013566342345019512.json"] = data
+	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
 	b.loadReminders()
@@ -279,11 +163,11 @@ func TestLoadRemindersFromS3(t *testing.T) {
 }
 
 func TestSaveRemindersForGuild(t *testing.T) {
-	fake := newFakeS3()
+	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
 
-	c := newTestS3Client(t, server)
+	c := testutil.NewTestS3Client(t, server)
 	b := newTestBot(t, c)
 
 	guildID := snowflake.ID(1013566342345019512)
@@ -302,45 +186,45 @@ func TestSaveRemindersForGuild(t *testing.T) {
 	b.saveRemindersForGuild(guildID)
 
 	// Verify written to S3
-	fake.mu.Lock()
-	data, ok := fake.objects["/test-bucket/threadreminders/1013566342345019512.json"]
-	fake.mu.Unlock()
+	fake.Mu.Lock()
+	data, ok := fake.Objects["/test-bucket/threadreminders/1013566342345019512.json"]
+	fake.Mu.Unlock()
 
 	if !ok {
 		t.Fatal("reminders not saved to S3")
 	}
 
-	var exports map[string]reminderExport
-	if err := json.Unmarshal(data, &exports); err != nil {
+	var saved map[string]*threadReminder
+	if err := json.Unmarshal(data, &saved); err != nil {
 		t.Fatalf("unmarshal saved data: %v", err)
 	}
 
-	e, ok := exports["222"]
+	r, ok := saved["222"]
 	if !ok {
 		t.Fatal("channel 222 not in saved data")
 	}
-	if e.EnabledBy != 333 {
-		t.Errorf("EnabledBy = %d, want 333", e.EnabledBy)
+	if r.EnabledBy != 333 {
+		t.Errorf("EnabledBy = %d, want 333", r.EnabledBy)
 	}
-	if e.MinIdleMins != 30 {
-		t.Errorf("MinIdleMins = %d, want 30", e.MinIdleMins)
+	if r.MinIdleMins != 30 {
+		t.Errorf("MinIdleMins = %d, want 30", r.MinIdleMins)
 	}
 }
 
 func TestSaveRemindersForGuildNoData(t *testing.T) {
-	fake := newFakeS3()
+	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
 
-	c := newTestS3Client(t, server)
+	c := testutil.NewTestS3Client(t, server)
 	b := newTestBot(t, c)
 
 	// Saving for a guild that isn't in the map should not panic
 	b.saveRemindersForGuild(999)
 
-	fake.mu.Lock()
-	_, ok := fake.objects["/test-bucket/threadreminders/999.json"]
-	fake.mu.Unlock()
+	fake.Mu.Lock()
+	_, ok := fake.Objects["/test-bucket/threadreminders/999.json"]
+	fake.Mu.Unlock()
 
 	if ok {
 		t.Error("should not write anything for unknown guild")
@@ -348,11 +232,11 @@ func TestSaveRemindersForGuildNoData(t *testing.T) {
 }
 
 func TestSaveAndLoadRoundTrip(t *testing.T) {
-	fake := newFakeS3()
+	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
 
-	c := newTestS3Client(t, server)
+	c := testutil.NewTestS3Client(t, server)
 	b := newTestBot(t, c)
 
 	now := time.Now().Truncate(time.Second)
@@ -413,11 +297,11 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 }
 
 func TestSaveAllReminders(t *testing.T) {
-	fake := newFakeS3()
+	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
 
-	c := newTestS3Client(t, server)
+	c := testutil.NewTestS3Client(t, server)
 	b := newTestBot(t, c)
 
 	guild1 := snowflake.ID(1013566342345019512)
@@ -427,9 +311,9 @@ func TestSaveAllReminders(t *testing.T) {
 
 	b.saveAllReminders()
 
-	fake.mu.Lock()
-	_, ok := fake.objects["/test-bucket/threadreminders/1013566342345019512.json"]
-	fake.mu.Unlock()
+	fake.Mu.Lock()
+	_, ok := fake.Objects["/test-bucket/threadreminders/1013566342345019512.json"]
+	fake.Mu.Unlock()
 
 	if !ok {
 		t.Error("saveAllReminders did not save guild data")
@@ -437,7 +321,9 @@ func TestSaveAllReminders(t *testing.T) {
 }
 
 func TestStopReminderGoroutineIdempotent(t *testing.T) {
-	b := &Bot{log: discardLogger()}
+	b := &Bot{
+		BaseBot: &botutil.BaseBot{Log: testutil.DiscardLogger()},
+	}
 	r := &threadReminder{
 		ChannelID:    100,
 		MinIdleMins:  30,
@@ -446,30 +332,30 @@ func TestStopReminderGoroutineIdempotent(t *testing.T) {
 	}
 
 	b.startReminderGoroutine(r)
-	if r.msgCh == nil || r.stopCh == nil {
-		t.Fatal("channels should be set after start")
+	if r.handle == nil {
+		t.Fatal("handle should be set after start")
 	}
 
 	b.stopReminderGoroutine(r)
-	if r.msgCh != nil || r.stopCh != nil {
-		t.Error("channels should be nil after stop")
+	if r.handle != nil {
+		t.Error("handle should be nil after stop")
 	}
 
-	// Second stop should not panic
-	b.stopReminderGoroutine(r)
+	// Second stop should not panic (handle is nil, Stop is nil-safe)
+	r.handle.Stop()
 }
 
 func TestLoadRemindersInvalidJSON(t *testing.T) {
-	fake := newFakeS3()
+	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
 
-	c := newTestS3Client(t, server)
+	c := testutil.NewTestS3Client(t, server)
 
 	// Seed invalid JSON
-	fake.mu.Lock()
-	fake.objects["/test-bucket/threadreminders/1013566342345019512.json"] = []byte("not valid json")
-	fake.mu.Unlock()
+	fake.Mu.Lock()
+	fake.Objects["/test-bucket/threadreminders/1013566342345019512.json"] = []byte("not valid json")
+	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
 	// Should not panic
@@ -482,11 +368,11 @@ func TestLoadRemindersInvalidJSON(t *testing.T) {
 }
 
 func TestSaveRemindersMultipleChannels(t *testing.T) {
-	fake := newFakeS3()
+	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
 
-	c := newTestS3Client(t, server)
+	c := testutil.NewTestS3Client(t, server)
 	b := newTestBot(t, c)
 
 	guildID := snowflake.ID(1013566342345019512)

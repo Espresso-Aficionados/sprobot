@@ -14,7 +14,7 @@ import (
 )
 
 func (b *Bot) handleDelete(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
-	b.log.Info("Processing delete",
+	b.Log.Info("Processing delete",
 		"user_id", userIDStr(e),
 		"template", tmpl.Name,
 		"guild_id", guildIDStr(e),
@@ -54,7 +54,7 @@ func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
 		return
 	}
 
-	templates := sprobot.AllTemplates(b.env)
+	templates := sprobot.AllTemplates(b.Env)
 	for _, tmpls := range templates {
 		for _, tmpl := range tmpls {
 			switch customID {
@@ -112,9 +112,9 @@ func (b *Bot) confirmDeleteProfile(e *events.ComponentInteractionCreate, tmpl sp
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	err := b.s3.DeleteProfile(context.Background(), tmpl, guildStr, userStr)
+	err := b.S3.DeleteProfile(context.Background(), tmpl, guildStr, userStr)
 	if err != nil {
-		b.log.Error("Failed to delete profile", "error", err)
+		b.Log.Error("Failed to delete profile", "error", err)
 		content := "Oops! Something went wrong."
 		e.UpdateMessage(discord.MessageUpdate{
 			Content:    &content,
@@ -133,7 +133,7 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	profile, err := b.s3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
+	profile, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
 	if err != nil {
 		if errors.Is(err, s3client.ErrNotFound) {
 			content := "Deleted!"
@@ -143,7 +143,7 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 			})
 			return
 		}
-		b.log.Error("Failed to fetch profile for image delete", "error", err)
+		b.Log.Error("Failed to fetch profile for image delete", "error", err)
 		return
 	}
 
@@ -158,9 +158,9 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 	}
 
 	if hasFields {
-		_, userErr, err := b.s3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
+		_, userErr, err := b.S3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
 		if err != nil {
-			b.log.Error("Failed to save profile after image delete", "error", err)
+			b.Log.Error("Failed to save profile after image delete", "error", err)
 			return
 		}
 		if userErr != "" {
@@ -172,8 +172,8 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 			return
 		}
 	} else {
-		if err := b.s3.DeleteProfile(context.Background(), tmpl, guildStr, userStr); err != nil {
-			b.log.Error("Failed to delete empty profile", "error", err)
+		if err := b.S3.DeleteProfile(context.Background(), tmpl, guildStr, userStr); err != nil {
+			b.Log.Error("Failed to delete empty profile", "error", err)
 			return
 		}
 	}

@@ -1,9 +1,9 @@
-package stickybot
+package botutil
 
 import "testing"
 
 func TestGetGuildIDsDev(t *testing.T) {
-	ids := getGuildIDs("dev")
+	ids := GetGuildIDs("dev")
 	if ids == nil {
 		t.Fatal("dev guild IDs is nil")
 	}
@@ -16,7 +16,7 @@ func TestGetGuildIDsDev(t *testing.T) {
 }
 
 func TestGetGuildIDsProd(t *testing.T) {
-	ids := getGuildIDs("prod")
+	ids := GetGuildIDs("prod")
 	if ids == nil {
 		t.Fatal("prod guild IDs is nil")
 	}
@@ -29,10 +29,10 @@ func TestGetGuildIDsProd(t *testing.T) {
 }
 
 func TestGetGuildIDsUnknown(t *testing.T) {
-	if getGuildIDs("staging") != nil {
+	if GetGuildIDs("staging") != nil {
 		t.Error("expected nil for unknown env")
 	}
-	if getGuildIDs("") != nil {
+	if GetGuildIDs("") != nil {
 		t.Error("expected nil for empty env")
 	}
 }

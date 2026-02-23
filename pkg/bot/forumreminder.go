@@ -42,7 +42,7 @@ func getThreadHelpConfig(env string) map[snowflake.ID]threadHelpInfo {
 
 func (b *Bot) forumReminderLoop() {
 	// Wait for the bot to be ready
-	for !b.ready.Load() {
+	for !b.Ready.Load() {
 		time.Sleep(1 * time.Second)
 	}
 
@@ -59,24 +59,24 @@ func (b *Bot) forumReminderLoop() {
 func (b *Bot) sendForumReminders() {
 	defer func() {
 		if r := recover(); r != nil {
-			b.log.Error("Panic in forum reminder", "error", r)
+			b.Log.Error("Panic in forum reminder", "error", r)
 		}
 	}()
 
-	config := getThreadHelpConfig(b.env)
+	config := getThreadHelpConfig(b.Env)
 	if config == nil {
 		return
 	}
 
 	for channelID, info := range config {
-		channel, err := b.client.Rest.GetChannel(channelID)
+		channel, err := b.Client.Rest.GetChannel(channelID)
 		if err != nil {
-			b.log.Info("Unknown channel to check for old forum posts", "channel_id", channelID)
+			b.Log.Info("Unknown channel to check for old forum posts", "channel_id", channelID)
 			continue
 		}
 
 		if channel.Type() != discord.ChannelTypeGuildForum {
-			b.log.Info("Channel is not a ForumChannel", "channel_id", channelID, "type", channel.Type())
+			b.Log.Info("Channel is not a ForumChannel", "channel_id", channelID, "type", channel.Type())
 			continue
 		}
 
@@ -85,16 +85,16 @@ func (b *Bot) sendForumReminders() {
 			continue
 		}
 
-		b.log.Info("Scanning for threads",
+		b.Log.Info("Scanning for threads",
 			"guild_id", forumCh.GuildID(),
 			"channel_id", channelID,
 			"channel_name", channel.Name(),
 		)
 
 		// Get active threads for this guild
-		activeThreads, err := b.client.Rest.GetActiveGuildThreads(forumCh.GuildID())
+		activeThreads, err := b.Client.Rest.GetActiveGuildThreads(forumCh.GuildID())
 		if err != nil {
-			b.log.Error("Failed to get active threads", "error", err)
+			b.Log.Error("Failed to get active threads", "error", err)
 			continue
 		}
 
@@ -111,7 +111,7 @@ func (b *Bot) sendForumReminders() {
 func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
 	threadID := int(thread.ID())
 	if reason, ok := b.skipList[threadID]; ok {
-		b.log.Info("Thread is in the skip_list",
+		b.Log.Info("Thread is in the skip_list",
 			"reason", reason,
 			"thread_id", thread.ID(),
 			"thread_name", thread.Name(),
@@ -120,7 +120,7 @@ func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
 	}
 
 	if thread.ThreadMetadata.Archived || thread.ThreadMetadata.Locked {
-		b.log.Info("Thread is locked/archived, skipping",
+		b.Log.Info("Thread is locked/archived, skipping",
 			"thread_id", thread.ID(),
 			"thread_name", thread.Name(),
 		)
@@ -132,7 +132,7 @@ func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
 	threadAge := time.Since(createdAt)
 
 	if threadAge < info.MaxThreadAge {
-		b.log.Info(fmt.Sprintf("Thread is only %s old, waiting until %s", threadAge, info.MaxThreadAge),
+		b.Log.Info(fmt.Sprintf("Thread is only %s old, waiting until %s", threadAge, info.MaxThreadAge),
 			"thread_id", thread.ID(),
 			"thread_name", thread.Name(),
 		)
@@ -140,9 +140,9 @@ func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
 	}
 
 	// Check message history
-	messages, err := b.client.Rest.GetMessages(thread.ID(), 0, 0, 0, info.HistoryLimit)
+	messages, err := b.Client.Rest.GetMessages(thread.ID(), 0, 0, 0, info.HistoryLimit)
 	if err != nil {
-		b.log.Error("Failed to get thread messages", "error", err, "thread_id", thread.ID())
+		b.Log.Error("Failed to get thread messages", "error", err, "thread_id", thread.ID())
 		return
 	}
 
@@ -156,19 +156,19 @@ func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
 
 	if foundNonOP {
 		reason := "Thread has a reply from a non-op author, skipping"
-		b.log.Info(reason, "thread_id", thread.ID(), "thread_name", thread.Name())
+		b.Log.Info(reason, "thread_id", thread.ID(), "thread_name", thread.Name())
 		b.skipList[threadID] = reason
 		return
 	}
 
 	if len(messages) >= info.HistoryLimit {
 		reason := fmt.Sprintf("Thread has too many replies (>%d), skipping", info.HistoryLimit)
-		b.log.Info(reason, "thread_id", thread.ID(), "thread_name", thread.Name())
+		b.Log.Info(reason, "thread_id", thread.ID(), "thread_name", thread.Name())
 		b.skipList[threadID] = reason
 		return
 	}
 
-	b.log.Info("Sending help prompt", "thread_id", thread.ID(), "thread_name", thread.Name())
+	b.Log.Info("Sending help prompt", "thread_id", thread.ID(), "thread_name", thread.Name())
 
 	helpMessage := fmt.Sprintf(
 		"It looks like nobody has responded even though this thread has been open for a while. "+
@@ -184,12 +184,12 @@ func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
 		),
 	}
 
-	_, err = b.client.Rest.CreateMessage(thread.ID(), discord.MessageCreate{
+	_, err = b.Client.Rest.CreateMessage(thread.ID(), discord.MessageCreate{
 		Content: helpMessage,
 		Embeds:  []discord.Embed{embed},
 	})
 	if err != nil {
-		b.log.Error("Failed to send forum reminder", "error", err, "thread_id", thread.ID())
+		b.Log.Error("Failed to send forum reminder", "error", err, "thread_id", thread.ID())
 	}
 
 	b.skipList[threadID] = fmt.Sprintf("Already sent a response to %s", thread.Name())

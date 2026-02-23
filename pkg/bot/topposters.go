@@ -53,7 +53,7 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	}
 
 	guildID := *e.GuildID
-	configs := getTopPostersConfig(b.env)
+	configs := getTopPostersConfig(b.Env)
 	cfg, ok := configs[guildID]
 	if !ok {
 		return
@@ -86,7 +86,7 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 }
 
 func (b *Bot) loadTopPosters() {
-	configs := getTopPostersConfig(b.env)
+	configs := getTopPostersConfig(b.Env)
 	if configs == nil {
 		return
 	}
@@ -95,37 +95,24 @@ func (b *Bot) loadTopPosters() {
 	for guildID := range configs {
 		gc := &guildPostCounts{Counts: make(map[string]map[string]int)}
 
-		data, err := b.s3.FetchTopPosters(ctx, fmt.Sprintf("%d", guildID))
+		data, err := b.S3.FetchTopPosters(ctx, fmt.Sprintf("%d", guildID))
 		if errors.Is(err, s3client.ErrNotFound) {
-			b.log.Info("No existing top posters data, starting fresh", "guild_id", guildID)
+			b.Log.Info("No existing top posters data, starting fresh", "guild_id", guildID)
 		} else if err != nil {
-			b.log.Error("Failed to load top posters data", "guild_id", guildID, "error", err)
+			b.Log.Error("Failed to load top posters data", "guild_id", guildID, "error", err)
 		} else {
 			gc.Counts = data
 		}
 
 		b.topPosters[guildID] = gc
-		b.log.Info("Loaded top posters", "guild_id", guildID, "days", len(gc.Counts))
-	}
-}
-
-func (b *Bot) topPostersSaveLoop() {
-	for !b.ready.Load() {
-		time.Sleep(1 * time.Second)
-	}
-
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		b.saveTopPosters()
+		b.Log.Info("Loaded top posters", "guild_id", guildID, "days", len(gc.Counts))
 	}
 }
 
 func (b *Bot) saveTopPosters() {
 	defer func() {
 		if r := recover(); r != nil {
-			b.log.Error("Panic in top posters save", "error", r)
+			b.Log.Error("Panic in top posters save", "error", r)
 		}
 	}()
 
@@ -146,10 +133,10 @@ func (b *Bot) saveTopPosters() {
 		}
 		gc.mu.Unlock()
 
-		if err := b.s3.SaveTopPosters(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
-			b.log.Error("Failed to save top posters", "guild_id", guildID, "error", err)
+		if err := b.S3.SaveTopPosters(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
+			b.Log.Error("Failed to save top posters", "guild_id", guildID, "error", err)
 		} else {
-			b.log.Info("Saved top posters", "guild_id", guildID, "days", len(data))
+			b.Log.Info("Saved top posters", "guild_id", guildID, "days", len(data))
 		}
 	}
 }
@@ -193,7 +180,7 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 	}
 	guildID := *e.GuildID()
 
-	configs := getTopPostersConfig(b.env)
+	configs := getTopPostersConfig(b.Env)
 	if _, ok := configs[guildID]; !ok {
 		respondEphemeral(e, "This command is not configured for this server.")
 		return

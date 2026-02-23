@@ -427,8 +427,9 @@ func (c *Client) SaveTopPosters(ctx context.Context, guildID string, data map[st
 	return nil
 }
 
-func (c *Client) FetchStickies(ctx context.Context, guildID string) ([]byte, error) {
-	s3Path := fmt.Sprintf("stickies/%s.json", guildID)
+// FetchGuildJSON fetches {prefix}/{guildID}.json from S3.
+func (c *Client) FetchGuildJSON(ctx context.Context, prefix, guildID string) ([]byte, error) {
+	s3Path := fmt.Sprintf("%s/%s.json", prefix, guildID)
 	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &c.bucket,
 		Key:    &s3Path,
@@ -438,53 +439,40 @@ func (c *Client) FetchStickies(ctx context.Context, guildID string) ([]byte, err
 		if errors.As(err, &nsk) || strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("fetching stickies from s3: %w", err)
+		return nil, fmt.Errorf("fetching %s from s3: %w", prefix, err)
 	}
 	defer out.Body.Close()
 	return io.ReadAll(out.Body)
+}
+
+// SaveGuildJSON saves data to {prefix}/{guildID}.json in S3.
+func (c *Client) SaveGuildJSON(ctx context.Context, prefix, guildID string, data []byte) error {
+	s3Path := fmt.Sprintf("%s/%s.json", prefix, guildID)
+	_, err := c.s3.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: &c.bucket,
+		Key:    &s3Path,
+		Body:   bytes.NewReader(data),
+	})
+	if err != nil {
+		return fmt.Errorf("saving %s to s3: %w", prefix, err)
+	}
+	return nil
+}
+
+func (c *Client) FetchStickies(ctx context.Context, guildID string) ([]byte, error) {
+	return c.FetchGuildJSON(ctx, "stickies", guildID)
 }
 
 func (c *Client) SaveStickies(ctx context.Context, guildID string, data []byte) error {
-	s3Path := fmt.Sprintf("stickies/%s.json", guildID)
-	_, err := c.s3.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: &c.bucket,
-		Key:    &s3Path,
-		Body:   bytes.NewReader(data),
-	})
-	if err != nil {
-		return fmt.Errorf("saving stickies to s3: %w", err)
-	}
-	return nil
+	return c.SaveGuildJSON(ctx, "stickies", guildID, data)
 }
 
 func (c *Client) FetchThreadReminders(ctx context.Context, guildID string) ([]byte, error) {
-	s3Path := fmt.Sprintf("threadreminders/%s.json", guildID)
-	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: &c.bucket,
-		Key:    &s3Path,
-	})
-	if err != nil {
-		var nsk *s3types.NoSuchKey
-		if errors.As(err, &nsk) || strings.Contains(err.Error(), "NoSuchKey") {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("fetching thread reminders from s3: %w", err)
-	}
-	defer out.Body.Close()
-	return io.ReadAll(out.Body)
+	return c.FetchGuildJSON(ctx, "threadreminders", guildID)
 }
 
 func (c *Client) SaveThreadReminders(ctx context.Context, guildID string, data []byte) error {
-	s3Path := fmt.Sprintf("threadreminders/%s.json", guildID)
-	_, err := c.s3.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: &c.bucket,
-		Key:    &s3Path,
-		Body:   bytes.NewReader(data),
-	})
-	if err != nil {
-		return fmt.Errorf("saving thread reminders to s3: %w", err)
-	}
-	return nil
+	return c.SaveGuildJSON(ctx, "threadreminders", guildID, data)
 }
 
 func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (string, error) {

@@ -17,7 +17,7 @@ func (b *Bot) handleSaveImageMenu(e *events.ApplicationCommandInteractionCreate,
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	b.log.Info("Processing saveimage context menu",
+	b.Log.Info("Processing saveimage context menu",
 		"user_id", userStr,
 		"template", tmpl.Name,
 		"guild_id", guildStr,
@@ -31,11 +31,11 @@ func (b *Bot) handleSaveImageMenu(e *events.ApplicationCommandInteractionCreate,
 	msg := data.TargetMessage()
 
 	profile := make(map[string]string)
-	existing, err := b.s3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
+	existing, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
 	if err == nil {
 		profile = existing
 	} else if !errors.Is(err, s3client.ErrNotFound) {
-		b.log.Error("Failed to fetch profile", "error", err)
+		b.Log.Error("Failed to fetch profile", "error", err)
 	}
 
 	foundAttachments := 0
@@ -74,9 +74,9 @@ func (b *Bot) handleSaveImageMenu(e *events.ApplicationCommandInteractionCreate,
 		return
 	}
 
-	_, userErr, err := b.s3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
+	_, userErr, err := b.S3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
 	if err != nil {
-		b.log.Error("Failed to save profile", "error", err)
+		b.Log.Error("Failed to save profile", "error", err)
 		respondEphemeral(e, "Oops! Something went wrong.")
 		return
 	}

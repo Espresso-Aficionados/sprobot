@@ -1,8 +1,8 @@
-package stickybot
+package botutil
 
 import "github.com/disgoorg/snowflake/v2"
 
-func getGuildIDs(env string) []snowflake.ID {
+func GetGuildIDs(env string) []snowflake.ID {
 	switch env {
 	case "prod":
 		return []snowflake.ID{

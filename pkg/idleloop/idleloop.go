@@ -1,6 +1,48 @@
 package idleloop
 
-import "time"
+import (
+	"sync"
+	"time"
+)
+
+// Handle owns the channel lifecycle for an idle-repost goroutine.
+type Handle struct {
+	msgCh  chan struct{}
+	stopCh chan struct{}
+	once   sync.Once
+}
+
+// NewHandle creates a Handle with buffered channels.
+func NewHandle() *Handle {
+	return &Handle{
+		msgCh:  make(chan struct{}, 128),
+		stopCh: make(chan struct{}),
+	}
+}
+
+// Start launches a Run goroutine using this handle's channels.
+func (h *Handle) Start(cfg Config, repost func() bool) {
+	go Run(cfg, h.msgCh, h.stopCh, repost)
+}
+
+// Stop closes the stop channel, terminating the goroutine. Safe to call on nil or multiple times.
+func (h *Handle) Stop() {
+	if h == nil {
+		return
+	}
+	h.once.Do(func() { close(h.stopCh) })
+}
+
+// Signal sends a non-blocking message signal. Safe to call on nil.
+func (h *Handle) Signal() {
+	if h == nil {
+		return
+	}
+	select {
+	case h.msgCh <- struct{}{}:
+	default:
+	}
+}
 
 // Config holds the parameters for the idle-repost select loop.
 type Config struct {

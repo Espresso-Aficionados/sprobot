@@ -6,9 +6,10 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
-	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/omit"
 	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/botutil"
 )
 
 const (
@@ -77,13 +78,7 @@ func (b *Bot) registerAllCommands() error {
 		},
 	}
 
-	for _, guildID := range getGuildIDs(b.env) {
-		if _, err := b.client.Rest.SetGuildCommands(b.client.ApplicationID, guildID, commands); err != nil {
-			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
-		}
-		b.log.Info("Registered guild commands", "guild_id", guildID, "count", len(commands))
-	}
-	return nil
+	return botutil.RegisterGuildCommands(b.Client, b.Env, commands, b.Log)
 }
 
 func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
@@ -138,11 +133,11 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	}
 
 	if maxIdle <= minIdle {
-		respondEphemeral(e, fmt.Sprintf("max_idle (%d) must be greater than min_idle (%d).", maxIdle, minIdle))
+		botutil.RespondEphemeral(e, fmt.Sprintf("max_idle (%d) must be greater than min_idle (%d).", maxIdle, minIdle))
 		return
 	}
 	if msgThreshold == 0 && timeThreshold == 0 {
-		respondEphemeral(e, "At least one of msg_threshold or time_threshold must be > 0.")
+		botutil.RespondEphemeral(e, "At least one of msg_threshold or time_threshold must be > 0.")
 		return
 	}
 	// Replace any existing reminder in this channel
@@ -168,7 +163,7 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	b.startReminderGoroutine(r)
 	b.saveRemindersForGuild(guildID)
 
-	respondEphemeral(e, fmt.Sprintf("Thread reminders enabled in <#%d>. Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", channelID, r.MinIdleMins, r.MaxIdleMins, r.MsgThreshold, r.TimeThresholdMins))
+	botutil.RespondEphemeral(e, fmt.Sprintf("Thread reminders enabled in <#%d>. Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", channelID, r.MinIdleMins, r.MaxIdleMins, r.MsgThreshold, r.TimeThresholdMins))
 }
 
 func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
@@ -177,13 +172,13 @@ func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
 
 	channels, ok := b.reminders[guildID]
 	if !ok {
-		respondEphemeral(e, "No thread reminder in this channel.")
+		botutil.RespondEphemeral(e, "No thread reminder in this channel.")
 		return
 	}
 
 	r, ok := channels[channelID]
 	if !ok {
-		respondEphemeral(e, "No thread reminder in this channel.")
+		botutil.RespondEphemeral(e, "No thread reminder in this channel.")
 		return
 	}
 
@@ -191,12 +186,12 @@ func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
 
 	// Delete the last reminder message (best-effort)
 	if r.LastMessageID != 0 {
-		_ = b.client.Rest.DeleteMessage(channelID, r.LastMessageID)
+		_ = b.Client.Rest.DeleteMessage(channelID, r.LastMessageID)
 	}
 
 	delete(channels, channelID)
 	b.saveRemindersForGuild(guildID)
-	respondEphemeral(e, "Thread reminders disabled.")
+	botutil.RespondEphemeral(e, "Thread reminders disabled.")
 }
 
 func (b *Bot) handleThreads(e *events.ApplicationCommandInteractionCreate) {
@@ -205,7 +200,7 @@ func (b *Bot) handleThreads(e *events.ApplicationCommandInteractionCreate) {
 
 	embed := b.buildThreadEmbed(guildID, channelID)
 	if embed == nil {
-		respondEphemeral(e, "No active threads in this channel.")
+		botutil.RespondEphemeral(e, "No active threads in this channel.")
 		return
 	}
 
@@ -220,7 +215,7 @@ func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
 
 	channels, ok := b.reminders[guildID]
 	if !ok || len(channels) == 0 {
-		respondEphemeral(e, "No thread reminders in this server.")
+		botutil.RespondEphemeral(e, "No thread reminders in this server.")
 		return
 	}
 
@@ -233,16 +228,5 @@ func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
 		lines = append(lines, fmt.Sprintf("<#%d> — %s", r.ChannelID, status))
 	}
 
-	respondEphemeral(e, strings.Join(lines, "\n"))
-}
-
-type messageResponder interface {
-	CreateMessage(discord.MessageCreate, ...rest.RequestOpt) error
-}
-
-func respondEphemeral(e messageResponder, content string) {
-	e.CreateMessage(discord.MessageCreate{
-		Content: content,
-		Flags:   discord.MessageFlagEphemeral,
-	})
+	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
 }

@@ -36,7 +36,7 @@ func (b *Bot) handleModLogMenu(e *events.ApplicationCommandInteractionCreate) {
 	}
 	msg := data.TargetMessage()
 
-	b.log.Info("Processing save message to mod log",
+	b.Log.Info("Processing save message to mod log",
 		"user_id", userIDStr(e),
 		"guild_id", guildIDStr(e),
 	)
@@ -59,7 +59,7 @@ func (b *Bot) handleModLogMenu(e *events.ApplicationCommandInteractionCreate) {
 		},
 	})
 	if err != nil {
-		b.log.Error("Failed to respond with mod log modal", "error", err)
+		b.Log.Error("Failed to respond with mod log modal", "error", err)
 	}
 }
 
@@ -67,19 +67,19 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 	// Defer the response since this might take a while
 	e.DeferCreateMessage(true)
 
-	msg, err := b.client.Rest.GetMessage(channelID, messageID)
+	msg, err := b.Client.Rest.GetMessage(channelID, messageID)
 	if err != nil {
-		b.log.Error("Failed to fetch original message", "error", err)
-		b.client.Rest.CreateFollowupMessage(b.client.ApplicationID, e.Token(), discord.MessageCreate{
+		b.Log.Error("Failed to fetch original message", "error", err)
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 			Content: "Oops! Something went wrong.",
 			Flags:   discord.MessageFlagEphemeral,
 		})
 		return
 	}
 
-	channel, err := b.client.Rest.GetChannel(channelID)
+	channel, err := b.Client.Rest.GetChannel(channelID)
 	if err != nil {
-		b.log.Error("Failed to get channel", "error", err)
+		b.Log.Error("Failed to get channel", "error", err)
 	}
 	channelName := fmt.Sprintf("%d", channelID)
 	if channel != nil {
@@ -119,9 +119,9 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 	if len(msg.Attachments) > 0 {
 		var permLinks []string
 		for _, att := range msg.Attachments {
-			permLink, err := b.s3.SaveModImage(context.Background(), guildStr, att.ProxyURL)
+			permLink, err := b.S3.SaveModImage(context.Background(), guildStr, att.ProxyURL)
 			if err != nil {
-				b.log.Error("Failed to save mod image", "error", err)
+				b.Log.Error("Failed to save mod image", "error", err)
 				permLinks = append(permLinks, att.ProxyURL)
 			} else {
 				permLinks = append(permLinks, permLink)
@@ -157,35 +157,35 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		})
 	}
 
-	modLogConfig := getModLogConfig(b.env)
+	modLogConfig := getModLogConfig(b.Env)
 	if modLogConfig == nil {
-		b.log.Info("No mod log config found")
+		b.Log.Info("No mod log config found")
 		return
 	}
 
 	// Find or create thread in the mod log forum channel
 	thread := b.findOrCreateModLogThread(modLogConfig.ChannelID, msg.Author)
 	if thread == nil {
-		b.client.Rest.CreateFollowupMessage(b.client.ApplicationID, e.Token(), discord.MessageCreate{
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 			Content: "Oops! Something went wrong finding the mod log channel.",
 			Flags:   discord.MessageFlagEphemeral,
 		})
 		return
 	}
 
-	sentMsg, err := b.client.Rest.CreateMessage(thread.ID(), discord.MessageCreate{
+	sentMsg, err := b.Client.Rest.CreateMessage(thread.ID(), discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	})
 	if err != nil {
-		b.log.Error("Failed to send mod log message", "error", err)
-		b.client.Rest.CreateFollowupMessage(b.client.ApplicationID, e.Token(), discord.MessageCreate{
+		b.Log.Error("Failed to send mod log message", "error", err)
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 			Content: "Oops! Something went wrong.",
 			Flags:   discord.MessageFlagEphemeral,
 		})
 		return
 	}
 
-	modLogChannel, _ := b.client.Rest.GetChannel(modLogConfig.ChannelID)
+	modLogChannel, _ := b.Client.Rest.GetChannel(modLogConfig.ChannelID)
 	modLogChannelName := fmt.Sprintf("%d", modLogConfig.ChannelID)
 	if modLogChannel != nil {
 		modLogChannelName = modLogChannel.Name()
@@ -196,7 +196,7 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		URL:   messageLink(guildStr, fmt.Sprintf("%d", thread.ID()), fmt.Sprintf("%d", sentMsg.ID)),
 	}
 
-	b.client.Rest.CreateFollowupMessage(b.client.ApplicationID, e.Token(), discord.MessageCreate{
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{notificationEmbed},
 		Flags:  discord.MessageFlagEphemeral,
 	})
@@ -209,21 +209,21 @@ func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author disco
 	}
 
 	// Search active threads - need to get guild ID from channel
-	ch, err := b.client.Rest.GetChannel(forumChannelID)
+	ch, err := b.Client.Rest.GetChannel(forumChannelID)
 	if err != nil {
-		b.log.Error("Failed to get mod log channel", "error", err)
+		b.Log.Error("Failed to get mod log channel", "error", err)
 		return nil
 	}
 
 	forumCh, ok := ch.(discord.GuildForumChannel)
 	if !ok {
-		b.log.Error("Mod log channel is not a forum channel")
+		b.Log.Error("Mod log channel is not a forum channel")
 		return nil
 	}
 
-	activeThreads, err := b.client.Rest.GetActiveGuildThreads(forumCh.GuildID())
+	activeThreads, err := b.Client.Rest.GetActiveGuildThreads(forumCh.GuildID())
 	if err != nil {
-		b.log.Error("Failed to get active threads", "error", err)
+		b.Log.Error("Failed to get active threads", "error", err)
 	}
 
 	if activeThreads != nil {
@@ -241,7 +241,7 @@ func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author disco
 	}
 
 	// Search archived threads
-	archivedThreads, err := b.client.Rest.GetPublicArchivedThreads(forumChannelID, time.Time{}, 0)
+	archivedThreads, err := b.Client.Rest.GetPublicArchivedThreads(forumChannelID, time.Time{}, 0)
 	if err == nil {
 		for _, thread := range archivedThreads.Threads {
 			for _, term := range searchTerms {
@@ -254,7 +254,7 @@ func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author disco
 
 	// Create a new thread
 	threadName := fmt.Sprintf("%s - %d", author.Username, author.ID)
-	post, err := b.client.Rest.CreatePostInThreadChannel(forumChannelID, discord.ThreadChannelPostCreate{
+	post, err := b.Client.Rest.CreatePostInThreadChannel(forumChannelID, discord.ThreadChannelPostCreate{
 		Name:                threadName,
 		AutoArchiveDuration: discord.AutoArchiveDuration1w,
 		Message: discord.MessageCreate{
@@ -262,7 +262,7 @@ func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author disco
 		},
 	})
 	if err != nil {
-		b.log.Error("Failed to create mod log thread", "error", err)
+		b.Log.Error("Failed to create mod log thread", "error", err)
 		return nil
 	}
 	return post.GuildThread

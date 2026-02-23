@@ -17,7 +17,7 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	b.log.Info("Processing getprofile",
+	b.Log.Info("Processing getprofile",
 		"user_id", userStr,
 		"template", tmpl.Name,
 		"guild_id", guildStr,
@@ -31,7 +31,7 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 		if user, ok := data.OptUser("name"); ok {
 			targetID = user.ID
 			// Try to get member for nick
-			member, err := b.client.Rest.GetMember(*e.GuildID(), targetID)
+			member, err := b.Client.Rest.GetMember(*e.GuildID(), targetID)
 			if err == nil {
 				targetName = member.EffectiveName()
 			} else {
@@ -42,7 +42,7 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 	}
 
 	targetIDStr := fmt.Sprintf("%d", targetID)
-	profile, err := b.s3.FetchProfile(context.Background(), tmpl, guildStr, targetIDStr)
+	profile, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, targetIDStr)
 	if err != nil {
 		if errors.Is(err, s3client.ErrNotFound) {
 			var msg string
@@ -54,7 +54,7 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 			respondEphemeral(e, msg)
 			return
 		}
-		b.log.Error("Failed to fetch profile", "error", err)
+		b.Log.Error("Failed to fetch profile", "error", err)
 		respondEphemeral(e, "Oops! Something went wrong.")
 		return
 	}
@@ -85,12 +85,12 @@ func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl 
 
 	targetIDStr := fmt.Sprintf("%d", targetID)
 	targetName := targetUser.Username
-	member, err := b.client.Rest.GetMember(*e.GuildID(), targetID)
+	member, err := b.Client.Rest.GetMember(*e.GuildID(), targetID)
 	if err == nil {
 		targetName = member.EffectiveName()
 	}
 
-	profile, err := b.s3.FetchProfile(context.Background(), tmpl, guildStr, targetIDStr)
+	profile, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, targetIDStr)
 	if err != nil {
 		if errors.Is(err, s3client.ErrNotFound) {
 			if targetID == e.User().ID {

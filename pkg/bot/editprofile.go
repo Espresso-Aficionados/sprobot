@@ -15,14 +15,14 @@ func (b *Bot) handleEdit(e *events.ApplicationCommandInteractionCreate, tmpl spr
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	b.log.Info("Processing edit",
+	b.Log.Info("Processing edit",
 		"user_id", userStr,
 		"template", tmpl.Name,
 		"guild_id", guildStr,
 	)
 
 	profile := make(map[string]string)
-	existing, err := b.s3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
+	existing, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
 	if err == nil {
 		profile = existing
 	}
@@ -62,7 +62,7 @@ func (b *Bot) handleEdit(e *events.ApplicationCommandInteractionCreate, tmpl spr
 		Components: components,
 	})
 	if err != nil {
-		b.log.Error("Failed to respond with modal", "error", err)
+		b.Log.Error("Failed to respond with modal", "error", err)
 	}
 }
 
@@ -73,7 +73,7 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	profile := make(map[string]string)
 
 	// Preserve existing image URL from the saved profile
-	existing, err := b.s3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
+	existing, err := b.S3.FetchProfile(context.Background(), tmpl, guildStr, userStr)
 	if err == nil {
 		if img, ok := existing[tmpl.Image.Name]; ok && img != "" {
 			profile[tmpl.Image.Name] = img
@@ -89,9 +89,9 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 		profile[tmpl.Image.Name] = attachments[0].ProxyURL
 	}
 
-	_, userErr, err := b.s3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
+	_, userErr, err := b.S3.SaveProfile(context.Background(), tmpl, guildStr, userStr, profile)
 	if err != nil {
-		b.log.Error("Failed to save profile", "error", err)
+		b.Log.Error("Failed to save profile", "error", err)
 		respondEphemeral(e, "Oops! Something went wrong.")
 		return
 	}
@@ -108,7 +108,7 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 		Flags:  discord.MessageFlagEphemeral,
 	})
 	if err != nil {
-		b.log.Error("Failed to respond with embed", "error", err)
+		b.Log.Error("Failed to respond with embed", "error", err)
 	}
 }
 

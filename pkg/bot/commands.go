@@ -14,13 +14,13 @@ import (
 )
 
 func (b *Bot) registerAllCommands() error {
-	templates := sprobot.AllTemplates(b.env)
+	templates := sprobot.AllTemplates(b.Env)
 	if templates == nil {
-		b.log.Info("No templates configured for env", "env", b.env)
+		b.Log.Info("No templates configured for env", "env", b.Env)
 		return nil
 	}
 
-	topPostersConfigs := getTopPostersConfig(b.env)
+	topPostersConfigs := getTopPostersConfig(b.Env)
 
 	for guildID, tmpls := range templates {
 		guildSnowflake := snowflake.ID(guildID)
@@ -61,10 +61,10 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
-		if _, err := b.client.Rest.SetGuildCommands(b.client.ApplicationID, guildSnowflake, commands); err != nil {
+		if _, err := b.Client.Rest.SetGuildCommands(b.Client.ApplicationID, guildSnowflake, commands); err != nil {
 			return fmt.Errorf("registering guild commands for %d: %w", guildSnowflake, err)
 		}
-		b.log.Info("Registered guild commands", "guild_id", guildSnowflake, "count", len(commands))
+		b.Log.Info("Registered guild commands", "guild_id", guildSnowflake, "count", len(commands))
 	}
 	return nil
 }
@@ -124,7 +124,7 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	templates := sprobot.AllTemplates(b.env)
+	templates := sprobot.AllTemplates(b.Env)
 	tmpls, ok := templates[int64(guildID)]
 	if !ok {
 		return
@@ -163,7 +163,7 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
 	customID := e.Data.CustomID
 
-	templates := sprobot.AllTemplates(b.env)
+	templates := sprobot.AllTemplates(b.Env)
 	if e.GuildID() == nil {
 		return
 	}

@@ -12,13 +12,13 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/idleloop"
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 type threadReminder struct {
-	msgCh  chan struct{} `json:"-"`
-	stopCh chan struct{} `json:"-"`
+	handle *idleloop.Handle `json:"-"`
 
 	ChannelID         snowflake.ID `json:"channel_id"`
 	GuildID           snowflake.ID `json:"guild_id"`
@@ -32,48 +32,7 @@ type threadReminder struct {
 	TimeThresholdMins int          `json:"time_threshold_mins"`
 }
 
-type reminderExport struct {
-	ChannelID         snowflake.ID `json:"channel_id"`
-	GuildID           snowflake.ID `json:"guild_id"`
-	EnabledBy         snowflake.ID `json:"enabled_by"`
-	Enabled           bool         `json:"enabled"`
-	LastMessageID     snowflake.ID `json:"last_message_id"`
-	LastPostTime      time.Time    `json:"last_post_time"`
-	MinIdleMins       int          `json:"min_idle_mins"`
-	MaxIdleMins       int          `json:"max_idle_mins"`
-	MsgThreshold      int          `json:"msg_threshold"`
-	TimeThresholdMins int          `json:"time_threshold_mins"`
-}
-
-func (r *threadReminder) toExport() reminderExport {
-	return reminderExport{
-		ChannelID:         r.ChannelID,
-		GuildID:           r.GuildID,
-		EnabledBy:         r.EnabledBy,
-		Enabled:           r.Enabled,
-		LastMessageID:     r.LastMessageID,
-		LastPostTime:      r.LastPostTime,
-		MinIdleMins:       r.MinIdleMins,
-		MaxIdleMins:       r.MaxIdleMins,
-		MsgThreshold:      r.MsgThreshold,
-		TimeThresholdMins: r.TimeThresholdMins,
-	}
-}
-
-func fromExport(e reminderExport) *threadReminder {
-	r := &threadReminder{
-		ChannelID:         e.ChannelID,
-		GuildID:           e.GuildID,
-		EnabledBy:         e.EnabledBy,
-		Enabled:           e.Enabled,
-		LastMessageID:     e.LastMessageID,
-		LastPostTime:      e.LastPostTime,
-		MinIdleMins:       e.MinIdleMins,
-		MaxIdleMins:       e.MaxIdleMins,
-		MsgThreshold:      e.MsgThreshold,
-		TimeThresholdMins: e.TimeThresholdMins,
-	}
-	// Defaults for zero values (backwards compat with old S3 data)
+func (r *threadReminder) applyDefaults() {
 	if r.MinIdleMins == 0 {
 		r.MinIdleMins = 30
 	}
@@ -83,38 +42,37 @@ func fromExport(e reminderExport) *threadReminder {
 	if r.MsgThreshold == 0 {
 		r.MsgThreshold = 30
 	}
-	return r
 }
 
 func (b *Bot) loadReminders() {
 	ctx := context.Background()
-	for _, guildID := range getGuildIDs(b.env) {
-		data, err := b.s3.FetchThreadReminders(ctx, fmt.Sprintf("%d", guildID))
+	for _, guildID := range botutil.GetGuildIDs(b.Env) {
+		data, err := b.S3.FetchThreadReminders(ctx, fmt.Sprintf("%d", guildID))
 		if errors.Is(err, s3client.ErrNotFound) {
-			b.log.Info("No existing thread reminders data", "guild_id", guildID)
+			b.Log.Info("No existing thread reminders data", "guild_id", guildID)
 			continue
 		}
 		if err != nil {
-			b.log.Error("Failed to load thread reminders", "guild_id", guildID, "error", err)
+			b.Log.Error("Failed to load thread reminders", "guild_id", guildID, "error", err)
 			continue
 		}
 
-		var exports map[string]reminderExport
-		if err := json.Unmarshal(data, &exports); err != nil {
-			b.log.Error("Failed to decode thread reminders", "guild_id", guildID, "error", err)
+		var loaded map[string]*threadReminder
+		if err := json.Unmarshal(data, &loaded); err != nil {
+			b.Log.Error("Failed to decode thread reminders", "guild_id", guildID, "error", err)
 			continue
 		}
 
-		channels := make(map[snowflake.ID]*threadReminder, len(exports))
-		for _, e := range exports {
-			r := fromExport(e)
+		channels := make(map[snowflake.ID]*threadReminder, len(loaded))
+		for _, r := range loaded {
+			r.applyDefaults()
 			channels[r.ChannelID] = r
 			if r.Enabled {
 				b.startReminderGoroutine(r)
 			}
 		}
 		b.reminders[guildID] = channels
-		b.log.Info("Loaded thread reminders", "guild_id", guildID, "count", len(channels))
+		b.Log.Info("Loaded thread reminders", "guild_id", guildID, "count", len(channels))
 	}
 }
 
@@ -124,29 +82,29 @@ func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) {
 		return
 	}
 
-	exports := make(map[string]reminderExport, len(channels))
+	toSave := make(map[string]*threadReminder, len(channels))
 	for chID, r := range channels {
-		exports[fmt.Sprintf("%d", chID)] = r.toExport()
+		toSave[fmt.Sprintf("%d", chID)] = r
 	}
 
-	data, err := json.Marshal(exports)
+	data, err := json.Marshal(toSave)
 	if err != nil {
-		b.log.Error("Failed to marshal thread reminders", "guild_id", guildID, "error", err)
+		b.Log.Error("Failed to marshal thread reminders", "guild_id", guildID, "error", err)
 		return
 	}
 
 	ctx := context.Background()
-	if err := b.s3.SaveThreadReminders(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
-		b.log.Error("Failed to save thread reminders", "guild_id", guildID, "error", err)
+	if err := b.S3.SaveThreadReminders(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
+		b.Log.Error("Failed to save thread reminders", "guild_id", guildID, "error", err)
 	} else {
-		b.log.Info("Saved thread reminders", "guild_id", guildID, "count", len(exports))
+		b.Log.Info("Saved thread reminders", "guild_id", guildID, "count", len(toSave))
 	}
 }
 
 func (b *Bot) saveAllReminders() {
 	defer func() {
 		if r := recover(); r != nil {
-			b.log.Error("Panic in thread reminders save", "error", r)
+			b.Log.Error("Panic in thread reminders save", "error", r)
 		}
 	}()
 
@@ -155,43 +113,27 @@ func (b *Bot) saveAllReminders() {
 	}
 }
 
-func (b *Bot) reminderSaveLoop() {
-	for !b.ready.Load() {
-		time.Sleep(1 * time.Second)
-	}
-
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		b.saveAllReminders()
-	}
-}
-
 func (b *Bot) startReminderGoroutine(r *threadReminder) {
-	r.msgCh = make(chan struct{}, 128)
-	r.stopCh = make(chan struct{})
-	go idleloop.Run(idleloop.Config{
+	r.handle = idleloop.NewHandle()
+	r.handle.Start(idleloop.Config{
 		MinIdleMins:       r.MinIdleMins,
 		MaxIdleMins:       r.MaxIdleMins,
 		MsgThreshold:      r.MsgThreshold,
 		TimeThresholdMins: r.TimeThresholdMins,
 		LastPostTime:      r.LastPostTime,
-	}, r.msgCh, r.stopCh, func() bool { return b.repostReminder(r) })
+	}, func() bool { return b.repostReminder(r) })
 }
 
 func (b *Bot) stopReminderGoroutine(r *threadReminder) {
-	if r.stopCh != nil {
-		close(r.stopCh)
-		r.stopCh = nil
-		r.msgCh = nil
-	}
+	r.handle.Stop()
+	r.handle = nil
 }
 
 func (b *Bot) stopAllReminderGoroutines() {
 	for _, channels := range b.reminders {
 		for _, r := range channels {
-			b.stopReminderGoroutine(r)
+			r.handle.Stop()
+			r.handle = nil
 		}
 	}
 }
@@ -200,9 +142,9 @@ func (b *Bot) stopAllReminderGoroutines() {
 // returns an embed showing the top 10 by message count. Returns nil if there
 // are no active threads.
 func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
-	result, err := b.client.Rest.GetActiveGuildThreads(guildID)
+	result, err := b.Client.Rest.GetActiveGuildThreads(guildID)
 	if err != nil {
-		b.log.Error("Failed to fetch active threads", "guild_id", guildID, "error", err)
+		b.Log.Error("Failed to fetch active threads", "guild_id", guildID, "error", err)
 		return nil
 	}
 
@@ -280,25 +222,16 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 
 	// Delete old message (best-effort)
 	if r.LastMessageID != 0 {
-		_ = b.client.Rest.DeleteMessage(r.ChannelID, r.LastMessageID)
+		_ = b.Client.Rest.DeleteMessage(r.ChannelID, r.LastMessageID)
 	}
 
 	msg := discord.MessageCreate{
 		Embeds: []discord.Embed{*embed},
 	}
 
-	var sent *discord.Message
-	var err error
-	for attempt := range 3 {
-		sent, err = b.client.Rest.CreateMessage(r.ChannelID, msg)
-		if err == nil {
-			break
-		}
-		b.log.Warn("Repost attempt failed", "channel_id", r.ChannelID, "attempt", attempt+1, "error", err)
-		time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
-	}
+	sent, err := botutil.PostWithRetry(b.Client.Rest, r.ChannelID, msg, b.Log)
 	if err != nil {
-		b.log.Error("Failed to repost thread reminder after retries", "channel_id", r.ChannelID, "error", err)
+		b.Log.Error("Failed to repost thread reminder after retries", "channel_id", r.ChannelID, "error", err)
 		return false
 	}
 
