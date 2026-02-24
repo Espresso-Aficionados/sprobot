@@ -175,12 +175,16 @@ func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
 		if parentID == nil || *parentID != channelID {
 			continue
 		}
+		createdAt := t.ThreadMetadata.CreateTimestamp
+		if createdAt.IsZero() {
+			createdAt = t.ID().Time()
+		}
 		threads = append(threads, threadInfo{
 			Name:         t.Name(),
 			ID:           t.ID(),
 			MessageCount: t.MessageCount,
 			MemberCount:  t.MemberCount,
-			CreatedAt:    t.ThreadMetadata.CreateTimestamp,
+			CreatedAt:    createdAt,
 		})
 	}
 
