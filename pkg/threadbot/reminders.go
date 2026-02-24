@@ -344,6 +344,8 @@ func (b *Bot) loadMemberCounts() {
 		if cache.Counts == nil {
 			cache.Counts = make(map[snowflake.ID]int)
 		}
+		// Clear LastRefresh so the first embed build triggers a fresh count
+		cache.LastRefresh = time.Time{}
 		b.memberCounts[guildID] = &cache
 		b.Log.Info("Loaded thread member counts", "guild_id", guildID, "count", len(cache.Counts))
 	}
