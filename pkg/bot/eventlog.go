@@ -691,6 +691,41 @@ func (b *Bot) onRoleUpdate(e *events.RoleUpdate) {
 			discord.EmbedField{Name: "New Color", Value: fmt.Sprintf("#%06X", e.Role.Color), Inline: boolPtr(true)},
 		)
 	}
+	if e.OldRole.Permissions != e.Role.Permissions {
+		fields = append(fields,
+			discord.EmbedField{Name: "Old Permissions", Value: fmt.Sprintf("`%d`", e.OldRole.Permissions), Inline: boolPtr(true)},
+			discord.EmbedField{Name: "New Permissions", Value: fmt.Sprintf("`%d`", e.Role.Permissions), Inline: boolPtr(true)},
+		)
+	}
+	if e.OldRole.Hoist != e.Role.Hoist {
+		fields = append(fields, discord.EmbedField{
+			Name: "Hoisted", Value: fmt.Sprintf("%t → %t", e.OldRole.Hoist, e.Role.Hoist),
+		})
+	}
+	if e.OldRole.Mentionable != e.Role.Mentionable {
+		fields = append(fields, discord.EmbedField{
+			Name: "Mentionable", Value: fmt.Sprintf("%t → %t", e.OldRole.Mentionable, e.Role.Mentionable),
+		})
+	}
+	if derefStr(e.OldRole.Icon) != derefStr(e.Role.Icon) {
+		fields = append(fields, discord.EmbedField{
+			Name: "Icon Changed", Value: "Yes",
+		})
+	}
+	if derefStr(e.OldRole.Emoji) != derefStr(e.Role.Emoji) {
+		old := derefStr(e.OldRole.Emoji)
+		if old == "" {
+			old = "-"
+		}
+		new := derefStr(e.Role.Emoji)
+		if new == "" {
+			new = "-"
+		}
+		fields = append(fields,
+			discord.EmbedField{Name: "Old Emoji", Value: old, Inline: boolPtr(true)},
+			discord.EmbedField{Name: "New Emoji", Value: new, Inline: boolPtr(true)},
+		)
+	}
 	if len(fields) == 0 {
 		fields = append(fields, discord.EmbedField{
 			Name: "Role", Value: e.Role.Name,
