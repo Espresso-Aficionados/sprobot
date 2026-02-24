@@ -201,32 +201,68 @@ func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
 	if e.OldMember.User.ID == 0 {
 		return
 	}
-	oldNick := e.OldMember.Nick
-	newNick := e.Member.Nick
-	if derefStr(oldNick) == derefStr(newNick) {
-		return
-	}
-	oldDisplay := oldNick
-	if oldDisplay == nil || *oldDisplay == "" {
-		oldDisplay = &e.Member.User.Username
-	}
-	newDisplay := newNick
-	if newDisplay == nil || *newDisplay == "" {
-		newDisplay = &e.Member.User.Username
+
+	var fields []discord.EmbedField
+	title := "Member Updated"
+
+	if derefStr(e.OldMember.Nick) != derefStr(e.Member.Nick) {
+		title = "Nickname Changed"
+		oldDisplay := derefStr(e.OldMember.Nick)
+		if oldDisplay == "" {
+			oldDisplay = e.Member.User.Username
+		}
+		newDisplay := derefStr(e.Member.Nick)
+		if newDisplay == "" {
+			newDisplay = e.Member.User.Username
+		}
+		fields = append(fields,
+			discord.EmbedField{Name: "Before", Value: oldDisplay, Inline: boolPtr(true)},
+			discord.EmbedField{Name: "After", Value: newDisplay, Inline: boolPtr(true)},
+		)
 	}
 
+	added, removed := diffRoles(e.OldMember.RoleIDs, e.Member.RoleIDs)
+	if len(added) > 0 {
+		fields = append(fields, discord.EmbedField{
+			Name: "Roles Added", Value: formatRoleMentions(added),
+		})
+	}
+	if len(removed) > 0 {
+		fields = append(fields, discord.EmbedField{
+			Name: "Roles Removed", Value: formatRoleMentions(removed),
+		})
+	}
+
+	oldTimeout := derefTime(e.OldMember.CommunicationDisabledUntil)
+	newTimeout := derefTime(e.Member.CommunicationDisabledUntil)
+	if !oldTimeout.Equal(newTimeout) {
+		if newTimeout.After(time.Now()) {
+			fields = append(fields, discord.EmbedField{
+				Name: "Timed Out Until", Value: fmt.Sprintf("<t:%d:R>", newTimeout.Unix()),
+			})
+		} else if oldTimeout.After(time.Now()) {
+			fields = append(fields, discord.EmbedField{
+				Name: "Timeout Removed", Value: "Yes",
+			})
+		}
+	}
+
+	if len(fields) == 0 {
+		return
+	}
+
+	fields = append(fields, discord.EmbedField{
+		Name: "User", Value: userMention(e.Member.User.ID), Inline: boolPtr(true),
+	})
+
 	embed := discord.Embed{
-		Title: "Nickname Changed",
+		Title: title,
 		Color: colorBlue,
 		Author: &discord.EmbedAuthor{
 			Name:    e.Member.User.Username,
 			IconURL: e.Member.User.EffectiveAvatarURL(),
 		},
-		Fields: []discord.EmbedField{
-			{Name: "Before", Value: *oldDisplay, Inline: boolPtr(true)},
-			{Name: "After", Value: *newDisplay, Inline: boolPtr(true)},
-			{Name: "User", Value: userMention(e.Member.User.ID), Inline: boolPtr(true)},
-		},
+		Fields: fields,
 	}
 	b.postEventLog(e.GuildID, embed)
 }
@@ -566,14 +602,32 @@ func (b *Bot) onChannelCreate(e *events.GuildChannelCreate) {
 
 func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
 	var fields []discord.EmbedField
-	newName := e.Channel.Name()
 	if e.OldChannel != nil {
-		oldName := e.OldChannel.Name()
-		if oldName != newName {
+		if e.OldChannel.Name() != e.Channel.Name() {
 			fields = append(fields,
-				discord.EmbedField{Name: "Old Name", Value: oldName, Inline: boolPtr(true)},
-				discord.EmbedField{Name: "New Name", Value: newName, Inline: boolPtr(true)},
+				discord.EmbedField{Name: "Old Name", Value: e.OldChannel.Name(), Inline: boolPtr(true)},
+				discord.EmbedField{Name: "New Name", Value: e.Channel.Name(), Inline: boolPtr(true)},
 			)
+		}
+		if oldMC, ok := e.OldChannel.(discord.GuildMessageChannel); ok {
+			if newMC, ok := e.Channel.(discord.GuildMessageChannel); ok {
+				if derefStr(oldMC.Topic()) != derefStr(newMC.Topic()) {
+					fields = append(fields,
+						discord.EmbedField{Name: "Old Topic", Value: orDash(derefStr(oldMC.Topic())), Inline: boolPtr(true)},
+						discord.EmbedField{Name: "New Topic", Value: orDash(derefStr(newMC.Topic())), Inline: boolPtr(true)},
+					)
+				}
+				if oldMC.NSFW() != newMC.NSFW() {
+					fields = append(fields, discord.EmbedField{
+						Name: "NSFW", Value: fmt.Sprintf("%t → %t", oldMC.NSFW(), newMC.NSFW()),
+					})
+				}
+				if oldMC.RateLimitPerUser() != newMC.RateLimitPerUser() {
+					fields = append(fields, discord.EmbedField{
+						Name: "Slowmode", Value: fmt.Sprintf("%ds → %ds", oldMC.RateLimitPerUser(), newMC.RateLimitPerUser()),
+					})
+				}
+			}
 		}
 	}
 	// If nothing changed besides permission overwrites, skip — the audit log handler covers those.
@@ -633,6 +687,16 @@ func (b *Bot) onThreadUpdate(e *events.ThreadUpdate) {
 	if e.OldThread.ThreadMetadata.Locked != e.Thread.ThreadMetadata.Locked {
 		fields = append(fields, discord.EmbedField{
 			Name: "Locked", Value: fmt.Sprintf("%t → %t", e.OldThread.ThreadMetadata.Locked, e.Thread.ThreadMetadata.Locked), Inline: boolPtr(true),
+		})
+	}
+	if e.OldThread.ThreadMetadata.AutoArchiveDuration != e.Thread.ThreadMetadata.AutoArchiveDuration {
+		fields = append(fields, discord.EmbedField{
+			Name: "Auto-Archive", Value: fmt.Sprintf("%d min → %d min", e.OldThread.ThreadMetadata.AutoArchiveDuration, e.Thread.ThreadMetadata.AutoArchiveDuration), Inline: boolPtr(true),
+		})
+	}
+	if e.OldThread.ThreadMetadata.Invitable != e.Thread.ThreadMetadata.Invitable {
+		fields = append(fields, discord.EmbedField{
+			Name: "Invitable", Value: fmt.Sprintf("%t → %t", e.OldThread.ThreadMetadata.Invitable, e.Thread.ThreadMetadata.Invitable), Inline: boolPtr(true),
 		})
 	}
 	if len(fields) == 0 {
@@ -761,6 +825,67 @@ func (b *Bot) onGuildUpdate(e *events.GuildUpdate) {
 			discord.EmbedField{Name: "New Name", Value: e.Guild.Name, Inline: boolPtr(true)},
 		)
 	}
+	if derefStr(e.OldGuild.Description) != derefStr(e.Guild.Description) {
+		fields = append(fields,
+			discord.EmbedField{Name: "Old Description", Value: orDash(derefStr(e.OldGuild.Description)), Inline: boolPtr(true)},
+			discord.EmbedField{Name: "New Description", Value: orDash(derefStr(e.Guild.Description)), Inline: boolPtr(true)},
+		)
+	}
+	if derefStr(e.OldGuild.Icon) != derefStr(e.Guild.Icon) {
+		fields = append(fields, discord.EmbedField{
+			Name: "Icon Changed", Value: "Yes",
+		})
+	}
+	if derefStr(e.OldGuild.Banner) != derefStr(e.Guild.Banner) {
+		fields = append(fields, discord.EmbedField{
+			Name: "Banner Changed", Value: "Yes",
+		})
+	}
+	if derefStr(e.OldGuild.Splash) != derefStr(e.Guild.Splash) {
+		fields = append(fields, discord.EmbedField{
+			Name: "Splash Changed", Value: "Yes",
+		})
+	}
+	if e.OldGuild.VerificationLevel != e.Guild.VerificationLevel {
+		fields = append(fields, discord.EmbedField{
+			Name: "Verification Level", Value: fmt.Sprintf("%d → %d", e.OldGuild.VerificationLevel, e.Guild.VerificationLevel),
+		})
+	}
+	if e.OldGuild.ExplicitContentFilter != e.Guild.ExplicitContentFilter {
+		fields = append(fields, discord.EmbedField{
+			Name: "Explicit Content Filter", Value: fmt.Sprintf("%d → %d", e.OldGuild.ExplicitContentFilter, e.Guild.ExplicitContentFilter),
+		})
+	}
+	if e.OldGuild.DefaultMessageNotifications != e.Guild.DefaultMessageNotifications {
+		fields = append(fields, discord.EmbedField{
+			Name: "Default Notifications", Value: fmt.Sprintf("%d → %d", e.OldGuild.DefaultMessageNotifications, e.Guild.DefaultMessageNotifications),
+		})
+	}
+	if e.OldGuild.AfkTimeout != e.Guild.AfkTimeout {
+		fields = append(fields, discord.EmbedField{
+			Name: "AFK Timeout", Value: fmt.Sprintf("%ds → %ds", e.OldGuild.AfkTimeout, e.Guild.AfkTimeout),
+		})
+	}
+	if derefSnowflake(e.OldGuild.AfkChannelID) != derefSnowflake(e.Guild.AfkChannelID) {
+		fields = append(fields, discord.EmbedField{
+			Name: "AFK Channel", Value: fmt.Sprintf("%s → %s", channelMentionOrDash(e.OldGuild.AfkChannelID), channelMentionOrDash(e.Guild.AfkChannelID)),
+		})
+	}
+	if derefSnowflake(e.OldGuild.SystemChannelID) != derefSnowflake(e.Guild.SystemChannelID) {
+		fields = append(fields, discord.EmbedField{
+			Name: "System Channel", Value: fmt.Sprintf("%s → %s", channelMentionOrDash(e.OldGuild.SystemChannelID), channelMentionOrDash(e.Guild.SystemChannelID)),
+		})
+	}
+	if derefSnowflake(e.OldGuild.RulesChannelID) != derefSnowflake(e.Guild.RulesChannelID) {
+		fields = append(fields, discord.EmbedField{
+			Name: "Rules Channel", Value: fmt.Sprintf("%s → %s", channelMentionOrDash(e.OldGuild.RulesChannelID), channelMentionOrDash(e.Guild.RulesChannelID)),
+		})
+	}
+	if e.OldGuild.PremiumProgressBarEnabled != e.Guild.PremiumProgressBarEnabled {
+		fields = append(fields, discord.EmbedField{
+			Name: "Boost Progress Bar", Value: fmt.Sprintf("%t → %t", e.OldGuild.PremiumProgressBarEnabled, e.Guild.PremiumProgressBarEnabled),
+		})
+	}
 	if len(fields) == 0 {
 		fields = append(fields, discord.EmbedField{
 			Name: "Server", Value: e.Guild.Name,
@@ -784,6 +909,64 @@ func derefStr(p *string) string {
 		return ""
 	}
 	return *p
+}
+
+func derefSnowflake(p *snowflake.ID) snowflake.ID {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+func derefTime(p *time.Time) time.Time {
+	if p == nil {
+		return time.Time{}
+	}
+	return *p
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func channelMentionOrDash(p *snowflake.ID) string {
+	if p == nil || *p == 0 {
+		return "-"
+	}
+	return channelMention(*p)
+}
+
+func formatRoleMentions(ids []snowflake.ID) string {
+	mentions := make([]string, len(ids))
+	for i, id := range ids {
+		mentions[i] = fmt.Sprintf("<@&%d>", id)
+	}
+	return strings.Join(mentions, ", ")
+}
+
+func diffRoles(old, new []snowflake.ID) (added, removed []snowflake.ID) {
+	oldSet := make(map[snowflake.ID]bool, len(old))
+	for _, id := range old {
+		oldSet[id] = true
+	}
+	newSet := make(map[snowflake.ID]bool, len(new))
+	for _, id := range new {
+		newSet[id] = true
+	}
+	for _, id := range new {
+		if !oldSet[id] {
+			added = append(added, id)
+		}
+	}
+	for _, id := range old {
+		if !newSet[id] {
+			removed = append(removed, id)
+		}
+	}
+	return
 }
 
 func formatDuration(d time.Duration) string {
