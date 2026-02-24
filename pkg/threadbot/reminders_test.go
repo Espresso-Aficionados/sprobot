@@ -21,7 +21,8 @@ func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {
 			Env: "dev",
 			Log: testutil.DiscardLogger(),
 		},
-		reminders: make(map[snowflake.ID]map[snowflake.ID]*threadReminder),
+		reminders:    make(map[snowflake.ID]map[snowflake.ID]*threadReminder),
+		memberCounts: make(map[snowflake.ID]*memberCountCache),
 	}
 }
 
@@ -391,6 +392,145 @@ func TestFormatAge(t *testing.T) {
 				t.Errorf("formatAge(%v) = %q, want %q", tt.duration, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestMemberCountCacheJSONRoundTrip(t *testing.T) {
+	cache := &memberCountCache{
+		Counts: map[snowflake.ID]int{
+			snowflake.ID(111): 5,
+			snowflake.ID(222): 75,
+		},
+		LastRefresh: time.Now().Truncate(time.Second),
+	}
+
+	data, err := json.Marshal(cache)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var cache2 memberCountCache
+	if err := json.Unmarshal(data, &cache2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if len(cache2.Counts) != 2 {
+		t.Fatalf("expected 2 counts, got %d", len(cache2.Counts))
+	}
+	if cache2.Counts[snowflake.ID(111)] != 5 {
+		t.Errorf("count for 111 = %d, want 5", cache2.Counts[snowflake.ID(111)])
+	}
+	if cache2.Counts[snowflake.ID(222)] != 75 {
+		t.Errorf("count for 222 = %d, want 75", cache2.Counts[snowflake.ID(222)])
+	}
+	if !cache2.LastRefresh.Equal(cache.LastRefresh) {
+		t.Error("LastRefresh mismatch after round-trip")
+	}
+}
+
+func TestLoadMemberCountsNotFound(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := testutil.NewTestS3Client(t, server)
+	b := newTestBot(t, c)
+
+	b.loadMemberCounts()
+
+	guildID := snowflake.ID(1013566342345019512)
+	if cache, ok := b.memberCounts[guildID]; ok && cache != nil {
+		t.Error("expected no member counts after loading from empty S3")
+	}
+}
+
+func TestLoadMemberCountsFromS3(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := testutil.NewTestS3Client(t, server)
+
+	cache := &memberCountCache{
+		Counts: map[snowflake.ID]int{
+			snowflake.ID(111): 42,
+			snowflake.ID(222): 100,
+		},
+		LastRefresh: time.Now().Add(-2 * time.Hour).Truncate(time.Second),
+	}
+	data, _ := json.Marshal(cache)
+	fake.Mu.Lock()
+	fake.Objects["/test-bucket/threadmembercounts/1013566342345019512.json"] = data
+	fake.Mu.Unlock()
+
+	b := newTestBot(t, c)
+	b.loadMemberCounts()
+
+	guildID := snowflake.ID(1013566342345019512)
+	loaded, ok := b.memberCounts[guildID]
+	if !ok || loaded == nil {
+		t.Fatal("member counts not loaded")
+	}
+	if loaded.Counts[snowflake.ID(111)] != 42 {
+		t.Errorf("count for 111 = %d, want 42", loaded.Counts[snowflake.ID(111)])
+	}
+	if loaded.Counts[snowflake.ID(222)] != 100 {
+		t.Errorf("count for 222 = %d, want 100", loaded.Counts[snowflake.ID(222)])
+	}
+}
+
+func TestSaveMemberCounts(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := testutil.NewTestS3Client(t, server)
+	b := newTestBot(t, c)
+
+	guildID := snowflake.ID(1013566342345019512)
+	b.memberCounts[guildID] = &memberCountCache{
+		Counts: map[snowflake.ID]int{
+			snowflake.ID(333): 55,
+		},
+		LastRefresh: time.Now().Truncate(time.Second),
+	}
+
+	b.saveMemberCounts()
+
+	fake.Mu.Lock()
+	data, ok := fake.Objects["/test-bucket/threadmembercounts/1013566342345019512.json"]
+	fake.Mu.Unlock()
+
+	if !ok {
+		t.Fatal("member counts not saved to S3")
+	}
+
+	var saved memberCountCache
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if saved.Counts[snowflake.ID(333)] != 55 {
+		t.Errorf("count for 333 = %d, want 55", saved.Counts[snowflake.ID(333)])
+	}
+}
+
+func TestLoadMemberCountsInvalidJSON(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := testutil.NewTestS3Client(t, server)
+
+	fake.Mu.Lock()
+	fake.Objects["/test-bucket/threadmembercounts/1013566342345019512.json"] = []byte("not json")
+	fake.Mu.Unlock()
+
+	b := newTestBot(t, c)
+	b.loadMemberCounts()
+
+	guildID := snowflake.ID(1013566342345019512)
+	if cache, ok := b.memberCounts[guildID]; ok && cache != nil {
+		t.Error("should not load member counts from invalid JSON")
 	}
 }
 

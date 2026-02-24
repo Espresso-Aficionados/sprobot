@@ -10,12 +10,18 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/idleloop"
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
+
+type memberCountCache struct {
+	Counts      map[snowflake.ID]int `json:"counts"`
+	LastRefresh time.Time            `json:"last_refresh"`
+}
 
 type threadReminder struct {
 	handle *idleloop.Handle `json:"-"`
@@ -192,6 +198,12 @@ func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
 		return nil
 	}
 
+	threadIDs := make([]snowflake.ID, len(threads))
+	for i, t := range threads {
+		threadIDs[i] = t.ID
+	}
+	b.refreshMemberCounts(guildID, threadIDs)
+
 	sort.Slice(threads, func(i, j int) bool {
 		return threads[i].MessageCount > threads[j].MessageCount
 	})
@@ -201,12 +213,22 @@ func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
 		threads = threads[:10]
 	}
 
+	b.mu.Lock()
+	cache := b.memberCounts[guildID]
+	b.mu.Unlock()
+
 	now := time.Now()
 	const maxDescLen = 3900
 	var desc strings.Builder
 	for _, t := range threads {
+		memberCount := t.MemberCount
+		if cache != nil {
+			if n, ok := cache.Counts[t.ID]; ok && n > 0 {
+				memberCount = n
+			}
+		}
 		age := formatAge(now.Sub(t.CreatedAt))
-		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.MessageCount, t.MemberCount, age)
+		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.MessageCount, memberCount, age)
 		if desc.Len()+len(line) > maxDescLen {
 			break
 		}
@@ -280,4 +302,115 @@ func formatAge(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d mins", mins)
 	}
+}
+
+func (b *Bot) loadMemberCounts() {
+	ctx := context.Background()
+	for _, guildID := range botutil.GetGuildIDs(b.Env) {
+		data, err := b.S3.FetchThreadMemberCounts(ctx, fmt.Sprintf("%d", guildID))
+		if errors.Is(err, s3client.ErrNotFound) {
+			b.Log.Info("No existing thread member counts", "guild_id", guildID)
+			continue
+		}
+		if err != nil {
+			b.Log.Error("Failed to load thread member counts", "guild_id", guildID, "error", err)
+			continue
+		}
+
+		var cache memberCountCache
+		if err := json.Unmarshal(data, &cache); err != nil {
+			b.Log.Error("Failed to decode thread member counts", "guild_id", guildID, "error", err)
+			continue
+		}
+		if cache.Counts == nil {
+			cache.Counts = make(map[snowflake.ID]int)
+		}
+		b.memberCounts[guildID] = &cache
+		b.Log.Info("Loaded thread member counts", "guild_id", guildID, "count", len(cache.Counts))
+	}
+}
+
+func (b *Bot) saveMemberCounts() {
+	defer func() {
+		if r := recover(); r != nil {
+			b.Log.Error("Panic in thread member counts save", "error", r)
+		}
+	}()
+
+	b.mu.Lock()
+	guildIDs := make([]snowflake.ID, 0, len(b.memberCounts))
+	for id := range b.memberCounts {
+		guildIDs = append(guildIDs, id)
+	}
+	b.mu.Unlock()
+
+	ctx := context.Background()
+	for _, guildID := range guildIDs {
+		b.mu.Lock()
+		cache, ok := b.memberCounts[guildID]
+		if !ok {
+			b.mu.Unlock()
+			continue
+		}
+		data, err := json.Marshal(cache)
+		b.mu.Unlock()
+
+		if err != nil {
+			b.Log.Error("Failed to marshal thread member counts", "guild_id", guildID, "error", err)
+			continue
+		}
+
+		if err := b.S3.SaveThreadMemberCounts(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
+			b.Log.Error("Failed to save thread member counts", "guild_id", guildID, "error", err)
+		} else {
+			b.Log.Info("Saved thread member counts", "guild_id", guildID)
+		}
+	}
+}
+
+func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID) {
+	b.mu.Lock()
+	cache := b.memberCounts[guildID]
+	if cache != nil && time.Since(cache.LastRefresh) < 24*time.Hour {
+		b.mu.Unlock()
+		return
+	}
+	b.mu.Unlock()
+
+	counts := make(map[snowflake.ID]int, len(threadIDs))
+	for _, threadID := range threadIDs {
+		n := b.countThreadMembers(threadID)
+		counts[threadID] = n
+	}
+
+	b.mu.Lock()
+	b.memberCounts[guildID] = &memberCountCache{
+		Counts:      counts,
+		LastRefresh: time.Now(),
+	}
+	b.mu.Unlock()
+
+	ctx := context.Background()
+	b.mu.Lock()
+	data, err := json.Marshal(b.memberCounts[guildID])
+	b.mu.Unlock()
+	if err != nil {
+		b.Log.Error("Failed to marshal thread member counts", "guild_id", guildID, "error", err)
+		return
+	}
+	if err := b.S3.SaveThreadMemberCounts(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
+		b.Log.Error("Failed to save thread member counts", "guild_id", guildID, "error", err)
+	}
+}
+
+func (b *Bot) countThreadMembers(threadID snowflake.ID) int {
+	page := b.Client.Rest.GetThreadMembersPage(threadID, 0, 100)
+	total := 0
+	for page.Next() {
+		total += len(page.Items)
+	}
+	if page.Err != nil && !errors.Is(page.Err, rest.ErrNoMorePages) {
+		b.Log.Error("Failed to count thread members", "thread_id", threadID, "error", page.Err)
+	}
+	return total
 }

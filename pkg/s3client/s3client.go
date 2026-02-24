@@ -526,6 +526,14 @@ func (c *Client) SaveThreadReminders(ctx context.Context, guildID string, data [
 	return c.SaveGuildJSON(ctx, "threadreminders", guildID, data)
 }
 
+func (c *Client) FetchThreadMemberCounts(ctx context.Context, guildID string) ([]byte, error) {
+	return c.FetchGuildJSON(ctx, "threadmembercounts", guildID)
+}
+
+func (c *Client) SaveThreadMemberCounts(ctx context.Context, guildID string, data []byte) error {
+	return c.SaveGuildJSON(ctx, "threadmembercounts", guildID, data)
+}
+
 func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (string, error) {
 	if err := urlValidator(fileURL); err != nil {
 		return "", fmt.Errorf("URL validation failed: %w", err)

@@ -17,9 +17,10 @@ import (
 
 type Bot struct {
 	*botutil.BaseBot
-	mu        sync.Mutex
-	stop      chan struct{}
-	reminders map[snowflake.ID]map[snowflake.ID]*threadReminder // guild -> channel -> reminder
+	mu           sync.Mutex
+	stop         chan struct{}
+	reminders    map[snowflake.ID]map[snowflake.ID]*threadReminder // guild -> channel -> reminder
+	memberCounts map[snowflake.ID]*memberCountCache                // guild -> cache
 }
 
 func New(token string) (*Bot, error) {
@@ -29,9 +30,10 @@ func New(token string) (*Bot, error) {
 	}
 
 	b := &Bot{
-		BaseBot:   base,
-		stop:      make(chan struct{}),
-		reminders: make(map[snowflake.ID]map[snowflake.ID]*threadReminder),
+		BaseBot:      base,
+		stop:         make(chan struct{}),
+		reminders:    make(map[snowflake.ID]map[snowflake.ID]*threadReminder),
+		memberCounts: make(map[snowflake.ID]*memberCountCache),
 	}
 
 	client, err := disgo.New(token,
@@ -64,16 +66,19 @@ func (b *Bot) Run() error {
 	defer b.Client.Close(ctx)
 
 	b.loadReminders()
+	b.loadMemberCounts()
 	if err := b.registerAllCommands(); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
 	}
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveAllReminders)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCounts)
 
 	botutil.WaitForShutdown(b.Log, "Threadbot")
 	close(b.stop)
 	b.stopAllReminderGoroutines()
 	b.saveAllReminders()
+	b.saveMemberCounts()
 	return nil
 }
 
