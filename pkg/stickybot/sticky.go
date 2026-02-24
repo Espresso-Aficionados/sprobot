@@ -154,6 +154,14 @@ func (b *Bot) stopAllStickyGoroutines() {
 }
 
 func (b *Bot) repostSticky(s *stickyMessage) bool {
+	// Skip repost if the bot's sticky is already the last message in the channel.
+	if s.LastMessageID != 0 {
+		msgs, err := b.Client.Rest.GetMessages(s.ChannelID, 0, 0, 0, 1)
+		if err == nil && len(msgs) == 1 && msgs[0].ID == s.LastMessageID {
+			return true
+		}
+	}
+
 	// Delete old message (best-effort)
 	if s.LastMessageID != 0 {
 		_ = b.Client.Rest.DeleteMessage(s.ChannelID, s.LastMessageID)
