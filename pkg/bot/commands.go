@@ -161,6 +161,87 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
+		// /trconfig and /trblacklist
+		if _, ok := b.topReactionsConfig[guildID]; ok {
+			commands = append(commands, discord.SlashCommandCreate{
+				Name:                     "trconfig",
+				Description:              "Configure top reactions summary",
+				DefaultMemberPermissions: omit.NewPtr(perm),
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "set",
+						Description: "Update top reactions settings",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to post summaries in",
+							},
+							discord.ApplicationCommandOptionInt{
+								Name:        "window",
+								Description: "Time window in hours (1-720)",
+								MinValue:    intPtr(1),
+								MaxValue:    intPtr(720),
+							},
+							discord.ApplicationCommandOptionInt{
+								Name:        "frequency",
+								Description: "Posting frequency in hours (1-720)",
+								MinValue:    intPtr(1),
+								MaxValue:    intPtr(720),
+							},
+							discord.ApplicationCommandOptionInt{
+								Name:        "count",
+								Description: "Number of top messages to show (1-25)",
+								MinValue:    intPtr(1),
+								MaxValue:    intPtr(25),
+							},
+						},
+					},
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "show",
+						Description: "Show current top reactions configuration",
+					},
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "disable",
+						Description: "Disable top reactions posting",
+					},
+				},
+			})
+
+			commands = append(commands, discord.SlashCommandCreate{
+				Name:                     "trblacklist",
+				Description:              "Manage top reactions channel blacklist",
+				DefaultMemberPermissions: omit.NewPtr(perm),
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "add",
+						Description: "Add a channel to the blacklist",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to blacklist",
+								Required:    true,
+							},
+						},
+					},
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "remove",
+						Description: "Remove a channel from the blacklist",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to remove from blacklist",
+								Required:    true,
+							},
+						},
+					},
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "list",
+						Description: "List all blacklisted channels",
+					},
+				},
+			})
+		}
+
 		// /warn
 		reasonMaxLen := 1024
 		commands = append(commands, discord.SlashCommandCreate{
@@ -281,6 +362,10 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleWelcome(e)
 	case "warn":
 		b.handleWarn(e)
+	case "trconfig":
+		b.handleTopReactionsConfig(e)
+	case "trblacklist":
+		b.handleTopReactionsBlacklist(e)
 	}
 }
 

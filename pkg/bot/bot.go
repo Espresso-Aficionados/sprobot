@@ -18,21 +18,23 @@ import (
 
 type Bot struct {
 	*botutil.BaseBot
-	stop             chan struct{}
-	searchClient     *http.Client
-	skipList         map[snowflake.ID]string // goroutine-confined to forumReminderLoop
-	topPosters       map[snowflake.ID]*guildPostCounts
-	posterRole       map[snowflake.ID]*posterRoleState
-	tickets          map[snowflake.ID]*ticketState
-	shortcuts        map[snowflake.ID]*shortcutState
-	welcome          map[snowflake.ID]*welcomeState
-	welcomeSent      map[snowflake.ID]time.Time
-	msgCache         *cappedGroupedCache[discord.Message]
-	memberCache      *cappedGroupedCache[discord.Member]
-	topPostersConfig map[snowflake.ID]topPostersConfig
-	posterRoleConfig map[snowflake.ID]posterRoleConfig
-	eventLogConfig   map[snowflake.ID]eventLogChannelConfig
-	autoRoleID       snowflake.ID
+	stop               chan struct{}
+	searchClient       *http.Client
+	skipList           map[snowflake.ID]string // goroutine-confined to forumReminderLoop
+	topPosters         map[snowflake.ID]*guildPostCounts
+	posterRole         map[snowflake.ID]*posterRoleState
+	tickets            map[snowflake.ID]*ticketState
+	shortcuts          map[snowflake.ID]*shortcutState
+	welcome            map[snowflake.ID]*welcomeState
+	welcomeSent        map[snowflake.ID]time.Time
+	msgCache           *cappedGroupedCache[discord.Message]
+	memberCache        *cappedGroupedCache[discord.Member]
+	topReactions       map[snowflake.ID]*topReactionsState
+	topPostersConfig   map[snowflake.ID]topPostersConfig
+	posterRoleConfig   map[snowflake.ID]posterRoleConfig
+	eventLogConfig     map[snowflake.ID]eventLogChannelConfig
+	topReactionsConfig map[snowflake.ID]topReactionsStaticConfig
+	autoRoleID         snowflake.ID
 }
 
 func New(token string) (*Bot, error) {
@@ -45,22 +47,24 @@ func New(token string) (*Bot, error) {
 	memberCache := newCappedGroupedCache[discord.Member](100000)
 
 	b := &Bot{
-		BaseBot:          base,
-		stop:             make(chan struct{}),
-		searchClient:     &http.Client{Timeout: 30 * time.Second},
-		skipList:         make(map[snowflake.ID]string),
-		topPosters:       make(map[snowflake.ID]*guildPostCounts),
-		posterRole:       make(map[snowflake.ID]*posterRoleState),
-		tickets:          make(map[snowflake.ID]*ticketState),
-		shortcuts:        make(map[snowflake.ID]*shortcutState),
-		welcome:          make(map[snowflake.ID]*welcomeState),
-		welcomeSent:      make(map[snowflake.ID]time.Time),
-		msgCache:         msgCache,
-		memberCache:      memberCache,
-		topPostersConfig: getTopPostersConfig(base.Env),
-		posterRoleConfig: getPosterRoleConfig(base.Env),
-		eventLogConfig:   getEventLogConfig(base.Env),
-		autoRoleID:       getAutoRoleID(base.Env),
+		BaseBot:            base,
+		stop:               make(chan struct{}),
+		searchClient:       &http.Client{Timeout: 30 * time.Second},
+		skipList:           make(map[snowflake.ID]string),
+		topPosters:         make(map[snowflake.ID]*guildPostCounts),
+		posterRole:         make(map[snowflake.ID]*posterRoleState),
+		tickets:            make(map[snowflake.ID]*ticketState),
+		shortcuts:          make(map[snowflake.ID]*shortcutState),
+		welcome:            make(map[snowflake.ID]*welcomeState),
+		welcomeSent:        make(map[snowflake.ID]time.Time),
+		topReactions:       make(map[snowflake.ID]*topReactionsState),
+		msgCache:           msgCache,
+		memberCache:        memberCache,
+		topPostersConfig:   getTopPostersConfig(base.Env),
+		posterRoleConfig:   getPosterRoleConfig(base.Env),
+		eventLogConfig:     getEventLogConfig(base.Env),
+		topReactionsConfig: getTopReactionsConfig(base.Env),
+		autoRoleID:         getAutoRoleID(base.Env),
 	}
 
 	b.loadMessageCache()
@@ -78,6 +82,7 @@ func New(token string) (*Bot, error) {
 				gateway.IntentGuildMembers,
 				gateway.IntentGuildModeration,
 				gateway.IntentGuildMessages,
+				gateway.IntentGuildMessageReactions,
 				gateway.IntentMessageContent,
 			),
 		),
@@ -105,6 +110,10 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onRoleUpdate),
 		bot.WithEventListenerFunc(b.onRoleDelete),
 		bot.WithEventListenerFunc(b.onGuildUpdate),
+		bot.WithEventListenerFunc(b.onReactionAdd),
+		bot.WithEventListenerFunc(b.onReactionRemove),
+		bot.WithEventListenerFunc(b.onReactionRemoveAll),
+		bot.WithEventListenerFunc(b.onReactionRemoveEmoji),
 	)
 	if err != nil {
 		return nil, err
@@ -129,12 +138,14 @@ func (b *Bot) Run() error {
 	b.loadTickets()
 	b.loadShortcuts()
 	b.loadWelcome()
+	b.loadTopReactions()
 	b.ensureTicketPanels()
 	b.ensureSelfrolePanels()
 	if err := b.registerAllCommands(); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
 	}
 	go b.forumReminderLoop()
+	go b.topReactionsLoop()
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTopPosters)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.savePosterRole)
@@ -143,6 +154,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveWelcome)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMessageCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCache)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTopReactions)
 
 	botutil.WaitForShutdown(b.Log, "Bot")
 	close(b.stop)
@@ -151,6 +163,7 @@ func (b *Bot) Run() error {
 	b.saveTickets()
 	b.saveShortcuts()
 	b.saveWelcome()
+	b.saveTopReactions()
 	b.saveMessageCache()
 	b.saveMemberCache()
 	return nil
