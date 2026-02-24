@@ -161,55 +161,49 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
-		// /trconfig and /trblacklist
-		if _, ok := b.topReactionsConfig[guildID]; ok {
+		// /sbconfig and /sbblacklist
+		emojiMaxLen := 50
+		if _, ok := b.starboardConfig[guildID]; ok {
 			commands = append(commands, discord.SlashCommandCreate{
-				Name:                     "trconfig",
-				Description:              "Configure top reactions summary",
+				Name:                     "sbconfig",
+				Description:              "Configure starboard",
 				DefaultMemberPermissions: omit.NewPtr(perm),
 				Options: []discord.ApplicationCommandOption{
 					discord.ApplicationCommandOptionSubCommand{
 						Name:        "set",
-						Description: "Update top reactions settings",
+						Description: "Update starboard settings",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
 								Name:        "channel",
-								Description: "Channel to post summaries in",
+								Description: "Channel to post starboard entries in",
+							},
+							discord.ApplicationCommandOptionString{
+								Name:        "emoji",
+								Description: "Reaction emoji (e.g. ⭐ or paste a custom emoji)",
+								MaxLength:   &emojiMaxLen,
 							},
 							discord.ApplicationCommandOptionInt{
-								Name:        "window",
-								Description: "Time window in hours (1-720)",
+								Name:        "threshold",
+								Description: "Number of reactions to trigger starboard (1-100)",
 								MinValue:    intPtr(1),
-								MaxValue:    intPtr(720),
-							},
-							discord.ApplicationCommandOptionInt{
-								Name:        "frequency",
-								Description: "Posting frequency in hours (1-720)",
-								MinValue:    intPtr(1),
-								MaxValue:    intPtr(720),
-							},
-							discord.ApplicationCommandOptionInt{
-								Name:        "count",
-								Description: "Number of top messages to show (1-25)",
-								MinValue:    intPtr(1),
-								MaxValue:    intPtr(25),
+								MaxValue:    intPtr(100),
 							},
 						},
 					},
 					discord.ApplicationCommandOptionSubCommand{
 						Name:        "show",
-						Description: "Show current top reactions configuration",
+						Description: "Show current starboard configuration",
 					},
 					discord.ApplicationCommandOptionSubCommand{
 						Name:        "disable",
-						Description: "Disable top reactions posting",
+						Description: "Disable starboard posting",
 					},
 				},
 			})
 
 			commands = append(commands, discord.SlashCommandCreate{
-				Name:                     "trblacklist",
-				Description:              "Manage top reactions channel blacklist",
+				Name:                     "sbblacklist",
+				Description:              "Manage starboard channel blacklist",
 				DefaultMemberPermissions: omit.NewPtr(perm),
 				Options: []discord.ApplicationCommandOption{
 					discord.ApplicationCommandOptionSubCommand{
@@ -362,10 +356,10 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleWelcome(e)
 	case "warn":
 		b.handleWarn(e)
-	case "trconfig":
-		b.handleTopReactionsConfig(e)
-	case "trblacklist":
-		b.handleTopReactionsBlacklist(e)
+	case "sbconfig":
+		b.handleStarboardConfig(e)
+	case "sbblacklist":
+		b.handleStarboardBlacklist(e)
 	}
 }
 

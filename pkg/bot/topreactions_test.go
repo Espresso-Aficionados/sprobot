@@ -9,19 +9,17 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
-func TestTopReactionsStateJSONRoundTrip(t *testing.T) {
-	st := &topReactionsState{
-		Settings: topReactionsSettings{
-			OutputChannelID:  123456,
-			WindowMinutes:    720,
-			FrequencyMinutes: 360,
-			Count:            5,
-			Blacklist:        []snowflake.ID{111, 222},
+func TestStarboardStateJSONRoundTrip(t *testing.T) {
+	st := &starboardState{
+		Settings: starboardSettings{
+			OutputChannelID: 123456,
+			Emoji:           "⭐",
+			Threshold:       3,
+			Blacklist:       []snowflake.ID{111, 222},
 		},
-		Messages: map[snowflake.ID]trackedMessage{
-			999: {ChannelID: 100, AuthorID: 200, Count: 3},
+		Entries: map[snowflake.ID]starboardEntry{
+			999: {ChannelID: 100, AuthorID: 200, Count: 5, StarboardMsgID: 888},
 		},
-		LastPost: time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC),
 	}
 
 	data, err := json.Marshal(st)
@@ -29,12 +27,11 @@ func TestTopReactionsStateJSONRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// mu should not appear in JSON
 	if strings.Contains(string(data), "mu") {
 		t.Error("mu should not be serialized to JSON")
 	}
 
-	var loaded topReactionsState
+	var loaded starboardState
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		t.Fatal(err)
 	}
@@ -42,109 +39,70 @@ func TestTopReactionsStateJSONRoundTrip(t *testing.T) {
 	if loaded.Settings.OutputChannelID != 123456 {
 		t.Errorf("expected OutputChannelID 123456, got %d", loaded.Settings.OutputChannelID)
 	}
-	if loaded.Settings.WindowMinutes != 720 {
-		t.Errorf("expected WindowMinutes 720, got %d", loaded.Settings.WindowMinutes)
+	if loaded.Settings.Emoji != "⭐" {
+		t.Errorf("expected Emoji ⭐, got %s", loaded.Settings.Emoji)
 	}
-	if loaded.Settings.FrequencyMinutes != 360 {
-		t.Errorf("expected FrequencyMinutes 360, got %d", loaded.Settings.FrequencyMinutes)
-	}
-	if loaded.Settings.Count != 5 {
-		t.Errorf("expected Count 5, got %d", loaded.Settings.Count)
+	if loaded.Settings.Threshold != 3 {
+		t.Errorf("expected Threshold 3, got %d", loaded.Settings.Threshold)
 	}
 	if len(loaded.Settings.Blacklist) != 2 {
 		t.Errorf("expected 2 blacklist entries, got %d", len(loaded.Settings.Blacklist))
 	}
-	if len(loaded.Messages) != 1 {
-		t.Errorf("expected 1 message, got %d", len(loaded.Messages))
+	if len(loaded.Entries) != 1 {
+		t.Errorf("expected 1 entry, got %d", len(loaded.Entries))
 	}
-	tm := loaded.Messages[999]
-	if tm.Count != 3 || tm.ChannelID != 100 || tm.AuthorID != 200 {
-		t.Errorf("unexpected message data: %+v", tm)
-	}
-	if !loaded.LastPost.Equal(st.LastPost) {
-		t.Errorf("expected LastPost %v, got %v", st.LastPost, loaded.LastPost)
+	entry := loaded.Entries[999]
+	if entry.Count != 5 || entry.ChannelID != 100 || entry.AuthorID != 200 || entry.StarboardMsgID != 888 {
+		t.Errorf("unexpected entry data: %+v", entry)
 	}
 }
 
-func TestPruneOldMessages(t *testing.T) {
+func TestPruneUnpostedEntries(t *testing.T) {
 	now := time.Now()
-	// Create snowflakes: one recent, one old
-	recentID := snowflake.New(now.Add(-30 * time.Minute))
-	oldID := snowflake.New(now.Add(-25 * time.Hour))
+	recentID := snowflake.New(now.Add(-1 * time.Hour))
+	oldUnpostedID := snowflake.New(now.Add(-31 * 24 * time.Hour))
+	oldPostedID := snowflake.New(now.Add(-32 * 24 * time.Hour))
 
-	st := &topReactionsState{
-		Settings: topReactionsSettings{WindowMinutes: 1440}, // 24h
-		Messages: map[snowflake.ID]trackedMessage{
-			recentID: {ChannelID: 1, AuthorID: 2, Count: 5},
-			oldID:    {ChannelID: 1, AuthorID: 3, Count: 10},
+	st := &starboardState{
+		Entries: map[snowflake.ID]starboardEntry{
+			recentID:      {ChannelID: 1, Count: 2},
+			oldUnpostedID: {ChannelID: 1, Count: 3, StarboardMsgID: 0},
+			oldPostedID:   {ChannelID: 1, Count: 5, StarboardMsgID: 777},
 		},
 	}
 
-	pruneOldMessages(st, now)
+	pruneUnpostedEntries(st, now)
 
-	if len(st.Messages) != 1 {
-		t.Errorf("expected 1 message after prune, got %d", len(st.Messages))
+	if len(st.Entries) != 2 {
+		t.Errorf("expected 2 entries after prune, got %d", len(st.Entries))
 	}
-	if _, ok := st.Messages[recentID]; !ok {
-		t.Error("recent message should have been kept")
+	if _, ok := st.Entries[recentID]; !ok {
+		t.Error("recent entry should have been kept")
 	}
-	if _, ok := st.Messages[oldID]; ok {
-		t.Error("old message should have been pruned")
+	if _, ok := st.Entries[oldUnpostedID]; ok {
+		t.Error("old unposted entry should have been pruned")
+	}
+	if _, ok := st.Entries[oldPostedID]; !ok {
+		t.Error("old posted entry should have been kept")
 	}
 }
 
-func TestPruneOldMessagesDefaultWindow(t *testing.T) {
-	now := time.Now()
-	oldID := snowflake.New(now.Add(-25 * time.Hour))
-
-	st := &topReactionsState{
-		Settings: topReactionsSettings{}, // defaults to 1440 min
-		Messages: map[snowflake.ID]trackedMessage{
-			oldID: {Count: 1},
-		},
-	}
-
-	pruneOldMessages(st, now)
-
-	if len(st.Messages) != 0 {
-		t.Error("old message should have been pruned with default window")
+func TestEffectiveThresholdDefault(t *testing.T) {
+	s := &starboardSettings{}
+	if s.effectiveThreshold() != defaultThreshold {
+		t.Errorf("expected default threshold %d, got %d", defaultThreshold, s.effectiveThreshold())
 	}
 }
 
-func TestSettingsEffectiveDefaults(t *testing.T) {
-	s := &topReactionsSettings{}
-
-	if s.effectiveWindow() != defaultWindowMinutes {
-		t.Errorf("expected default window %d, got %d", defaultWindowMinutes, s.effectiveWindow())
-	}
-	if s.effectiveFrequency() != defaultFrequencyMinutes {
-		t.Errorf("expected default frequency %d, got %d", defaultFrequencyMinutes, s.effectiveFrequency())
-	}
-	if s.effectiveCount() != defaultTopCount {
-		t.Errorf("expected default count %d, got %d", defaultTopCount, s.effectiveCount())
-	}
-}
-
-func TestSettingsEffectiveCustom(t *testing.T) {
-	s := &topReactionsSettings{
-		WindowMinutes:    120,
-		FrequencyMinutes: 60,
-		Count:            3,
-	}
-
-	if s.effectiveWindow() != 120 {
-		t.Errorf("expected window 120, got %d", s.effectiveWindow())
-	}
-	if s.effectiveFrequency() != 60 {
-		t.Errorf("expected frequency 60, got %d", s.effectiveFrequency())
-	}
-	if s.effectiveCount() != 3 {
-		t.Errorf("expected count 3, got %d", s.effectiveCount())
+func TestEffectiveThresholdCustom(t *testing.T) {
+	s := &starboardSettings{Threshold: 10}
+	if s.effectiveThreshold() != 10 {
+		t.Errorf("expected threshold 10, got %d", s.effectiveThreshold())
 	}
 }
 
 func TestIsBlacklisted(t *testing.T) {
-	s := &topReactionsSettings{
+	s := &starboardSettings{
 		Blacklist: []snowflake.ID{100, 200, 300},
 	}
 
@@ -157,15 +115,44 @@ func TestIsBlacklisted(t *testing.T) {
 }
 
 func TestIsBlacklistedEmpty(t *testing.T) {
-	s := &topReactionsSettings{}
-
+	s := &starboardSettings{}
 	if s.isBlacklisted(100) {
 		t.Error("empty blacklist should never match")
 	}
 }
 
-func TestGetTopReactionsConfig(t *testing.T) {
-	devCfg := getTopReactionsConfig("dev")
+func TestEmojiDisplayUnicode(t *testing.T) {
+	if got := emojiDisplay("⭐"); got != "⭐" {
+		t.Errorf("expected ⭐, got %s", got)
+	}
+}
+
+func TestEmojiDisplayCustom(t *testing.T) {
+	if got := emojiDisplay("fire:123456"); got != "<:fire:123456>" {
+		t.Errorf("expected <:fire:123456>, got %s", got)
+	}
+}
+
+func TestParseEmojiInputUnicode(t *testing.T) {
+	if got := parseEmojiInput("⭐"); got != "⭐" {
+		t.Errorf("expected ⭐, got %s", got)
+	}
+}
+
+func TestParseEmojiInputCustom(t *testing.T) {
+	if got := parseEmojiInput("<:fire:123456>"); got != "fire:123456" {
+		t.Errorf("expected fire:123456, got %s", got)
+	}
+}
+
+func TestParseEmojiInputAnimated(t *testing.T) {
+	if got := parseEmojiInput("<a:dance:789>"); got != "dance:789" {
+		t.Errorf("expected dance:789, got %s", got)
+	}
+}
+
+func TestGetStarboardConfig(t *testing.T) {
+	devCfg := getStarboardConfig("dev")
 	if devCfg == nil {
 		t.Fatal("expected dev config")
 	}
@@ -173,7 +160,7 @@ func TestGetTopReactionsConfig(t *testing.T) {
 		t.Error("expected dev guild in config")
 	}
 
-	prodCfg := getTopReactionsConfig("prod")
+	prodCfg := getStarboardConfig("prod")
 	if prodCfg == nil {
 		t.Fatal("expected prod config")
 	}
@@ -181,7 +168,7 @@ func TestGetTopReactionsConfig(t *testing.T) {
 		t.Error("expected prod guild in config")
 	}
 
-	if getTopReactionsConfig("other") != nil {
+	if getStarboardConfig("other") != nil {
 		t.Error("expected nil for unknown env")
 	}
 }
@@ -193,61 +180,61 @@ func TestIntPtr(t *testing.T) {
 	}
 }
 
-func TestTrackedMessageIncrement(t *testing.T) {
-	st := &topReactionsState{
-		Messages: make(map[snowflake.ID]trackedMessage),
+func TestStarboardEntryIncrement(t *testing.T) {
+	st := &starboardState{
+		Entries: make(map[snowflake.ID]starboardEntry),
 	}
 
 	msgID := snowflake.ID(12345)
 
-	// Simulate add
-	tm := st.Messages[msgID]
-	tm.ChannelID = 100
-	tm.AuthorID = 200
-	tm.Count++
-	st.Messages[msgID] = tm
+	entry := st.Entries[msgID]
+	entry.ChannelID = 100
+	entry.AuthorID = 200
+	entry.Count++
+	st.Entries[msgID] = entry
 
-	if st.Messages[msgID].Count != 1 {
-		t.Errorf("expected count 1, got %d", st.Messages[msgID].Count)
+	if st.Entries[msgID].Count != 1 {
+		t.Errorf("expected count 1, got %d", st.Entries[msgID].Count)
 	}
 
-	// Simulate second add
-	tm = st.Messages[msgID]
-	tm.Count++
-	st.Messages[msgID] = tm
+	entry = st.Entries[msgID]
+	entry.Count++
+	st.Entries[msgID] = entry
 
-	if st.Messages[msgID].Count != 2 {
-		t.Errorf("expected count 2, got %d", st.Messages[msgID].Count)
+	if st.Entries[msgID].Count != 2 {
+		t.Errorf("expected count 2, got %d", st.Entries[msgID].Count)
 	}
 }
 
-func TestTrackedMessageDecrementDelete(t *testing.T) {
-	st := &topReactionsState{
-		Messages: map[snowflake.ID]trackedMessage{
-			12345: {Count: 1},
+func TestStarboardEntryDecrementFloor(t *testing.T) {
+	st := &starboardState{
+		Entries: map[snowflake.ID]starboardEntry{
+			12345: {Count: 1, StarboardMsgID: 888},
 		},
 	}
 
 	msgID := snowflake.ID(12345)
 
-	// Simulate remove
-	tm := st.Messages[msgID]
-	tm.Count--
-	if tm.Count <= 0 {
-		delete(st.Messages, msgID)
-	} else {
-		st.Messages[msgID] = tm
+	entry := st.Entries[msgID]
+	entry.Count--
+	if entry.Count < 0 {
+		entry.Count = 0
+	}
+	st.Entries[msgID] = entry
+
+	if st.Entries[msgID].Count != 0 {
+		t.Errorf("expected count 0, got %d", st.Entries[msgID].Count)
 	}
 
-	if _, ok := st.Messages[msgID]; ok {
-		t.Error("message should have been deleted when count reached 0")
+	// Entry should NOT be deleted (it has a starboard post)
+	if _, ok := st.Entries[msgID]; !ok {
+		t.Error("entry with starboard post should not be deleted")
 	}
 }
 
 func TestBlacklistAddRemove(t *testing.T) {
-	s := &topReactionsSettings{}
+	s := &starboardSettings{}
 
-	// Add
 	s.Blacklist = append(s.Blacklist, 100)
 	s.Blacklist = append(s.Blacklist, 200)
 
@@ -255,7 +242,6 @@ func TestBlacklistAddRemove(t *testing.T) {
 		t.Error("100 should be blacklisted after add")
 	}
 
-	// Remove 100
 	for i, id := range s.Blacklist {
 		if id == 100 {
 			s.Blacklist = append(s.Blacklist[:i], s.Blacklist[i+1:]...)
@@ -268,5 +254,17 @@ func TestBlacklistAddRemove(t *testing.T) {
 	}
 	if !s.isBlacklisted(200) {
 		t.Error("200 should still be blacklisted")
+	}
+}
+
+func TestEmojiDisplayEdgeCases(t *testing.T) {
+	// Colon but no ID part — should be treated as unicode
+	if got := emojiDisplay("foo:"); got != "foo:" {
+		t.Errorf("expected foo:, got %s", got)
+	}
+
+	// Empty string
+	if got := emojiDisplay(""); got != "" {
+		t.Errorf("expected empty string, got %s", got)
 	}
 }

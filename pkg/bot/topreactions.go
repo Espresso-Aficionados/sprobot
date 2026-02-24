@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -18,17 +18,17 @@ import (
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
-// topReactionsStaticConfig identifies which guilds have the feature enabled.
-type topReactionsStaticConfig struct{}
+// starboardStaticConfig identifies which guilds have the feature enabled.
+type starboardStaticConfig struct{}
 
-func getTopReactionsConfig(env string) map[snowflake.ID]topReactionsStaticConfig {
+func getStarboardConfig(env string) map[snowflake.ID]starboardStaticConfig {
 	switch env {
 	case "prod":
-		return map[snowflake.ID]topReactionsStaticConfig{
+		return map[snowflake.ID]starboardStaticConfig{
 			726985544038612993: {},
 		}
 	case "dev":
-		return map[snowflake.ID]topReactionsStaticConfig{
+		return map[snowflake.ID]starboardStaticConfig{
 			1013566342345019512: {},
 		}
 	default:
@@ -36,61 +36,23 @@ func getTopReactionsConfig(env string) map[snowflake.ID]topReactionsStaticConfig
 	}
 }
 
-type topReactionsSettings struct {
-	OutputChannelID  snowflake.ID   `json:"output_channel_id"`
-	WindowMinutes    int            `json:"window_minutes"`
-	FrequencyMinutes int            `json:"frequency_minutes"`
-	Count            int            `json:"count"`
-	Blacklist        []snowflake.ID `json:"blacklist"`
+type starboardSettings struct {
+	OutputChannelID snowflake.ID   `json:"output_channel_id"`
+	Emoji           string         `json:"emoji"`
+	Threshold       int            `json:"threshold"`
+	Blacklist       []snowflake.ID `json:"blacklist"`
 }
 
-type trackedMessage struct {
-	ChannelID snowflake.ID `json:"channel_id"`
-	AuthorID  snowflake.ID `json:"author_id"`
-	Count     int          `json:"count"`
-}
+const defaultThreshold = 5
 
-type topReactionsState struct {
-	mu       sync.Mutex
-	Settings topReactionsSettings            `json:"settings"`
-	Messages map[snowflake.ID]trackedMessage `json:"messages"`
-	LastPost time.Time                       `json:"last_post"`
-}
-
-const (
-	defaultWindowMinutes    = 1440
-	defaultFrequencyMinutes = 1440
-	defaultTopCount         = 10
-)
-
-func intPtr(v int) *int { return &v }
-
-// effectiveWindow returns the configured window or the default.
-func (s *topReactionsSettings) effectiveWindow() int {
-	if s.WindowMinutes > 0 {
-		return s.WindowMinutes
+func (s *starboardSettings) effectiveThreshold() int {
+	if s.Threshold > 0 {
+		return s.Threshold
 	}
-	return defaultWindowMinutes
+	return defaultThreshold
 }
 
-// effectiveFrequency returns the configured frequency or the default.
-func (s *topReactionsSettings) effectiveFrequency() int {
-	if s.FrequencyMinutes > 0 {
-		return s.FrequencyMinutes
-	}
-	return defaultFrequencyMinutes
-}
-
-// effectiveCount returns the configured count or the default.
-func (s *topReactionsSettings) effectiveCount() int {
-	if s.Count > 0 {
-		return s.Count
-	}
-	return defaultTopCount
-}
-
-// isBlacklisted returns true if the channel is in the blacklist.
-func (s *topReactionsSettings) isBlacklisted(channelID snowflake.ID) bool {
+func (s *starboardSettings) isBlacklisted(channelID snowflake.ID) bool {
 	for _, id := range s.Blacklist {
 		if id == channelID {
 			return true
@@ -99,75 +61,109 @@ func (s *topReactionsSettings) isBlacklisted(channelID snowflake.ID) bool {
 	return false
 }
 
+type starboardEntry struct {
+	ChannelID      snowflake.ID `json:"channel_id"`
+	AuthorID       snowflake.ID `json:"author_id"`
+	Count          int          `json:"count"`
+	StarboardMsgID snowflake.ID `json:"starboard_msg_id"`
+}
+
+type starboardState struct {
+	mu       sync.Mutex
+	Settings starboardSettings               `json:"settings"`
+	Entries  map[snowflake.ID]starboardEntry `json:"entries"` // keyed by source message ID
+}
+
+func intPtr(v int) *int { return &v }
+
+// emojiDisplay returns the display form of an emoji string.
+// Custom emoji in "name:id" format becomes "<:name:id>"; unicode emoji is returned as-is.
+func emojiDisplay(emoji string) string {
+	if parts := strings.SplitN(emoji, ":", 2); len(parts) == 2 && parts[1] != "" {
+		return "<:" + emoji + ">"
+	}
+	return emoji
+}
+
+// customEmojiRegexp matches Discord custom emoji like <:name:123> or <a:name:123>.
+var customEmojiRegexp = regexp.MustCompile(`^<a?:(\w+):(\d+)>$`)
+
+// parseEmojiInput converts user input (unicode or <:name:id>) to storage form (unicode or name:id).
+func parseEmojiInput(input string) string {
+	if m := customEmojiRegexp.FindStringSubmatch(input); m != nil {
+		return m[1] + ":" + m[2]
+	}
+	return input
+}
+
 // --- Load / Save / Persist ---
 
-func (b *Bot) loadTopReactions() {
-	if b.topReactionsConfig == nil {
+func (b *Bot) loadStarboard() {
+	if b.starboardConfig == nil {
 		return
 	}
 
 	ctx := context.Background()
-	for guildID := range b.topReactionsConfig {
-		st := &topReactionsState{
-			Messages: make(map[snowflake.ID]trackedMessage),
+	for guildID := range b.starboardConfig {
+		st := &starboardState{
+			Entries: make(map[snowflake.ID]starboardEntry),
 		}
 
-		data, err := b.S3.FetchGuildJSON(ctx, "topreactions", fmt.Sprintf("%d", guildID))
+		data, err := b.S3.FetchGuildJSON(ctx, "starboard", fmt.Sprintf("%d", guildID))
 		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing top reactions data, starting fresh", "guild_id", guildID)
+			b.Log.Info("No existing starboard data, starting fresh", "guild_id", guildID)
 		} else if err != nil {
-			b.Log.Error("Failed to load top reactions data", "guild_id", guildID, "error", err)
+			b.Log.Error("Failed to load starboard data", "guild_id", guildID, "error", err)
 		} else {
 			if err := json.Unmarshal(data, st); err != nil {
-				b.Log.Error("Failed to decode top reactions data", "guild_id", guildID, "error", err)
+				b.Log.Error("Failed to decode starboard data", "guild_id", guildID, "error", err)
 			}
-			if st.Messages == nil {
-				st.Messages = make(map[snowflake.ID]trackedMessage)
+			if st.Entries == nil {
+				st.Entries = make(map[snowflake.ID]starboardEntry)
 			}
 		}
 
-		b.topReactions[guildID] = st
-		b.Log.Info("Loaded top reactions state", "guild_id", guildID, "tracked", len(st.Messages))
+		b.starboard[guildID] = st
+		b.Log.Info("Loaded starboard state", "guild_id", guildID, "entries", len(st.Entries))
 	}
 }
 
-func (b *Bot) persistTopReactions(guildID snowflake.ID, st *topReactionsState) error {
+func (b *Bot) persistStarboard(guildID snowflake.ID, st *starboardState) error {
 	st.mu.Lock()
 	data, err := json.Marshal(st)
 	st.mu.Unlock()
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	return b.S3.SaveGuildJSON(context.Background(), "topreactions", fmt.Sprintf("%d", guildID), data)
+	return b.S3.SaveGuildJSON(context.Background(), "starboard", fmt.Sprintf("%d", guildID), data)
 }
 
-func (b *Bot) saveTopReactions() {
+func (b *Bot) saveStarboard() {
 	defer func() {
 		if r := recover(); r != nil {
-			b.Log.Error("Panic in top reactions save", "error", r)
+			b.Log.Error("Panic in starboard save", "error", r)
 		}
 	}()
 
-	for guildID, st := range b.topReactions {
+	for guildID, st := range b.starboard {
 		st.mu.Lock()
-		pruneOldMessages(st, time.Now())
+		pruneUnpostedEntries(st, time.Now())
 		st.mu.Unlock()
 
-		if err := b.persistTopReactions(guildID, st); err != nil {
-			b.Log.Error("Failed to save top reactions data", "guild_id", guildID, "error", err)
+		if err := b.persistStarboard(guildID, st); err != nil {
+			b.Log.Error("Failed to save starboard data", "guild_id", guildID, "error", err)
 		} else {
-			b.Log.Info("Saved top reactions state", "guild_id", guildID)
+			b.Log.Info("Saved starboard state", "guild_id", guildID)
 		}
 	}
 }
 
-// pruneOldMessages removes messages older than the window. Must be called with mu held.
-func pruneOldMessages(st *topReactionsState, now time.Time) {
-	window := time.Duration(st.Settings.effectiveWindow()) * time.Minute
-	cutoff := now.Add(-window)
-	for msgID := range st.Messages {
-		if msgID.Time().Before(cutoff) {
-			delete(st.Messages, msgID)
+// pruneUnpostedEntries removes unposted entries older than 30 days. Must be called with mu held.
+func pruneUnpostedEntries(st *starboardState, now time.Time) {
+	cutoff := now.Add(-30 * 24 * time.Hour)
+	for msgID, entry := range st.Entries {
+		if entry.StarboardMsgID == 0 && msgID.Time().Before(cutoff) {
+			delete(st.Entries, msgID)
 		}
 	}
 }
@@ -179,187 +175,235 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 		return
 	}
 
-	st := b.topReactions[e.GuildID]
+	st := b.starboard[e.GuildID]
 	if st == nil {
 		return
 	}
 
 	st.mu.Lock()
-	defer st.mu.Unlock()
 
-	if st.Settings.isBlacklisted(e.ChannelID) {
+	if st.Settings.OutputChannelID == 0 || st.Settings.Emoji == "" {
+		st.mu.Unlock()
 		return
 	}
 
-	tm, ok := st.Messages[e.MessageID]
+	if e.Emoji.Reaction() != st.Settings.Emoji {
+		st.mu.Unlock()
+		return
+	}
+
+	if e.ChannelID == st.Settings.OutputChannelID {
+		st.mu.Unlock()
+		return
+	}
+
+	if st.Settings.isBlacklisted(e.ChannelID) {
+		st.mu.Unlock()
+		return
+	}
+
+	entry, ok := st.Entries[e.MessageID]
 	if !ok {
 		var authorID snowflake.ID
 		if e.MessageAuthorID != nil {
 			authorID = *e.MessageAuthorID
 		}
-		tm = trackedMessage{
+		entry = starboardEntry{
 			ChannelID: e.ChannelID,
 			AuthorID:  authorID,
 		}
 	}
-	tm.Count++
-	st.Messages[e.MessageID] = tm
+	entry.Count++
+	st.Entries[e.MessageID] = entry
+
+	threshold := st.Settings.effectiveThreshold()
+	shouldPost := entry.Count >= threshold && entry.StarboardMsgID == 0
+	shouldUpdate := entry.StarboardMsgID != 0
+
+	st.mu.Unlock()
+
+	if shouldPost {
+		b.postStarboardEntry(e.GuildID, e.MessageID, st)
+	} else if shouldUpdate {
+		b.updateStarboardEntry(e.GuildID, e.MessageID, st)
+	}
 }
 
 func (b *Bot) onReactionRemove(e *events.GuildMessageReactionRemove) {
-	st := b.topReactions[e.GuildID]
+	st := b.starboard[e.GuildID]
 	if st == nil {
 		return
 	}
 
 	st.mu.Lock()
-	defer st.mu.Unlock()
 
-	tm, ok := st.Messages[e.MessageID]
-	if !ok {
+	if st.Settings.Emoji == "" || e.Emoji.Reaction() != st.Settings.Emoji {
+		st.mu.Unlock()
 		return
 	}
-	tm.Count--
-	if tm.Count <= 0 {
-		delete(st.Messages, e.MessageID)
-	} else {
-		st.Messages[e.MessageID] = tm
+
+	entry, ok := st.Entries[e.MessageID]
+	if !ok {
+		st.mu.Unlock()
+		return
+	}
+
+	entry.Count--
+	if entry.Count < 0 {
+		entry.Count = 0
+	}
+	st.Entries[e.MessageID] = entry
+
+	shouldUpdate := entry.StarboardMsgID != 0
+
+	st.mu.Unlock()
+
+	if shouldUpdate {
+		b.updateStarboardEntry(e.GuildID, e.MessageID, st)
 	}
 }
 
 func (b *Bot) onReactionRemoveAll(e *events.GuildMessageReactionRemoveAll) {
-	st := b.topReactions[e.GuildID]
+	st := b.starboard[e.GuildID]
 	if st == nil {
 		return
 	}
 
 	st.mu.Lock()
-	delete(st.Messages, e.MessageID)
-	st.mu.Unlock()
-}
 
-func (b *Bot) onReactionRemoveEmoji(e *events.GuildMessageReactionRemoveEmoji) {
-	// We track total count, not per-emoji. Time-window prune handles cleanup.
-}
-
-// --- Periodic Posting Loop ---
-
-func (b *Bot) topReactionsLoop() {
-	// Wait for ready
-	readyTicker := time.NewTicker(1 * time.Second)
-	defer readyTicker.Stop()
-	for !b.Ready.Load() {
-		select {
-		case <-b.stop:
-			return
-		case <-readyTicker.C:
-		}
-	}
-
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-b.stop:
-			return
-		case <-ticker.C:
-			b.checkTopReactionsPosts()
-		}
-	}
-}
-
-func (b *Bot) checkTopReactionsPosts() {
-	now := time.Now()
-	for guildID, st := range b.topReactions {
-		st.mu.Lock()
-		if st.Settings.OutputChannelID == 0 {
-			st.mu.Unlock()
-			continue
-		}
-		freq := time.Duration(st.Settings.effectiveFrequency()) * time.Minute
-		if now.Sub(st.LastPost) < freq {
-			st.mu.Unlock()
-			continue
-		}
+	entry, ok := st.Entries[e.MessageID]
+	if !ok {
 		st.mu.Unlock()
-
-		b.postTopReactions(guildID, st, now)
-	}
-}
-
-type rankedMessage struct {
-	MessageID snowflake.ID
-	ChannelID snowflake.ID
-	AuthorID  snowflake.ID
-	Count     int
-}
-
-func (b *Bot) postTopReactions(guildID snowflake.ID, st *topReactionsState, now time.Time) {
-	st.mu.Lock()
-	pruneOldMessages(st, now)
-
-	// Collect candidates
-	candidates := make([]rankedMessage, 0, len(st.Messages))
-	for msgID, tm := range st.Messages {
-		candidates = append(candidates, rankedMessage{
-			MessageID: msgID,
-			ChannelID: tm.ChannelID,
-			AuthorID:  tm.AuthorID,
-			Count:     tm.Count,
-		})
-	}
-	outputChannel := st.Settings.OutputChannelID
-	count := st.Settings.effectiveCount()
-	st.LastPost = now
-	st.mu.Unlock()
-
-	if len(candidates) == 0 {
-		if err := b.persistTopReactions(guildID, st); err != nil {
-			b.Log.Error("Failed to persist top reactions after empty post", "guild_id", guildID, "error", err)
-		}
 		return
 	}
 
-	// Sort by count descending
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Count > candidates[j].Count
-	})
+	entry.Count = 0
+	st.Entries[e.MessageID] = entry
 
-	if len(candidates) > count {
-		candidates = candidates[:count]
+	shouldUpdate := entry.StarboardMsgID != 0
+
+	st.mu.Unlock()
+
+	if shouldUpdate {
+		b.updateStarboardEntry(e.GuildID, e.MessageID, st)
+	}
+}
+
+func (b *Bot) onReactionRemoveEmoji(e *events.GuildMessageReactionRemoveEmoji) {
+	st := b.starboard[e.GuildID]
+	if st == nil {
+		return
+	}
+
+	st.mu.Lock()
+
+	if st.Settings.Emoji == "" || e.Emoji.Reaction() != st.Settings.Emoji {
+		st.mu.Unlock()
+		return
+	}
+
+	entry, ok := st.Entries[e.MessageID]
+	if !ok {
+		st.mu.Unlock()
+		return
+	}
+
+	entry.Count = 0
+	st.Entries[e.MessageID] = entry
+
+	shouldUpdate := entry.StarboardMsgID != 0
+
+	st.mu.Unlock()
+
+	if shouldUpdate {
+		b.updateStarboardEntry(e.GuildID, e.MessageID, st)
+	}
+}
+
+// --- Starboard Posting ---
+
+func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState) {
+	st.mu.Lock()
+	entry := st.Entries[msgID]
+	settings := st.Settings
+	st.mu.Unlock()
+
+	msg, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID)
+	if err != nil {
+		b.Log.Error("Failed to fetch message for starboard", "guild_id", guildID, "message_id", msgID, "error", err)
+		return
 	}
 
 	guildStr := fmt.Sprintf("%d", guildID)
-	var lines []string
-	for rank, c := range candidates {
-		link := messageLink(guildStr, fmt.Sprintf("%d", c.ChannelID), fmt.Sprintf("%d", c.MessageID))
-		lines = append(lines, fmt.Sprintf("%d. [Jump to message](%s) by <@%d> in <#%d> — %d reactions",
-			rank+1, link, c.AuthorID, c.ChannelID, c.Count))
+	channelStr := fmt.Sprintf("%d", entry.ChannelID)
+	msgStr := fmt.Sprintf("%d", msgID)
+	link := messageLink(guildStr, channelStr, msgStr)
+
+	content := fmt.Sprintf("%s **%d** | <#%d>", emojiDisplay(settings.Emoji), entry.Count, entry.ChannelID)
+
+	description := msg.Content
+	if len(description) > 2000 {
+		description = description[:2000] + "..."
 	}
+	description += fmt.Sprintf("\n\n[Jump to message](%s)", link)
 
 	embed := discord.Embed{
-		Title:       "Top Reactions",
-		Description: strings.Join(lines, "\n"),
+		Author: &discord.EmbedAuthor{
+			Name:    msg.Author.EffectiveName(),
+			IconURL: msg.Author.EffectiveAvatarURL(),
+		},
+		Description: description,
 		Color:       colorTeal,
-		Timestamp:   &now,
+		Timestamp:   &msg.CreatedAt,
 	}
 
-	_, err := b.Client.Rest.CreateMessage(outputChannel, discord.MessageCreate{
-		Embeds: []discord.Embed{embed},
+	// Attach the first image if present
+	for _, att := range msg.Attachments {
+		if att.ContentType != nil && strings.HasPrefix(*att.ContentType, "image/") {
+			embed.Image = &discord.EmbedResource{URL: att.URL}
+			break
+		}
+	}
+
+	sent, err := b.Client.Rest.CreateMessage(settings.OutputChannelID, discord.MessageCreate{
+		Content: content,
+		Embeds:  []discord.Embed{embed},
 	})
 	if err != nil {
-		b.Log.Error("Failed to post top reactions", "guild_id", guildID, "error", err)
+		b.Log.Error("Failed to post starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
+		return
 	}
 
-	if err := b.persistTopReactions(guildID, st); err != nil {
-		b.Log.Error("Failed to persist top reactions after post", "guild_id", guildID, "error", err)
+	st.mu.Lock()
+	entry = st.Entries[msgID]
+	entry.StarboardMsgID = sent.ID
+	st.Entries[msgID] = entry
+	st.mu.Unlock()
+
+	if err := b.persistStarboard(guildID, st); err != nil {
+		b.Log.Error("Failed to persist starboard after post", "guild_id", guildID, "error", err)
+	}
+}
+
+func (b *Bot) updateStarboardEntry(guildID, msgID snowflake.ID, st *starboardState) {
+	st.mu.Lock()
+	entry := st.Entries[msgID]
+	settings := st.Settings
+	st.mu.Unlock()
+
+	content := fmt.Sprintf("%s **%d** | <#%d>", emojiDisplay(settings.Emoji), entry.Count, entry.ChannelID)
+
+	_, err := b.Client.Rest.UpdateMessage(settings.OutputChannelID, entry.StarboardMsgID, discord.MessageUpdate{
+		Content: &content,
+	})
+	if err != nil {
+		b.Log.Error("Failed to update starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
 	}
 }
 
 // --- Command Handlers ---
 
-func (b *Bot) handleTopReactionsConfig(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleStarboardConfig(e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -370,9 +414,9 @@ func (b *Bot) handleTopReactionsConfig(e *events.ApplicationCommandInteractionCr
 		return
 	}
 
-	st := b.topReactions[*guildID]
+	st := b.starboard[*guildID]
 	if st == nil {
-		botutil.RespondEphemeral(e, "Top reactions is not configured for this server.")
+		botutil.RespondEphemeral(e, "Starboard is not configured for this server.")
 		return
 	}
 
@@ -383,47 +427,51 @@ func (b *Bot) handleTopReactionsConfig(e *events.ApplicationCommandInteractionCr
 
 	switch *subCmd {
 	case "set":
-		b.handleTRConfigSet(e, st)
+		b.handleSBConfigSet(e, *guildID, st)
 	case "show":
-		b.handleTRConfigShow(e, st)
+		b.handleSBConfigShow(e, st)
 	case "disable":
-		b.handleTRConfigDisable(e, *guildID, st)
+		b.handleSBConfigDisable(e, *guildID, st)
 	}
 }
 
-func (b *Bot) handleTRConfigSet(e *events.ApplicationCommandInteractionCreate, st *topReactionsState) {
+func (b *Bot) handleSBConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
-	guildID := *e.GuildID()
 
 	st.mu.Lock()
 	if ch, ok := data.OptChannel("channel"); ok {
 		st.Settings.OutputChannelID = ch.ID
 	}
-	if v, ok := data.OptInt("window"); ok {
-		st.Settings.WindowMinutes = v * 60
+	if v, ok := data.OptString("emoji"); ok {
+		newEmoji := parseEmojiInput(v)
+		if newEmoji != st.Settings.Emoji {
+			// Emoji changed — clear all unposted entries
+			for id, entry := range st.Entries {
+				if entry.StarboardMsgID == 0 {
+					delete(st.Entries, id)
+				}
+			}
+			st.Settings.Emoji = newEmoji
+		}
 	}
-	if v, ok := data.OptInt("frequency"); ok {
-		st.Settings.FrequencyMinutes = v * 60
-	}
-	if v, ok := data.OptInt("count"); ok {
-		st.Settings.Count = v
+	if v, ok := data.OptInt("threshold"); ok {
+		st.Settings.Threshold = v
 	}
 	st.mu.Unlock()
 
-	if err := b.persistTopReactions(guildID, st); err != nil {
-		b.Log.Error("Failed to persist top reactions config", "guild_id", guildID, "error", err)
+	if err := b.persistStarboard(guildID, st); err != nil {
+		b.Log.Error("Failed to persist starboard config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, "Top reactions configuration updated.")
+	botutil.RespondEphemeral(e, "Starboard configuration updated.")
 }
 
-func (b *Bot) handleTRConfigShow(e *events.ApplicationCommandInteractionCreate, st *topReactionsState) {
+func (b *Bot) handleSBConfigShow(e *events.ApplicationCommandInteractionCreate, st *starboardState) {
 	st.mu.Lock()
 	s := st.Settings
-	tracked := len(st.Messages)
-	lastPost := st.LastPost
+	entryCount := len(st.Entries)
 	st.mu.Unlock()
 
 	var channelStr string
@@ -433,40 +481,38 @@ func (b *Bot) handleTRConfigShow(e *events.ApplicationCommandInteractionCreate, 
 		channelStr = fmt.Sprintf("<#%d>", s.OutputChannelID)
 	}
 
-	var lastPostStr string
-	if lastPost.IsZero() {
-		lastPostStr = "Never"
+	var emojiStr string
+	if s.Emoji == "" {
+		emojiStr = "Not set"
 	} else {
-		lastPostStr = fmt.Sprintf("<t:%d:R>", lastPost.Unix())
+		emojiStr = emojiDisplay(s.Emoji)
 	}
 
 	lines := []string{
 		fmt.Sprintf("**Output Channel:** %s", channelStr),
-		fmt.Sprintf("**Window:** %d hours", s.effectiveWindow()/60),
-		fmt.Sprintf("**Frequency:** %d hours", s.effectiveFrequency()/60),
-		fmt.Sprintf("**Count:** %d", s.effectiveCount()),
-		fmt.Sprintf("**Tracking:** %d messages", tracked),
-		fmt.Sprintf("**Last Post:** %s", lastPostStr),
+		fmt.Sprintf("**Emoji:** %s", emojiStr),
+		fmt.Sprintf("**Threshold:** %d", s.effectiveThreshold()),
+		fmt.Sprintf("**Tracked Entries:** %d", entryCount),
 	}
 
 	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
 }
 
-func (b *Bot) handleTRConfigDisable(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topReactionsState) {
+func (b *Bot) handleSBConfigDisable(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
 	st.mu.Lock()
 	st.Settings.OutputChannelID = 0
 	st.mu.Unlock()
 
-	if err := b.persistTopReactions(guildID, st); err != nil {
-		b.Log.Error("Failed to persist top reactions config", "guild_id", guildID, "error", err)
+	if err := b.persistStarboard(guildID, st); err != nil {
+		b.Log.Error("Failed to persist starboard config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, "Top reactions posting disabled. Tracking continues; settings preserved.")
+	botutil.RespondEphemeral(e, "Starboard disabled. Settings preserved.")
 }
 
-func (b *Bot) handleTopReactionsBlacklist(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleStarboardBlacklist(e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -477,9 +523,9 @@ func (b *Bot) handleTopReactionsBlacklist(e *events.ApplicationCommandInteractio
 		return
 	}
 
-	st := b.topReactions[*guildID]
+	st := b.starboard[*guildID]
 	if st == nil {
-		botutil.RespondEphemeral(e, "Top reactions is not configured for this server.")
+		botutil.RespondEphemeral(e, "Starboard is not configured for this server.")
 		return
 	}
 
@@ -490,15 +536,15 @@ func (b *Bot) handleTopReactionsBlacklist(e *events.ApplicationCommandInteractio
 
 	switch *subCmd {
 	case "add":
-		b.handleTRBlacklistAdd(e, *guildID, st)
+		b.handleSBBlacklistAdd(e, *guildID, st)
 	case "remove":
-		b.handleTRBlacklistRemove(e, *guildID, st)
+		b.handleSBBlacklistRemove(e, *guildID, st)
 	case "list":
-		b.handleTRBlacklistList(e, st)
+		b.handleSBBlacklistList(e, st)
 	}
 }
 
-func (b *Bot) handleTRBlacklistAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topReactionsState) {
+func (b *Bot) handleSBBlacklistAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 	ch, ok := data.OptChannel("channel")
 	if !ok {
@@ -515,8 +561,8 @@ func (b *Bot) handleTRBlacklistAdd(e *events.ApplicationCommandInteractionCreate
 	st.Settings.Blacklist = append(st.Settings.Blacklist, ch.ID)
 	st.mu.Unlock()
 
-	if err := b.persistTopReactions(guildID, st); err != nil {
-		b.Log.Error("Failed to persist top reactions blacklist", "guild_id", guildID, "error", err)
+	if err := b.persistStarboard(guildID, st); err != nil {
+		b.Log.Error("Failed to persist starboard blacklist", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save blacklist.")
 		return
 	}
@@ -524,7 +570,7 @@ func (b *Bot) handleTRBlacklistAdd(e *events.ApplicationCommandInteractionCreate
 	botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> added to blacklist.", ch.ID))
 }
 
-func (b *Bot) handleTRBlacklistRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topReactionsState) {
+func (b *Bot) handleSBBlacklistRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 	ch, ok := data.OptChannel("channel")
 	if !ok {
@@ -548,8 +594,8 @@ func (b *Bot) handleTRBlacklistRemove(e *events.ApplicationCommandInteractionCre
 		return
 	}
 
-	if err := b.persistTopReactions(guildID, st); err != nil {
-		b.Log.Error("Failed to persist top reactions blacklist", "guild_id", guildID, "error", err)
+	if err := b.persistStarboard(guildID, st); err != nil {
+		b.Log.Error("Failed to persist starboard blacklist", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save blacklist.")
 		return
 	}
@@ -557,7 +603,7 @@ func (b *Bot) handleTRBlacklistRemove(e *events.ApplicationCommandInteractionCre
 	botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> removed from blacklist.", ch.ID))
 }
 
-func (b *Bot) handleTRBlacklistList(e *events.ApplicationCommandInteractionCreate, st *topReactionsState) {
+func (b *Bot) handleSBBlacklistList(e *events.ApplicationCommandInteractionCreate, st *starboardState) {
 	st.mu.Lock()
 	bl := make([]snowflake.ID, len(st.Settings.Blacklist))
 	copy(bl, st.Settings.Blacklist)
