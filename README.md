@@ -32,7 +32,7 @@ All commands require Manage Messages permission.
 
 ### threadbot
 
-Posts periodic reminders in threads to keep them active. Configurable idle timers and message thresholds.
+Posts periodic reminders in threads to keep them active. Configurable idle timers and message thresholds. When the reminder is still the last message in the channel, it edits the existing message in place instead of deleting and reposting, reducing message churn.
 
 - `/threadbot enable` — enable reminders in the current thread (with optional min_idle, max_idle, msg_threshold, time_threshold)
 - `/threadbot disable` — disable reminders

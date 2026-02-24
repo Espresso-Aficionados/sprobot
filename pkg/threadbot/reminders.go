@@ -257,6 +257,25 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 		return false
 	}
 
+	// If our reminder is still the last message, edit in place instead of delete+repost
+	if r.LastMessageID != 0 {
+		msgs, err := b.Client.Rest.GetMessages(r.ChannelID, 0, 0, 0, 1)
+		if err == nil && len(msgs) == 1 && msgs[0].ID == r.LastMessageID {
+			_, err = b.Client.Rest.UpdateMessage(r.ChannelID, r.LastMessageID, discord.MessageUpdate{
+				Embeds: &[]discord.Embed{*embed},
+			})
+			if err == nil {
+				now := time.Now()
+				b.mu.Lock()
+				r.LastPostTime = now
+				b.mu.Unlock()
+				b.saveRemindersForGuild(r.GuildID)
+				return true
+			}
+			// Edit failed; fall through to delete+repost
+		}
+	}
+
 	// Delete old message (best-effort)
 	if r.LastMessageID != 0 {
 		_ = b.Client.Rest.DeleteMessage(r.ChannelID, r.LastMessageID)
