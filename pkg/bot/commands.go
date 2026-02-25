@@ -157,6 +157,10 @@ func (b *Bot) registerAllCommands() error {
 						Description: "User to check progress for",
 						Required:    true,
 					},
+					discord.ApplicationCommandOptionBool{
+						Name:        "public",
+						Description: "Post the result publicly in the channel (default: hidden)",
+					},
 				},
 			})
 		}

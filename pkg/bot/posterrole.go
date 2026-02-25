@@ -252,8 +252,6 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	}
 	guildID := *e.GuildID()
 
-	b.Log.Info("Market progress", "user_id", e.User().ID, "guild_id", guildID)
-
 	cfg, ok := b.posterRoleConfig[guildID]
 	if !ok {
 		botutil.RespondEphemeral(e, "Poster role is not configured.")
@@ -271,9 +269,23 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 		return
 	}
 
+	public, _ := data.OptBool("public")
+	ephemeral := !public
+
+	b.Log.Info("Market progress", "user_id", e.User().ID, "guild_id", guildID, "target_user", user.ID, "public", public)
+
+	// Defer since GetMember is a network call.
+	if err := e.DeferCreateMessage(ephemeral); err != nil {
+		b.Log.Error("Failed to defer marketprogress response", "error", err)
+		return
+	}
+
 	st := b.posterRole[guildID]
 	if st == nil {
-		botutil.RespondEphemeral(e, "No tracking data yet.")
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+			Content: "No tracking data yet.",
+			Flags:   discord.MessageFlagEphemeral,
+		})
 		return
 	}
 
@@ -285,7 +297,13 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	if err == nil {
 		for _, roleID := range member.RoleIDs {
 			if roleID == cfg.RoleID {
-				botutil.RespondEphemeral(e, fmt.Sprintf("%s already has access to the marketplace.", mention))
+				msg := discord.MessageCreate{
+					Content: fmt.Sprintf("%s already has access to the marketplace.", mention),
+				}
+				if ephemeral {
+					msg.Flags = discord.MessageFlagEphemeral
+				}
+				b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
 				return
 			}
 		}
@@ -306,10 +324,16 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 		remaining = 0
 	}
 
-	msg := fmt.Sprintf("Poster role progress for %s:\n- Historical posts: %d\n- Session posts: %d\n- Total: %d / %d (%d%%)\n- %d more posts needed",
+	content := fmt.Sprintf("Poster role progress for %s:\n- Historical posts: %d\n- Session posts: %d\n- Total: %d / %d (%d%%)\n- %d more posts needed",
 		mention, history, tracked, total, cfg.Threshold, pct, remaining)
 
-	botutil.RespondEphemeral(e, msg)
+	msg := discord.MessageCreate{
+		Content: content,
+	}
+	if ephemeral {
+		msg.Flags = discord.MessageFlagEphemeral
+	}
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
 }
 
 func (b *Bot) savePosterRole() {
