@@ -19,6 +19,7 @@ const (
 	subDisable       = "disable"
 	subList          = "list"
 	subRefreshCounts = "refreshcounts"
+	subFetchAll      = "fetchall"
 
 	optMinIdle       = "min_idle"
 	optMaxIdle       = "max_idle"
@@ -81,6 +82,10 @@ func (b *Bot) registerAllCommands() error {
 					Name:        subRefreshCounts,
 					Description: "Refresh cached thread member counts for this server",
 				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        subFetchAll,
+					Description: "Show all active threads across the entire server",
+				},
 			},
 		},
 		discord.SlashCommandCreate{
@@ -127,6 +132,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			b.handleList(e)
 		case subRefreshCounts:
 			b.handleRefreshCounts(e)
+		case subFetchAll:
+			b.handleFetchAll(e)
 		}
 	}
 }
@@ -240,6 +247,32 @@ func (b *Bot) handleThreads(e *events.ApplicationCommandInteractionCreate) {
 	if embed == nil {
 		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 			Content: "No active threads in this channel.",
+			Flags:   discord.MessageFlagEphemeral,
+		})
+		return
+	}
+
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+		Embeds: []discord.Embed{*embed},
+		Flags:  discord.MessageFlagEphemeral,
+	})
+}
+
+func (b *Bot) handleFetchAll(e *events.ApplicationCommandInteractionCreate) {
+	guildID := *e.GuildID()
+
+	b.Log.Info("Fetching all threads", "user_id", e.User().ID, "guild_id", guildID)
+
+	// Defer since fetching threads + member counts may exceed the 3s deadline.
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer fetchall response", "error", err)
+		return
+	}
+
+	embed := b.buildAllThreadsEmbed(guildID)
+	if embed == nil {
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+			Content: "No active threads in this server.",
 			Flags:   discord.MessageFlagEphemeral,
 		})
 		return

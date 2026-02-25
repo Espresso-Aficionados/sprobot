@@ -255,6 +255,105 @@ func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
 	return &embed
 }
 
+// buildAllThreadsEmbed fetches all active threads across the entire guild and
+// returns an embed showing the top 25 by message count. Returns nil if there
+// are no active threads.
+func (b *Bot) buildAllThreadsEmbed(guildID snowflake.ID) *discord.Embed {
+	result, err := b.Client.Rest.GetActiveGuildThreads(guildID)
+	if err != nil {
+		b.Log.Error("Failed to fetch active threads", "guild_id", guildID, "error", err)
+		return nil
+	}
+
+	type threadInfo struct {
+		Name         string
+		ID           snowflake.ID
+		ParentID     snowflake.ID
+		MessageCount int
+		MemberCount  int
+		CreatedAt    time.Time
+	}
+	var threads []threadInfo
+	for _, t := range result.Threads {
+		if t.ThreadMetadata.Archived {
+			continue
+		}
+		parentID := t.ParentID()
+		if parentID == nil {
+			continue
+		}
+		createdAt := t.ThreadMetadata.CreateTimestamp
+		if createdAt.IsZero() {
+			createdAt = t.ID().Time()
+		}
+		threads = append(threads, threadInfo{
+			Name:         t.Name(),
+			ID:           t.ID(),
+			ParentID:     *parentID,
+			MessageCount: t.MessageCount,
+			MemberCount:  t.MemberCount,
+			CreatedAt:    createdAt,
+		})
+	}
+
+	if len(threads) == 0 {
+		return nil
+	}
+
+	threadIDs := make([]snowflake.ID, len(threads))
+	for i, t := range threads {
+		threadIDs[i] = t.ID
+	}
+	b.refreshMemberCounts(guildID, threadIDs)
+
+	sort.Slice(threads, func(i, j int) bool {
+		return threads[i].MessageCount > threads[j].MessageCount
+	})
+
+	total := len(threads)
+	const maxShown = 25
+	if len(threads) > maxShown {
+		threads = threads[:maxShown]
+	}
+
+	b.mu.Lock()
+	cache := b.memberCounts[guildID]
+	b.mu.Unlock()
+
+	now := time.Now()
+	const maxDescLen = 3900
+	var desc strings.Builder
+	for _, t := range threads {
+		memberCount := t.MemberCount
+		if cache != nil {
+			if n, ok := cache.Counts[t.ID]; ok && n > 0 {
+				memberCount = n
+			}
+		}
+		age := formatAge(now.Sub(t.CreatedAt))
+		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) in <#%d> — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.ParentID, t.MessageCount, memberCount, age)
+		if desc.Len()+len(line) > maxDescLen {
+			break
+		}
+		desc.WriteString(line)
+	}
+	if total > maxShown {
+		desc.WriteString(fmt.Sprintf("...and %d more threads\n", total-maxShown))
+	}
+
+	color := 0x5865F2 // Discord blurple
+	embed := discord.Embed{
+		Title:       "All Active Threads",
+		Description: desc.String(),
+		Color:       color,
+		Footer: &discord.EmbedFooter{
+			Text: fmt.Sprintf("%d active thread(s) server-wide", total),
+		},
+		Timestamp: &now,
+	}
+	return &embed
+}
+
 func (b *Bot) repostReminder(r *threadReminder) bool {
 	embed := b.buildThreadEmbed(r.GuildID, r.ChannelID)
 	if embed == nil {
