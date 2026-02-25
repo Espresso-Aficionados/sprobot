@@ -229,13 +229,23 @@ func (b *Bot) handleThreads(e *events.ApplicationCommandInteractionCreate) {
 	channelID := e.Channel().ID()
 
 	b.Log.Info("Listing threads", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
-	embed := b.buildThreadEmbed(guildID, channelID)
-	if embed == nil {
-		botutil.RespondEphemeral(e, "No active threads in this channel.")
+
+	// Defer since fetching threads + member counts may exceed the 3s deadline.
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer threads response", "error", err)
 		return
 	}
 
-	e.CreateMessage(discord.MessageCreate{
+	embed := b.buildThreadEmbed(guildID, channelID)
+	if embed == nil {
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+			Content: "No active threads in this channel.",
+			Flags:   discord.MessageFlagEphemeral,
+		})
+		return
+	}
+
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{*embed},
 		Flags:  discord.MessageFlagEphemeral,
 	})
