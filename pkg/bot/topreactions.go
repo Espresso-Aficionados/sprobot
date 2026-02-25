@@ -52,10 +52,12 @@ func (s *starboardSettings) effectiveThreshold() int {
 	return defaultThreshold
 }
 
-func (s *starboardSettings) isBlacklisted(channelID snowflake.ID) bool {
-	for _, id := range s.Blacklist {
-		if id == channelID {
-			return true
+func (s *starboardSettings) isBlacklisted(ids ...snowflake.ID) bool {
+	for _, id := range ids {
+		for _, blID := range s.Blacklist {
+			if id == blID {
+				return true
+			}
 		}
 	}
 	return false
@@ -174,6 +176,28 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 		return
 	}
 
+	// Resolve the channel's parent chain for blacklist checks.
+	// For threads: channel → parent channel → category.
+	// For regular channels: channel → category.
+	blacklistIDs := []snowflake.ID{e.ChannelID}
+	if ch, err := b.Client.Rest.GetChannel(e.ChannelID); err == nil {
+		if gc, ok := ch.(discord.GuildChannel); ok {
+			if parentID := gc.ParentID(); parentID != nil {
+				blacklistIDs = append(blacklistIDs, *parentID)
+				// If this was a thread, the parent is a channel — resolve its category too.
+				if _, ok := gc.(discord.GuildThread); ok {
+					if parent, err := b.Client.Rest.GetChannel(*parentID); err == nil {
+						if pgc, ok := parent.(discord.GuildChannel); ok {
+							if catID := pgc.ParentID(); catID != nil {
+								blacklistIDs = append(blacklistIDs, *catID)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	st.mu.Lock()
 
 	if st.Settings.OutputChannelID == 0 || st.Settings.Emoji == "" {
@@ -191,7 +215,7 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 		return
 	}
 
-	if st.Settings.isBlacklisted(e.ChannelID) {
+	if st.Settings.isBlacklisted(blacklistIDs...) {
 		st.mu.Unlock()
 		return
 	}
