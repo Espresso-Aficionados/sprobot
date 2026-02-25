@@ -63,6 +63,50 @@ func (s *starboardSettings) isBlacklisted(ids ...snowflake.ID) bool {
 	return false
 }
 
+// resolveChannelParents returns the channel ID plus any parent/category IDs,
+// using an in-memory cache to avoid repeated REST calls.
+func (b *Bot) resolveChannelParents(channelID snowflake.ID, st *starboardState) []snowflake.ID {
+	ids := []snowflake.ID{channelID}
+
+	cached, ok := st.parentCache.Load(channelID)
+	if !ok {
+		cp := channelParents{}
+		if ch, err := b.Client.Rest.GetChannel(channelID); err == nil {
+			if gc, ok := ch.(discord.GuildChannel); ok {
+				if pid := gc.ParentID(); pid != nil {
+					pidCopy := *pid
+					cp.ParentID = &pidCopy
+					if _, isThread := gc.(discord.GuildThread); isThread {
+						if parent, err := b.Client.Rest.GetChannel(*pid); err == nil {
+							if pgc, ok := parent.(discord.GuildChannel); ok {
+								if catID := pgc.ParentID(); catID != nil {
+									catCopy := *catID
+									cp.CategoryID = &catCopy
+								}
+							}
+						}
+					} else {
+						// Non-thread channel: parent is the category.
+						cp.CategoryID = cp.ParentID
+						cp.ParentID = nil
+					}
+				}
+			}
+		}
+		st.parentCache.Store(channelID, cp)
+		cached = cp
+	}
+
+	cp := cached.(channelParents)
+	if cp.ParentID != nil {
+		ids = append(ids, *cp.ParentID)
+	}
+	if cp.CategoryID != nil {
+		ids = append(ids, *cp.CategoryID)
+	}
+	return ids
+}
+
 type starboardEntry struct {
 	ChannelID      snowflake.ID `json:"channel_id"`
 	AuthorID       snowflake.ID `json:"author_id"`
@@ -70,10 +114,17 @@ type starboardEntry struct {
 	StarboardMsgID snowflake.ID `json:"starboard_msg_id"`
 }
 
+type channelParents struct {
+	ParentID   *snowflake.ID
+	CategoryID *snowflake.ID
+}
+
 type starboardState struct {
 	mu       sync.Mutex
 	Settings starboardSettings               `json:"settings"`
 	Entries  map[snowflake.ID]starboardEntry `json:"entries"` // keyed by source message ID
+
+	parentCache sync.Map // channelID → channelParents
 }
 
 func intPtr(v int) *int { return &v }
@@ -176,27 +227,8 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 		return
 	}
 
-	// Resolve the channel's parent chain for blacklist checks.
-	// For threads: channel → parent channel → category.
-	// For regular channels: channel → category.
-	blacklistIDs := []snowflake.ID{e.ChannelID}
-	if ch, err := b.Client.Rest.GetChannel(e.ChannelID); err == nil {
-		if gc, ok := ch.(discord.GuildChannel); ok {
-			if parentID := gc.ParentID(); parentID != nil {
-				blacklistIDs = append(blacklistIDs, *parentID)
-				// If this was a thread, the parent is a channel — resolve its category too.
-				if _, ok := gc.(discord.GuildThread); ok {
-					if parent, err := b.Client.Rest.GetChannel(*parentID); err == nil {
-						if pgc, ok := parent.(discord.GuildChannel); ok {
-							if catID := pgc.ParentID(); catID != nil {
-								blacklistIDs = append(blacklistIDs, *catID)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+	// Resolve the channel's parent chain for blacklist checks (cached).
+	blacklistIDs := b.resolveChannelParents(e.ChannelID, st)
 
 	st.mu.Lock()
 
