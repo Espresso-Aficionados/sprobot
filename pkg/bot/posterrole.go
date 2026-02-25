@@ -417,6 +417,9 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 	embed := discord.Embed{
 		Title:       "Marketplace Progress Leaderboard",
 		Description: description,
+		Footer: &discord.EmbedFooter{
+			Text: "Only includes users who have sent a message since tracking began. Counts reflect their full post history.",
+		},
 	}
 
 	msg := discord.MessageCreate{
