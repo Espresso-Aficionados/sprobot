@@ -873,7 +873,10 @@ func (b *Bot) onRoleUpdate(e *events.RoleUpdate) {
 			discord.EmbedField{Name: "New Color", Value: fmt.Sprintf("#%06X", e.Role.Color), Inline: boolPtr(true)},
 		)
 	}
-	if e.OldRole.Permissions != e.Role.Permissions {
+	// Skip permissions diff when old is 0 — likely a stale cache artifact from
+	// role repositioning. Real permission changes are still caught by the audit
+	// log handler (handleRoleAuditEntry) with moderator info.
+	if e.OldRole.Permissions != e.Role.Permissions && e.OldRole.Permissions != 0 {
 		fields = append(fields,
 			discord.EmbedField{Name: "Old Permissions", Value: fmt.Sprintf("`%d`", e.OldRole.Permissions), Inline: boolPtr(true)},
 			discord.EmbedField{Name: "New Permissions", Value: fmt.Sprintf("`%d`", e.Role.Permissions), Inline: boolPtr(true)},
@@ -909,9 +912,7 @@ func (b *Bot) onRoleUpdate(e *events.RoleUpdate) {
 		)
 	}
 	if len(fields) == 0 {
-		fields = append(fields, discord.EmbedField{
-			Name: "Role", Value: e.Role.Name,
-		})
+		return
 	}
 
 	embed := discord.Embed{
@@ -994,9 +995,7 @@ func (b *Bot) onGuildUpdate(e *events.GuildUpdate) {
 		})
 	}
 	if len(fields) == 0 {
-		fields = append(fields, discord.EmbedField{
-			Name: "Server", Value: e.Guild.Name,
-		})
+		return
 	}
 
 	embed := discord.Embed{
