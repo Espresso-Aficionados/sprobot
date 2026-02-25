@@ -108,12 +108,6 @@ func (b *Bot) saveStickiesForGuild(guildID snowflake.ID) {
 }
 
 func (b *Bot) saveAllStickies() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in stickies save", "error", r)
-		}
-	}()
-
 	b.mu.Lock()
 	guildIDs := make([]snowflake.ID, 0, len(b.stickies))
 	for id := range b.stickies {

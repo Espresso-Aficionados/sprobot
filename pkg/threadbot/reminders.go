@@ -113,12 +113,6 @@ func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) {
 }
 
 func (b *Bot) saveAllReminders() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in thread reminders save", "error", r)
-		}
-	}()
-
 	b.mu.Lock()
 	guildIDs := make([]snowflake.ID, 0, len(b.reminders))
 	for id := range b.reminders {
@@ -498,12 +492,6 @@ func (b *Bot) loadMemberCounts() {
 }
 
 func (b *Bot) saveMemberCounts() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in thread member counts save", "error", r)
-		}
-	}()
-
 	b.mu.Lock()
 	guildIDs := make([]snowflake.ID, 0, len(b.memberCounts))
 	for id := range b.memberCounts {

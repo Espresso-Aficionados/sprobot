@@ -314,56 +314,37 @@ func (b *Bot) onAuditLogEntry(e *events.GuildAuditLogEntryCreate) {
 }
 
 func (b *Bot) handleKickEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
-	embed := discord.Embed{
-		Title: "Member Kicked",
-		Color: colorRed,
-		Fields: []discord.EmbedField{
-			{Name: "User ID", Value: fmt.Sprintf("`%d`", *entry.TargetID)},
-		},
-	}
-	if entry.UserID != 0 {
-		embed.Fields = append(embed.Fields, discord.EmbedField{
-			Name: "Moderator", Value: userMention(entry.UserID), Inline: boolPtr(true),
-		})
-	}
-	if entry.Reason != nil && *entry.Reason != "" {
-		embed.Fields = append(embed.Fields, discord.EmbedField{
-			Name: "Reason", Value: *entry.Reason,
-		})
-	}
-
-	// Try to get target user info for the embed author
-	if entry.TargetID != nil {
-		if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
-			embed.Author = &discord.EmbedAuthor{
-				Name:    user.Username,
-				IconURL: user.EffectiveAvatarURL(),
-			}
-			embed.Fields[0] = discord.EmbedField{
-				Name: "User", Value: fmt.Sprintf("%s (`%d`)", userMention(user.ID), user.ID),
-			}
-		}
-	}
-
-	b.postEventLog(guildID, embed)
-
-	// Cross-post to mod log forum thread
-	if entry.TargetID != nil {
-		if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
-			b.crossPostToModLog(guildID, *user, embed)
-		}
-	}
+	b.postModAction(guildID, entry, "Member Kicked", colorRed, true)
 }
 
 func (b *Bot) handleBanEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
 	isBan := entry.ActionType == discord.AuditLogEventMemberBanAdd
-	title := "Member Banned"
-	color := colorDarkRed
-	if !isBan {
-		title = "Member Unbanned"
-		color = colorTeal
+	if isBan {
+		b.postModAction(guildID, entry, "Member Banned", colorDarkRed, true)
+	} else {
+		b.postModAction(guildID, entry, "Member Unbanned", colorTeal, false)
+	}
+}
+
+func (b *Bot) handleMemberUpdateEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	// Only handle timeout changes
+	isTimeout := false
+	for _, change := range entry.Changes {
+		if change.Key == discord.AuditLogChangeKeyCommunicationDisabledUntil {
+			isTimeout = true
+			break
+		}
+	}
+	if !isTimeout {
+		return
 	}
 
+	b.postModAction(guildID, entry, "Member Timed Out", colorOrange, true)
+}
+
+// postModAction builds and posts a mod action embed with moderator, reason,
+// target user info, and optional cross-post to the mod log.
+func (b *Bot) postModAction(guildID snowflake.ID, entry discord.AuditLogEntry, title string, color int, crossPost bool) {
 	embed := discord.Embed{
 		Title: title,
 		Color: color,
@@ -382,9 +363,10 @@ func (b *Bot) handleBanEntry(guildID snowflake.ID, entry discord.AuditLogEntry) 
 		})
 	}
 
-	// Try to get target user info for the embed author
+	var targetUser *discord.User
 	if entry.TargetID != nil {
 		if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
+			targetUser = user
 			embed.Author = &discord.EmbedAuthor{
 				Name:    user.Username,
 				IconURL: user.EffectiveAvatarURL(),
@@ -397,65 +379,8 @@ func (b *Bot) handleBanEntry(guildID snowflake.ID, entry discord.AuditLogEntry) 
 
 	b.postEventLog(guildID, embed)
 
-	// Cross-post bans to mod log forum thread
-	if isBan && entry.TargetID != nil {
-		if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
-			b.crossPostToModLog(guildID, *user, embed)
-		}
-	}
-}
-
-func (b *Bot) handleMemberUpdateEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
-	// Check if this is a timeout (communication_disabled_until change)
-	isTimeout := false
-	for _, change := range entry.Changes {
-		if change.Key == discord.AuditLogChangeKeyCommunicationDisabledUntil {
-			isTimeout = true
-			break
-		}
-	}
-	if !isTimeout {
-		return
-	}
-
-	embed := discord.Embed{
-		Title: "Member Timed Out",
-		Color: colorOrange,
-		Fields: []discord.EmbedField{
-			{Name: "User ID", Value: fmt.Sprintf("`%d`", *entry.TargetID)},
-		},
-	}
-	if entry.UserID != 0 {
-		embed.Fields = append(embed.Fields, discord.EmbedField{
-			Name: "Moderator", Value: userMention(entry.UserID), Inline: boolPtr(true),
-		})
-	}
-	if entry.Reason != nil && *entry.Reason != "" {
-		embed.Fields = append(embed.Fields, discord.EmbedField{
-			Name: "Reason", Value: *entry.Reason,
-		})
-	}
-
-	// Try to get target user info
-	if entry.TargetID != nil {
-		if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
-			embed.Author = &discord.EmbedAuthor{
-				Name:    user.Username,
-				IconURL: user.EffectiveAvatarURL(),
-			}
-			embed.Fields[0] = discord.EmbedField{
-				Name: "User", Value: fmt.Sprintf("%s (`%d`)", userMention(user.ID), user.ID),
-			}
-		}
-	}
-
-	b.postEventLog(guildID, embed)
-
-	// Cross-post to mod log forum thread
-	if entry.TargetID != nil {
-		if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
-			b.crossPostToModLog(guildID, *user, embed)
-		}
+	if crossPost && targetUser != nil {
+		b.crossPostToModLog(guildID, *targetUser, embed)
 	}
 }
 

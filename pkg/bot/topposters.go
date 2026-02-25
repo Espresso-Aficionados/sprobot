@@ -115,12 +115,6 @@ func (b *Bot) loadTopPosters() {
 }
 
 func (b *Bot) saveTopPosters() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in top posters save", "error", r)
-		}
-	}()
-
 	ctx := context.Background()
 	cutoff := time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02")
 

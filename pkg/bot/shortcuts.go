@@ -76,12 +76,6 @@ func (b *Bot) persistShortcuts(guildID snowflake.ID, st *shortcutState) error {
 }
 
 func (b *Bot) saveShortcuts() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in shortcut save", "error", r)
-		}
-	}()
-
 	for guildID, st := range b.shortcuts {
 		if err := b.persistShortcuts(guildID, st); err != nil {
 			b.Log.Error("Failed to save shortcut data", "guild_id", guildID, "error", err)

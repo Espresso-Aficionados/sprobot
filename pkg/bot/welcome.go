@@ -63,12 +63,6 @@ func (b *Bot) persistWelcome(guildID snowflake.ID, st *welcomeState) error {
 }
 
 func (b *Bot) saveWelcome() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in welcome save", "error", r)
-		}
-	}()
-
 	for guildID, st := range b.welcome {
 		if err := b.persistWelcome(guildID, st); err != nil {
 			b.Log.Error("Failed to save welcome data", "guild_id", guildID, "error", err)

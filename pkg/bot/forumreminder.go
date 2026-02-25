@@ -56,24 +56,27 @@ func (b *Bot) forumReminderLoop() {
 	defer ticker.Stop()
 
 	// Run immediately once, then on ticker
-	b.sendForumReminders()
+	safeRemind := func() {
+		defer func() {
+			if r := recover(); r != nil {
+				b.Log.Error("Panic in forum reminder", "error", r)
+			}
+		}()
+		b.sendForumReminders()
+	}
+
+	safeRemind()
 	for {
 		select {
 		case <-b.stop:
 			return
 		case <-ticker.C:
-			b.sendForumReminders()
+			safeRemind()
 		}
 	}
 }
 
 func (b *Bot) sendForumReminders() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in forum reminder", "error", r)
-		}
-	}()
-
 	config := getThreadHelpConfig(b.Env)
 	if config == nil {
 		return

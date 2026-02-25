@@ -139,12 +139,6 @@ func (b *Bot) persistStarboard(guildID snowflake.ID, st *starboardState) error {
 }
 
 func (b *Bot) saveStarboard() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in starboard save", "error", r)
-		}
-	}()
-
 	for guildID, st := range b.starboard {
 		st.mu.Lock()
 		pruneUnpostedEntries(st, time.Now())

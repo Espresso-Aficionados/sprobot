@@ -262,12 +262,6 @@ func (b *Bot) loadMessageCache() {
 
 // saveMessageCache writes the message cache to disk.
 func (b *Bot) saveMessageCache() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in message cache save", "error", r)
-		}
-	}()
-
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		b.Log.Error("Failed to create cache directory", "error", err)
 		return
@@ -309,12 +303,6 @@ func (b *Bot) loadMemberCache() {
 
 // saveMemberCache writes the member cache to disk.
 func (b *Bot) saveMemberCache() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in member cache save", "error", r)
-		}
-	}()
-
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		b.Log.Error("Failed to create cache directory", "error", err)
 		return

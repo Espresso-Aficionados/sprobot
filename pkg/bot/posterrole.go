@@ -316,12 +316,6 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 }
 
 func (b *Bot) savePosterRole() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in poster role save", "error", r)
-		}
-	}()
-
 	ctx := context.Background()
 	for guildID, st := range b.posterRole {
 		st.mu.Lock()

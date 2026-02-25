@@ -126,12 +126,6 @@ func (b *Bot) loadTickets() {
 }
 
 func (b *Bot) saveTickets() {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in ticket save", "error", r)
-		}
-	}()
-
 	ctx := context.Background()
 	for guildID, st := range b.tickets {
 		st.mu.Lock()
