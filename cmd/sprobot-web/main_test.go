@@ -353,6 +353,31 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 	}
 }
 
+func TestSanitizeLog(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"clean string", "hello world", "hello world"},
+		{"empty string", "", ""},
+		{"embedded newline", "line1\nline2", "line1line2"},
+		{"embedded carriage return", "line1\rline2", "line1line2"},
+		{"both CR and LF", "a\r\nb", "ab"},
+		{"multiple newlines", "a\n\n\nb", "ab"},
+		{"only newlines", "\n\r\n", ""},
+		{"IP with injection", "1.2.3.4\nINJECTED: evil", "1.2.3.4INJECTED: evil"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeLog(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeLog(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestProfileTemplateHTMLEscaping(t *testing.T) {
 	tmpl, err := template.ParseFS(templateFS, "templates/base.html", "templates/profile.html")
 	if err != nil {

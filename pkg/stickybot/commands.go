@@ -208,10 +208,6 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		botutil.RespondEphemeral(e, "Max idle must be a positive number.")
 		return
 	}
-	if maxIdle <= minIdle {
-		botutil.RespondEphemeral(e, "Max idle must be greater than min idle.")
-		return
-	}
 	threshold, err := strconv.Atoi(threshStr)
 	if err != nil || threshold < 0 {
 		botutil.RespondEphemeral(e, "Message threshold must be a non-negative number.")
@@ -227,12 +223,8 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		botutil.RespondEphemeral(e, "Buffer must be a non-negative number.")
 		return
 	}
-	if threshold > 0 && threshold <= buffer {
-		botutil.RespondEphemeral(e, fmt.Sprintf("Message threshold (%d) must be greater than buffer (%d).", threshold, buffer))
-		return
-	}
-	if threshold == 0 && timeThreshold == 0 {
-		botutil.RespondEphemeral(e, "At least one of message threshold or time threshold must be greater than 0.")
+	if errMsg := validateStickyParams(minIdle, maxIdle, threshold, timeThreshold, buffer); errMsg != "" {
+		botutil.RespondEphemeral(e, errMsg)
 		return
 	}
 	// Defer since fetching + re-hosting may take a moment
@@ -441,6 +433,21 @@ func (b *Bot) followup(e *events.ModalSubmitInteractionCreate, content string) {
 		Content: content,
 		Flags:   discord.MessageFlagEphemeral,
 	})
+}
+
+// validateStickyParams checks cross-field constraints for sticky message settings.
+// Returns an error message if invalid, or empty string if OK.
+func validateStickyParams(minIdle, maxIdle, threshold, timeThreshold, buffer int) string {
+	if maxIdle <= minIdle {
+		return fmt.Sprintf("Max idle (%d) must be greater than min idle (%d).", maxIdle, minIdle)
+	}
+	if threshold > 0 && threshold <= buffer {
+		return fmt.Sprintf("Message threshold (%d) must be greater than buffer (%d).", threshold, buffer)
+	}
+	if threshold == 0 && timeThreshold == 0 {
+		return "At least one of message threshold or time threshold must be greater than 0."
+	}
+	return ""
 }
 
 // truncatePreview truncates a string to maxRunes without splitting Unicode

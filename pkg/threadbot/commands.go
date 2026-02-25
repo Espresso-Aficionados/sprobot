@@ -37,6 +37,21 @@ func isThread(ct discord.ChannelType) bool {
 		ct == discord.ChannelTypeGuildNewsThread
 }
 
+// validateReminderParams checks cross-field constraints for thread reminder settings.
+// Returns an error message if invalid, or empty string if OK.
+func validateReminderParams(minIdle, maxIdle, msgThreshold, timeThreshold, buffer int) string {
+	if maxIdle <= minIdle {
+		return fmt.Sprintf("max_idle (%d) must be greater than min_idle (%d).", maxIdle, minIdle)
+	}
+	if msgThreshold > 0 && msgThreshold <= buffer {
+		return fmt.Sprintf("msg_threshold (%d) must be greater than buffer (%d).", msgThreshold, buffer)
+	}
+	if msgThreshold == 0 && timeThreshold == 0 {
+		return "At least one of msg_threshold or time_threshold must be > 0."
+	}
+	return ""
+}
+
 func (b *Bot) registerAllCommands() error {
 	perm := discord.PermissionManageMessages
 
@@ -177,19 +192,9 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 		buffer = v
 	}
 
-	if maxIdle <= minIdle {
-		b.Log.Info("Enable rejected: max_idle <= min_idle", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
-		botutil.RespondEphemeral(e, fmt.Sprintf("max_idle (%d) must be greater than min_idle (%d).", maxIdle, minIdle))
-		return
-	}
-	if msgThreshold > 0 && msgThreshold <= buffer {
-		b.Log.Info("Enable rejected: msg_threshold <= buffer", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
-		botutil.RespondEphemeral(e, fmt.Sprintf("msg_threshold (%d) must be greater than buffer (%d).", msgThreshold, buffer))
-		return
-	}
-	if msgThreshold == 0 && timeThreshold == 0 {
-		b.Log.Info("Enable rejected: both thresholds zero", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
-		botutil.RespondEphemeral(e, "At least one of msg_threshold or time_threshold must be > 0.")
+	if errMsg := validateReminderParams(minIdle, maxIdle, msgThreshold, timeThreshold, buffer); errMsg != "" {
+		b.Log.Info("Enable rejected", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "reason", errMsg)
+		botutil.RespondEphemeral(e, errMsg)
 		return
 	}
 	r := &threadReminder{

@@ -233,3 +233,167 @@ func TestFormatPermissionDiffNoChanges(t *testing.T) {
 		t.Errorf("expected no-changes message, got %q", result)
 	}
 }
+
+func TestDiffRoles(t *testing.T) {
+	tests := []struct {
+		name        string
+		old, new    []snowflake.ID
+		wantAdded   []snowflake.ID
+		wantRemoved []snowflake.ID
+	}{
+		{"empty both", nil, nil, nil, nil},
+		{"all added", nil, []snowflake.ID{1, 2, 3}, []snowflake.ID{1, 2, 3}, nil},
+		{"all removed", []snowflake.ID{1, 2, 3}, nil, nil, []snowflake.ID{1, 2, 3}},
+		{"no change", []snowflake.ID{1, 2}, []snowflake.ID{1, 2}, nil, nil},
+		{"add and remove", []snowflake.ID{1, 2}, []snowflake.ID{2, 3}, []snowflake.ID{3}, []snowflake.ID{1}},
+		{"complete swap", []snowflake.ID{1}, []snowflake.ID{2}, []snowflake.ID{2}, []snowflake.ID{1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			added, removed := diffRoles(tt.old, tt.new)
+			if len(added) != len(tt.wantAdded) {
+				t.Errorf("added = %v, want %v", added, tt.wantAdded)
+			}
+			if len(removed) != len(tt.wantRemoved) {
+				t.Errorf("removed = %v, want %v", removed, tt.wantRemoved)
+			}
+		})
+	}
+}
+
+func TestDerefStr(t *testing.T) {
+	if got := derefStr(nil); got != "" {
+		t.Errorf("derefStr(nil) = %q, want empty", got)
+	}
+	s := "hello"
+	if got := derefStr(&s); got != "hello" {
+		t.Errorf("derefStr(&hello) = %q, want hello", got)
+	}
+}
+
+func TestDerefSnowflake(t *testing.T) {
+	if got := derefSnowflake(nil); got != 0 {
+		t.Errorf("derefSnowflake(nil) = %d, want 0", got)
+	}
+	id := snowflake.ID(42)
+	if got := derefSnowflake(&id); got != 42 {
+		t.Errorf("derefSnowflake(&42) = %d, want 42", got)
+	}
+}
+
+func TestDerefTime(t *testing.T) {
+	if got := derefTime(nil); !got.IsZero() {
+		t.Errorf("derefTime(nil) = %v, want zero", got)
+	}
+	now := time.Now()
+	if got := derefTime(&now); !got.Equal(now) {
+		t.Errorf("derefTime(&now) = %v, want %v", got, now)
+	}
+}
+
+func TestOrDash(t *testing.T) {
+	if got := orDash(""); got != "-" {
+		t.Errorf("orDash(\"\") = %q, want \"-\"", got)
+	}
+	if got := orDash("hello"); got != "hello" {
+		t.Errorf("orDash(hello) = %q, want hello", got)
+	}
+}
+
+func TestChannelMentionOrDash(t *testing.T) {
+	if got := channelMentionOrDash(nil); got != "-" {
+		t.Errorf("channelMentionOrDash(nil) = %q, want \"-\"", got)
+	}
+	zero := snowflake.ID(0)
+	if got := channelMentionOrDash(&zero); got != "-" {
+		t.Errorf("channelMentionOrDash(&0) = %q, want \"-\"", got)
+	}
+	id := snowflake.ID(123)
+	if got := channelMentionOrDash(&id); got != "<#123>" {
+		t.Errorf("channelMentionOrDash(&123) = %q, want <#123>", got)
+	}
+}
+
+func TestFormatRoleMentions(t *testing.T) {
+	got := formatRoleMentions([]snowflake.ID{1, 2, 3})
+	if got != "<@&1>, <@&2>, <@&3>" {
+		t.Errorf("formatRoleMentions = %q", got)
+	}
+	if got := formatRoleMentions(nil); got != "" {
+		t.Errorf("formatRoleMentions(nil) = %q, want empty", got)
+	}
+}
+
+func TestFormatPartialRoleMentions(t *testing.T) {
+	roles := []discord.PartialRole{
+		{ID: 10, Name: "Admin"},
+		{ID: 20, Name: "Mod"},
+	}
+	got := formatPartialRoleMentions(roles)
+	if got != "<@&10>, <@&20>" {
+		t.Errorf("formatPartialRoleMentions = %q", got)
+	}
+	if got := formatPartialRoleMentions(nil); got != "" {
+		t.Errorf("formatPartialRoleMentions(nil) = %q, want empty", got)
+	}
+}
+
+func TestAppendAuditFields(t *testing.T) {
+	t.Run("with moderator and reason", func(t *testing.T) {
+		embed := discord.Embed{}
+		reason := "spam"
+		entry := discord.AuditLogEntry{
+			UserID: 999,
+			Reason: &reason,
+		}
+		appendAuditFields(&embed, entry)
+		if len(embed.Fields) != 2 {
+			t.Fatalf("expected 2 fields, got %d", len(embed.Fields))
+		}
+		if !strings.Contains(embed.Fields[0].Value, "999") {
+			t.Errorf("moderator field = %q, want mention of 999", embed.Fields[0].Value)
+		}
+		if embed.Fields[1].Value != "spam" {
+			t.Errorf("reason field = %q, want spam", embed.Fields[1].Value)
+		}
+	})
+
+	t.Run("no moderator no reason", func(t *testing.T) {
+		embed := discord.Embed{}
+		entry := discord.AuditLogEntry{}
+		appendAuditFields(&embed, entry)
+		if len(embed.Fields) != 0 {
+			t.Fatalf("expected 0 fields, got %d", len(embed.Fields))
+		}
+	})
+
+	t.Run("moderator only", func(t *testing.T) {
+		embed := discord.Embed{}
+		entry := discord.AuditLogEntry{UserID: 42}
+		appendAuditFields(&embed, entry)
+		if len(embed.Fields) != 1 {
+			t.Fatalf("expected 1 field, got %d", len(embed.Fields))
+		}
+	})
+
+	t.Run("empty reason ignored", func(t *testing.T) {
+		embed := discord.Embed{}
+		empty := ""
+		entry := discord.AuditLogEntry{UserID: 42, Reason: &empty}
+		appendAuditFields(&embed, entry)
+		if len(embed.Fields) != 1 {
+			t.Fatalf("expected 1 field (empty reason skipped), got %d", len(embed.Fields))
+		}
+	})
+}
+
+func TestTimePtrNotNil(t *testing.T) {
+	now := time.Now()
+	p := timePtr(now)
+	if p == nil {
+		t.Fatal("timePtr returned nil")
+	}
+	if !p.Equal(now) {
+		t.Errorf("timePtr returned %v, want %v", *p, now)
+	}
+}

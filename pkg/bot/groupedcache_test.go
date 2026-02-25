@@ -271,6 +271,123 @@ func TestCappedCache_SizeTracking(t *testing.T) {
 	}
 }
 
+func TestCappedCache_GroupLen(t *testing.T) {
+	c := newCappedGroupedCache[discord.Message](100)
+	ch1 := snowflake.ID(1)
+	ch2 := snowflake.ID(2)
+
+	if c.GroupLen(ch1) != 0 {
+		t.Fatalf("GroupLen of empty group = %d, want 0", c.GroupLen(ch1))
+	}
+
+	c.Put(ch1, 10, makeMessage(ch1, 10))
+	c.Put(ch1, 11, makeMessage(ch1, 11))
+	c.Put(ch2, 20, makeMessage(ch2, 20))
+
+	if c.GroupLen(ch1) != 2 {
+		t.Fatalf("GroupLen(ch1) = %d, want 2", c.GroupLen(ch1))
+	}
+	if c.GroupLen(ch2) != 1 {
+		t.Fatalf("GroupLen(ch2) = %d, want 1", c.GroupLen(ch2))
+	}
+	if c.GroupLen(snowflake.ID(999)) != 0 {
+		t.Fatalf("GroupLen(nonexistent) = %d, want 0", c.GroupLen(snowflake.ID(999)))
+	}
+}
+
+func TestCappedCache_All(t *testing.T) {
+	c := newCappedGroupedCache[discord.Message](100)
+	ch1 := snowflake.ID(1)
+	ch2 := snowflake.ID(2)
+
+	c.Put(ch1, 10, makeMessage(ch1, 10))
+	c.Put(ch1, 11, makeMessage(ch1, 11))
+	c.Put(ch2, 20, makeMessage(ch2, 20))
+
+	count := 0
+	for range c.All() {
+		count++
+	}
+	if count != 3 {
+		t.Fatalf("All() yielded %d items, want 3", count)
+	}
+}
+
+func TestCappedCache_AllEarlyBreak(t *testing.T) {
+	c := newCappedGroupedCache[discord.Message](100)
+	ch := snowflake.ID(1)
+	c.Put(ch, 10, makeMessage(ch, 10))
+	c.Put(ch, 11, makeMessage(ch, 11))
+	c.Put(ch, 12, makeMessage(ch, 12))
+
+	count := 0
+	for range c.All() {
+		count++
+		if count >= 2 {
+			break
+		}
+	}
+	if count != 2 {
+		t.Fatalf("All() with early break yielded %d items, want 2", count)
+	}
+}
+
+func TestCappedCache_GroupAll(t *testing.T) {
+	c := newCappedGroupedCache[discord.Message](100)
+	ch1 := snowflake.ID(1)
+	ch2 := snowflake.ID(2)
+
+	c.Put(ch1, 10, makeMessage(ch1, 10))
+	c.Put(ch1, 11, makeMessage(ch1, 11))
+	c.Put(ch2, 20, makeMessage(ch2, 20))
+
+	count := 0
+	for range c.GroupAll(ch1) {
+		count++
+	}
+	if count != 2 {
+		t.Fatalf("GroupAll(ch1) yielded %d items, want 2", count)
+	}
+
+	count = 0
+	for range c.GroupAll(snowflake.ID(999)) {
+		count++
+	}
+	if count != 0 {
+		t.Fatalf("GroupAll(nonexistent) yielded %d items, want 0", count)
+	}
+}
+
+func TestCappedCache_GroupAllEarlyBreak(t *testing.T) {
+	c := newCappedGroupedCache[discord.Message](100)
+	ch := snowflake.ID(1)
+	c.Put(ch, 10, makeMessage(ch, 10))
+	c.Put(ch, 11, makeMessage(ch, 11))
+	c.Put(ch, 12, makeMessage(ch, 12))
+
+	count := 0
+	for range c.GroupAll(ch) {
+		count++
+		if count >= 1 {
+			break
+		}
+	}
+	if count != 1 {
+		t.Fatalf("GroupAll with early break yielded %d items, want 1", count)
+	}
+}
+
+func TestCappedCache_AllEmpty(t *testing.T) {
+	c := newCappedGroupedCache[discord.Message](100)
+	count := 0
+	for range c.All() {
+		count++
+	}
+	if count != 0 {
+		t.Fatalf("All() on empty cache yielded %d items, want 0", count)
+	}
+}
+
 func TestCappedCache_EvictionCompaction(t *testing.T) {
 	const cap = 50
 	c := newCappedGroupedCache[discord.Message](cap)
