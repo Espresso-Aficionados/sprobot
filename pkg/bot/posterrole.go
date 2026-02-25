@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/disgoorg/disgo/discord"
@@ -360,4 +362,126 @@ func (b *Bot) savePosterRole() {
 			b.Log.Info("Saved poster role state", "guild_id", guildID)
 		}
 	}
+}
+
+type leaderboardEntry struct {
+	UserID string
+	Total  int
+}
+
+func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCreate) {
+	if e.GuildID() == nil {
+		return
+	}
+	guildID := *e.GuildID()
+
+	cfg, ok := b.posterRoleConfig[guildID]
+	if !ok {
+		botutil.RespondEphemeral(e, "Poster role is not configured.")
+		return
+	}
+
+	data, ok := e.Data.(discord.SlashCommandInteractionData)
+	if !ok {
+		return
+	}
+
+	public, _ := data.OptBool("public")
+	ephemeral := !public
+
+	b.Log.Info("Market leaderboard", "user_id", e.User().ID, "guild_id", guildID, "public", public)
+
+	if err := e.DeferCreateMessage(ephemeral); err != nil {
+		b.Log.Error("Failed to defer marketleaderboard response", "error", err)
+		return
+	}
+
+	st := b.posterRole[guildID]
+	if st == nil {
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+			Content: "No tracking data yet.",
+			Flags:   discord.MessageFlagEphemeral,
+		})
+		return
+	}
+
+	// Snapshot state under lock: union of Tracked and History keys
+	st.mu.Lock()
+	users := make(map[string]int, len(st.Tracked)+len(st.History))
+	for uid, count := range st.History {
+		users[uid] += count
+	}
+	for uid, count := range st.Tracked {
+		users[uid] += count
+	}
+	st.mu.Unlock()
+
+	// Build sorted slice
+	entries := make([]leaderboardEntry, 0, len(users))
+	for uid, total := range users {
+		entries = append(entries, leaderboardEntry{UserID: uid, Total: total})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Total > entries[j].Total
+	})
+
+	// Filter out users who already have the role, take top 20
+	var filtered []leaderboardEntry
+	for _, entry := range entries {
+		if len(filtered) >= 20 {
+			break
+		}
+		uid, err := snowflake.Parse(entry.UserID)
+		if err != nil {
+			continue
+		}
+		member, err := b.Client.Rest.GetMember(guildID, uid)
+		if err == nil {
+			hasRole := false
+			for _, roleID := range member.RoleIDs {
+				if roleID == cfg.RoleID {
+					hasRole = true
+					break
+				}
+			}
+			if hasRole {
+				continue
+			}
+		}
+		// On error, include the user since we can't confirm they have the role
+		filtered = append(filtered, entry)
+	}
+
+	// Build embed
+	var lines []string
+	for rank, entry := range filtered {
+		pct := 0
+		if cfg.Threshold > 0 {
+			pct = entry.Total * 100 / cfg.Threshold
+		}
+		remaining := cfg.Threshold - entry.Total
+		if remaining < 0 {
+			remaining = 0
+		}
+		lines = append(lines, fmt.Sprintf("%d. <@%s> — %d/%d (%d%%) — %d remaining",
+			rank+1, entry.UserID, entry.Total, cfg.Threshold, pct, remaining))
+	}
+
+	description := "No users are being tracked yet."
+	if len(lines) > 0 {
+		description = strings.Join(lines, "\n")
+	}
+
+	embed := discord.Embed{
+		Title:       "Marketplace Progress Leaderboard",
+		Description: description,
+	}
+
+	msg := discord.MessageCreate{
+		Embeds: []discord.Embed{embed},
+	}
+	if ephemeral {
+		msg.Flags = discord.MessageFlagEphemeral
+	}
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
 }

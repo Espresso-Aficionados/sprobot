@@ -145,7 +145,7 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
-		// /marketprogress
+		// /marketprogress and /marketleaderboard
 		if _, ok := b.posterRoleConfig[guildID]; ok {
 			commands = append(commands, discord.SlashCommandCreate{
 				Name:                     "marketprogress",
@@ -157,6 +157,17 @@ func (b *Bot) registerAllCommands() error {
 						Description: "User to check progress for",
 						Required:    true,
 					},
+					discord.ApplicationCommandOptionBool{
+						Name:        "public",
+						Description: "Post the result publicly in the channel (default: hidden)",
+					},
+				},
+			})
+			commands = append(commands, discord.SlashCommandCreate{
+				Name:                     "marketleaderboard",
+				Description:              "Show top users by progress toward marketplace access",
+				DefaultMemberPermissions: omit.NewPtr(perm),
+				Options: []discord.ApplicationCommandOption{
 					discord.ApplicationCommandOptionBool{
 						Name:        "public",
 						Description: "Post the result publicly in the channel (default: hidden)",
@@ -352,6 +363,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleTopPosters(e)
 	case "marketprogress":
 		b.handleMarketProgress(e)
+	case "marketleaderboard":
+		b.handleMarketLeaderboard(e)
 	case "s":
 		b.handleShortcut(e)
 	case "sconfig":
