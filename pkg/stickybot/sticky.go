@@ -30,6 +30,7 @@ type stickyMessage struct {
 	MaxIdleMins       int             `json:"max_idle_mins"`
 	MsgThreshold      int             `json:"msg_threshold"`
 	TimeThresholdMins int             `json:"time_threshold_mins"`
+	Buffer            int             `json:"buffer"`
 }
 
 func (s *stickyMessage) applyDefaults() {
@@ -41,6 +42,9 @@ func (s *stickyMessage) applyDefaults() {
 	}
 	if s.MsgThreshold == 0 {
 		s.MsgThreshold = 30
+	}
+	if s.Buffer == 0 {
+		s.Buffer = 5
 	}
 }
 
@@ -154,6 +158,19 @@ func (b *Bot) stopAllStickyGoroutines() {
 }
 
 func (b *Bot) repostSticky(s *stickyMessage) bool {
+	// Skip repost if the sticky is still within the last N messages (buffer).
+	if s.LastMessageID != 0 && s.Buffer > 0 {
+		msgs, err := b.Client.Rest.GetMessages(s.ChannelID, 0, 0, 0, s.Buffer)
+		if err == nil {
+			for _, m := range msgs {
+				if m.ID == s.LastMessageID {
+					b.Log.Info("Repost skipped, sticky within buffer", "channel_id", s.ChannelID, "guild_id", s.GuildID, "buffer", s.Buffer)
+					return true
+				}
+			}
+		}
+	}
+
 	// Skip repost if only bot messages were posted after the sticky.
 	// This prevents repost loops when multiple bots are active in the same channel.
 	if s.LastMessageID != 0 && botutil.OnlyBotsAfter(b.Client.Rest, s.ChannelID, s.LastMessageID, b.Log) {

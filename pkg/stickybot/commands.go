@@ -26,6 +26,7 @@ const (
 	fieldMaxIdle       = "max_idle_mins"
 	fieldThreshold     = "msg_threshold"
 	fieldTimeThreshold = "time_threshold_mins"
+	fieldBuffer        = "buffer"
 )
 
 func (b *Bot) registerAllCommands() error {
@@ -154,6 +155,15 @@ func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 					Required: true,
 				},
 			),
+			discord.NewLabel(
+				"Buffer (skip repost if in last N msgs)",
+				discord.TextInputComponent{
+					CustomID: fieldBuffer,
+					Style:    discord.TextInputStyleShort,
+					Value:    "5",
+					Required: true,
+				},
+			),
 		},
 	})
 	if err != nil {
@@ -186,6 +196,7 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	maxIdleStr := e.Data.Text(fieldMaxIdle)
 	threshStr := e.Data.Text(fieldThreshold)
 	timeThreshStr := e.Data.Text(fieldTimeThreshold)
+	bufferStr := e.Data.Text(fieldBuffer)
 
 	minIdle, err := strconv.Atoi(minIdleStr)
 	if err != nil || minIdle < 0 {
@@ -209,6 +220,15 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	timeThreshold, err := strconv.Atoi(timeThreshStr)
 	if err != nil || timeThreshold < 0 {
 		botutil.RespondEphemeral(e, "Time threshold must be a non-negative number.")
+		return
+	}
+	buffer, err := strconv.Atoi(bufferStr)
+	if err != nil || buffer < 0 {
+		botutil.RespondEphemeral(e, "Buffer must be a non-negative number.")
+		return
+	}
+	if threshold > 0 && threshold <= buffer {
+		botutil.RespondEphemeral(e, fmt.Sprintf("Message threshold (%d) must be greater than buffer (%d).", threshold, buffer))
 		return
 	}
 	if threshold == 0 && timeThreshold == 0 {
@@ -263,6 +283,7 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		MaxIdleMins:       maxIdle,
 		MsgThreshold:      threshold,
 		TimeThresholdMins: timeThreshold,
+		Buffer:            buffer,
 	}
 
 	// Post the sticky immediately
@@ -298,7 +319,7 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	// Save to S3 immediately
 	b.saveStickiesForGuild(guildID)
 
-	b.Log.Info("Sticky created", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", threshold, "time_threshold", timeThreshold)
+	b.Log.Info("Sticky created", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", threshold, "time_threshold", timeThreshold, "buffer", buffer)
 
 	b.followup(e, fmt.Sprintf("Sticky created in <#%d>! Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", channelID, minIdle, maxIdle, threshold, timeThreshold))
 }
