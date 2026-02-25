@@ -328,10 +328,7 @@ func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState
 		return
 	}
 
-	guildStr := fmt.Sprintf("%d", guildID)
-	channelStr := fmt.Sprintf("%d", entry.ChannelID)
-	msgStr := fmt.Sprintf("%d", msgID)
-	link := messageLink(guildStr, channelStr, msgStr)
+	link := messageLink(guildID, entry.ChannelID, msgID)
 
 	content := fmt.Sprintf("%s **%d** | <#%d>", emojiDisplay(settings.Emoji), entry.Count, entry.ChannelID)
 

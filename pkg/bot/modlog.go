@@ -143,7 +143,7 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 
 	embed.Fields = append(embed.Fields, discord.EmbedField{
 		Name:  "Link to Message",
-		Value: fmt.Sprintf("[Click here](%s)", messageLink(guildStr, fmt.Sprintf("%d", channelID), fmt.Sprintf("%d", messageID))),
+		Value: fmt.Sprintf("[Click here](%s)", messageLink(*e.GuildID(), channelID, messageID)),
 	})
 
 	timestampField := fmt.Sprintf("Created: %s UTC\n", msg.CreatedAt.Format(time.DateTime))
@@ -201,7 +201,7 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 
 	notificationEmbed := discord.Embed{
 		Title: fmt.Sprintf("Saved message to from %s in #%s/%s", msg.Author.Username, modLogChannelName, thread.Name()),
-		URL:   messageLink(guildStr, fmt.Sprintf("%d", thread.ID()), fmt.Sprintf("%d", sentMsg.ID)),
+		URL:   messageLink(*e.GuildID(), thread.ID(), sentMsg.ID),
 	}
 
 	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
@@ -276,6 +276,6 @@ func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author disco
 	return post.GuildThread
 }
 
-func messageLink(guildID, channelID, messageID string) string {
-	return fmt.Sprintf("https://discord.com/channels/%s/%s/%s", guildID, channelID, messageID)
+func messageLink(guildID, channelID, messageID snowflake.ID) string {
+	return fmt.Sprintf("https://discord.com/channels/%d/%d/%d", guildID, channelID, messageID)
 }

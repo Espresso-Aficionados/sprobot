@@ -140,11 +140,7 @@ func (b *Bot) onMessageUpdate(e *events.GuildMessageUpdate) {
 			Name: "Author", Value: userMention(e.Message.Author.ID), Inline: boolPtr(true),
 		})
 	}
-	link := messageLink(
-		fmt.Sprintf("%d", e.GuildID),
-		fmt.Sprintf("%d", e.ChannelID),
-		fmt.Sprintf("%d", e.MessageID),
-	)
+	link := messageLink(e.GuildID, e.ChannelID, e.MessageID)
 	embed.Fields = append(embed.Fields, discord.EmbedField{
 		Name: "Link", Value: fmt.Sprintf("[Jump to message](%s)", link), Inline: boolPtr(true),
 	})

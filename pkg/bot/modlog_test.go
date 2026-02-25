@@ -35,7 +35,7 @@ func TestGetModLogConfigUnknown(t *testing.T) {
 }
 
 func TestMessageLink(t *testing.T) {
-	got := messageLink("111", "222", "333")
+	got := messageLink(111, 222, 333)
 	want := "https://discord.com/channels/111/222/333"
 	if got != want {
 		t.Errorf("messageLink = %q, want %q", got, want)
