@@ -247,6 +247,10 @@ func (b *Bot) registerAllCommands() error {
 						Name:        "list",
 						Description: "List all blacklisted channels",
 					},
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "clear",
+						Description: "Remove all channels from the blacklist",
+					},
 				},
 			})
 		}

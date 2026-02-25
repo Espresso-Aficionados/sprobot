@@ -562,6 +562,8 @@ func (b *Bot) handleStarboardBlacklist(e *events.ApplicationCommandInteractionCr
 		b.handleSBBlacklistRemove(e, *guildID, st)
 	case "list":
 		b.handleSBBlacklistList(e, st)
+	case "clear":
+		b.handleSBBlacklistClear(e, *guildID, st)
 	}
 }
 
@@ -646,4 +648,26 @@ func (b *Bot) handleSBBlacklistList(e *events.ApplicationCommandInteractionCreat
 		lines = append(lines, fmt.Sprintf("<#%d>", id))
 	}
 	botutil.RespondEphemeral(e, "**Blacklisted channels:**\n"+strings.Join(lines, "\n"))
+}
+
+func (b *Bot) handleSBBlacklistClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
+	b.Log.Info("Starboard blacklist clear", "user_id", e.User().ID, "guild_id", guildID)
+
+	st.mu.Lock()
+	count := len(st.Settings.Blacklist)
+	st.Settings.Blacklist = nil
+	st.mu.Unlock()
+
+	if count == 0 {
+		botutil.RespondEphemeral(e, "Blacklist is already empty.")
+		return
+	}
+
+	if err := b.persistStarboard(guildID, st); err != nil {
+		b.Log.Error("Failed to persist starboard blacklist", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save blacklist.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("Cleared %d entries from the blacklist.", count))
 }
