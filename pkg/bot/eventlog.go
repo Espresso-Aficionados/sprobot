@@ -222,21 +222,7 @@ func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
 	}
 
 	// Role changes are logged via the audit log handler (handleMemberRoleUpdateEntry)
-	// which includes the responsible moderator and reason.
-
-	oldTimeout := derefTime(e.OldMember.CommunicationDisabledUntil)
-	newTimeout := derefTime(e.Member.CommunicationDisabledUntil)
-	if !oldTimeout.Equal(newTimeout) {
-		if newTimeout.After(time.Now()) {
-			fields = append(fields, discord.EmbedField{
-				Name: "Timed Out Until", Value: fmt.Sprintf("<t:%d:R>", newTimeout.Unix()),
-			})
-		} else if oldTimeout.After(time.Now()) {
-			fields = append(fields, discord.EmbedField{
-				Name: "Timeout Removed", Value: "Yes",
-			})
-		}
-	}
+	// and timeouts via handleMemberUpdateEntry — both include moderator + reason.
 
 	if len(fields) == 0 {
 		return
@@ -259,30 +245,8 @@ func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
 }
 
 // --- Moderation events ---
-
-func (b *Bot) onGuildBan(e *events.GuildBan) {
-	// Basic embed — will be superseded by audit log entry if available,
-	// but serves as a fallback in case the audit log event doesn't arrive.
-	embed := discord.Embed{
-		Title: "Member Banned",
-		Color: colorDarkRed,
-		Author: &discord.EmbedAuthor{
-			Name:    e.User.Username,
-			IconURL: e.User.EffectiveAvatarURL(),
-		},
-		Fields: []discord.EmbedField{
-			{Name: "User", Value: fmt.Sprintf("%s (`%d`)", userMention(e.User.ID), e.User.ID)},
-		},
-	}
-
-	// Cross-post to mod log forum thread (audit log handler will also post,
-	// but the gateway event arrives first and ensures the thread exists).
-	b.crossPostToModLog(e.GuildID, e.User, embed)
-}
-
-func (b *Bot) onGuildUnban(_ *events.GuildUnban) {
-	// Logged via audit log entry handler (handleBanEntry) which includes moderator + reason.
-}
+// Ban/unban are handled entirely by the audit log handler (handleBanEntry)
+// which includes moderator + reason and cross-posts to the mod log.
 
 func (b *Bot) onAuditLogEntry(e *events.GuildAuditLogEntryCreate) {
 	entry := e.AuditLogEntry
@@ -480,6 +444,27 @@ func (b *Bot) handleChannelAuditEntry(guildID snowflake.ID, entry discord.AuditL
 			embed.Fields = append(embed.Fields, discord.EmbedField{
 				Name: "Channel ID", Value: fmt.Sprintf("`%d`", *entry.TargetID), Inline: boolPtr(true),
 			})
+		}
+	}
+	// For deletes, extract name and type from audit log changes.
+	if entry.ActionType == discord.AuditLogEventChannelDelete {
+		for _, change := range entry.Changes {
+			switch change.Key {
+			case discord.AuditLogChangeKeyName:
+				var name string
+				if change.UnmarshalOldValue(&name) == nil && name != "" {
+					embed.Fields = append(embed.Fields, discord.EmbedField{
+						Name: "Name", Value: name, Inline: boolPtr(true),
+					})
+				}
+			case discord.AuditLogChangeKeyType:
+				var chType discord.ChannelType
+				if change.UnmarshalOldValue(&chType) == nil {
+					embed.Fields = append(embed.Fields, discord.EmbedField{
+						Name: "Type", Value: channelTypeName(chType), Inline: boolPtr(true),
+					})
+				}
+			}
 		}
 	}
 	appendAuditFields(&embed, entry)
@@ -795,17 +780,8 @@ func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
 	b.postEventLog(e.GuildID, embed)
 }
 
-func (b *Bot) onChannelDelete(e *events.GuildChannelDelete) {
-	embed := discord.Embed{
-		Title: "Channel Deleted",
-		Color: colorRed,
-		Fields: []discord.EmbedField{
-			{Name: "Name", Value: e.Channel.Name(), Inline: boolPtr(true)},
-			{Name: "Type", Value: channelTypeName(e.Channel.Type()), Inline: boolPtr(true)},
-		},
-	}
-	b.postEventLog(e.GuildID, embed)
-}
+// Channel delete is handled by the audit log handler (handleChannelAuditEntry)
+// which includes moderator + reason and extracts name/type from changes.
 
 // --- Thread events ---
 
@@ -880,18 +856,8 @@ func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
 }
 
 // --- Role events ---
-
-func (b *Bot) onRoleCreate(e *events.RoleCreate) {
-	embed := discord.Embed{
-		Title: "Role Created",
-		Color: colorGreen,
-		Fields: []discord.EmbedField{
-			{Name: "Name", Value: e.Role.Name, Inline: boolPtr(true)},
-			{Name: "Color", Value: fmt.Sprintf("#%06X", e.Role.Color), Inline: boolPtr(true)},
-		},
-	}
-	b.postEventLog(e.GuildID, embed)
-}
+// Role create and delete are handled by the audit log handler (handleRoleAuditEntry)
+// which includes moderator + reason info.
 
 func (b *Bot) onRoleUpdate(e *events.RoleUpdate) {
 	var fields []discord.EmbedField
@@ -952,17 +918,6 @@ func (b *Bot) onRoleUpdate(e *events.RoleUpdate) {
 		Title:  "Role Updated",
 		Color:  colorYellow,
 		Fields: fields,
-	}
-	b.postEventLog(e.GuildID, embed)
-}
-
-func (b *Bot) onRoleDelete(e *events.RoleDelete) {
-	embed := discord.Embed{
-		Title: "Role Deleted",
-		Color: colorRed,
-		Fields: []discord.EmbedField{
-			{Name: "Name", Value: e.Role.Name, Inline: boolPtr(true)},
-		},
 	}
 	b.postEventLog(e.GuildID, embed)
 }
@@ -1070,13 +1025,6 @@ func derefSnowflake(p *snowflake.ID) snowflake.ID {
 	return *p
 }
 
-func derefTime(p *time.Time) time.Time {
-	if p == nil {
-		return time.Time{}
-	}
-	return *p
-}
-
 func orDash(s string) string {
 	if s == "" {
 		return "-"
@@ -1097,36 +1045,6 @@ func formatPartialRoleMentions(roles []discord.PartialRole) string {
 		mentions[i] = fmt.Sprintf("<@&%d>", r.ID)
 	}
 	return strings.Join(mentions, ", ")
-}
-
-func formatRoleMentions(ids []snowflake.ID) string {
-	mentions := make([]string, len(ids))
-	for i, id := range ids {
-		mentions[i] = fmt.Sprintf("<@&%d>", id)
-	}
-	return strings.Join(mentions, ", ")
-}
-
-func diffRoles(old, new []snowflake.ID) (added, removed []snowflake.ID) {
-	oldSet := make(map[snowflake.ID]bool, len(old))
-	for _, id := range old {
-		oldSet[id] = true
-	}
-	newSet := make(map[snowflake.ID]bool, len(new))
-	for _, id := range new {
-		newSet[id] = true
-	}
-	for _, id := range new {
-		if !oldSet[id] {
-			added = append(added, id)
-		}
-	}
-	for _, id := range old {
-		if !newSet[id] {
-			removed = append(removed, id)
-		}
-	}
-	return
 }
 
 func formatDuration(d time.Duration) string {

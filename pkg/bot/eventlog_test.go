@@ -234,33 +234,6 @@ func TestFormatPermissionDiffNoChanges(t *testing.T) {
 	}
 }
 
-func TestDiffRoles(t *testing.T) {
-	tests := []struct {
-		name        string
-		old, new    []snowflake.ID
-		wantAdded   []snowflake.ID
-		wantRemoved []snowflake.ID
-	}{
-		{"empty both", nil, nil, nil, nil},
-		{"all added", nil, []snowflake.ID{1, 2, 3}, []snowflake.ID{1, 2, 3}, nil},
-		{"all removed", []snowflake.ID{1, 2, 3}, nil, nil, []snowflake.ID{1, 2, 3}},
-		{"no change", []snowflake.ID{1, 2}, []snowflake.ID{1, 2}, nil, nil},
-		{"add and remove", []snowflake.ID{1, 2}, []snowflake.ID{2, 3}, []snowflake.ID{3}, []snowflake.ID{1}},
-		{"complete swap", []snowflake.ID{1}, []snowflake.ID{2}, []snowflake.ID{2}, []snowflake.ID{1}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			added, removed := diffRoles(tt.old, tt.new)
-			if len(added) != len(tt.wantAdded) {
-				t.Errorf("added = %v, want %v", added, tt.wantAdded)
-			}
-			if len(removed) != len(tt.wantRemoved) {
-				t.Errorf("removed = %v, want %v", removed, tt.wantRemoved)
-			}
-		})
-	}
-}
-
 func TestDerefStr(t *testing.T) {
 	if got := derefStr(nil); got != "" {
 		t.Errorf("derefStr(nil) = %q, want empty", got)
@@ -278,16 +251,6 @@ func TestDerefSnowflake(t *testing.T) {
 	id := snowflake.ID(42)
 	if got := derefSnowflake(&id); got != 42 {
 		t.Errorf("derefSnowflake(&42) = %d, want 42", got)
-	}
-}
-
-func TestDerefTime(t *testing.T) {
-	if got := derefTime(nil); !got.IsZero() {
-		t.Errorf("derefTime(nil) = %v, want zero", got)
-	}
-	now := time.Now()
-	if got := derefTime(&now); !got.Equal(now) {
-		t.Errorf("derefTime(&now) = %v, want %v", got, now)
 	}
 }
 
@@ -311,16 +274,6 @@ func TestChannelMentionOrDash(t *testing.T) {
 	id := snowflake.ID(123)
 	if got := channelMentionOrDash(&id); got != "<#123>" {
 		t.Errorf("channelMentionOrDash(&123) = %q, want <#123>", got)
-	}
-}
-
-func TestFormatRoleMentions(t *testing.T) {
-	got := formatRoleMentions([]snowflake.ID{1, 2, 3})
-	if got != "<@&1>, <@&2>, <@&3>" {
-		t.Errorf("formatRoleMentions = %q", got)
-	}
-	if got := formatRoleMentions(nil); got != "" {
-		t.Errorf("formatRoleMentions(nil) = %q, want empty", got)
 	}
 }
 
