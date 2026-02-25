@@ -221,17 +221,8 @@ func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
 		)
 	}
 
-	added, removed := diffRoles(e.OldMember.RoleIDs, e.Member.RoleIDs)
-	if len(added) > 0 {
-		fields = append(fields, discord.EmbedField{
-			Name: "Roles Added", Value: formatRoleMentions(added),
-		})
-	}
-	if len(removed) > 0 {
-		fields = append(fields, discord.EmbedField{
-			Name: "Roles Removed", Value: formatRoleMentions(removed),
-		})
-	}
+	// Role changes are logged via the audit log handler (handleMemberRoleUpdateEntry)
+	// which includes the responsible moderator and reason.
 
 	oldTimeout := derefTime(e.OldMember.CommunicationDisabledUntil)
 	newTimeout := derefTime(e.Member.CommunicationDisabledUntil)
@@ -303,10 +294,22 @@ func (b *Bot) onAuditLogEntry(e *events.GuildAuditLogEntryCreate) {
 		b.handleBanEntry(e.GuildID, entry)
 	case discord.AuditLogEventMemberUpdate:
 		b.handleMemberUpdateEntry(e.GuildID, entry)
+	case discord.AuditLogEventMemberRoleUpdate:
+		b.handleMemberRoleUpdateEntry(e.GuildID, entry)
+	case discord.AuditLogEventMessageDelete:
+		b.handleMessageDeleteEntry(e.GuildID, entry)
+	case discord.AuditLogEventChannelUpdate, discord.AuditLogEventChannelDelete:
+		b.handleChannelAuditEntry(e.GuildID, entry)
 	case discord.AuditLogEventChannelOverwriteCreate,
 		discord.AuditLogEventChannelOverwriteUpdate,
 		discord.AuditLogEventChannelOverwriteDelete:
 		b.handleChannelOverwriteEntry(e.GuildID, entry)
+	case discord.AuditLogEventRoleCreate, discord.AuditLogEventRoleUpdate, discord.AuditLogEventRoleDelete:
+		b.handleRoleAuditEntry(e.GuildID, entry)
+	case discord.AuditLogEventGuildUpdate:
+		b.handleGuildUpdateEntry(e.GuildID, entry)
+	case discord.AuditLogThreadUpdate:
+		b.handleThreadAuditEntry(e.GuildID, entry)
 	}
 }
 
@@ -456,6 +459,191 @@ func (b *Bot) handleMemberUpdateEntry(guildID snowflake.ID, entry discord.AuditL
 	}
 }
 
+func (b *Bot) handleMemberRoleUpdateEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	if entry.TargetID == nil {
+		return
+	}
+
+	var added, removed []discord.PartialRole
+	for _, change := range entry.Changes {
+		switch change.Key {
+		case discord.AuditLogChangeKeyRoleAdd:
+			_ = change.UnmarshalNewValue(&added)
+		case discord.AuditLogChangeKeyRoleRemove:
+			_ = change.UnmarshalNewValue(&removed)
+		}
+	}
+	if len(added) == 0 && len(removed) == 0 {
+		return
+	}
+
+	embed := discord.Embed{
+		Title: "Member Roles Updated",
+		Color: colorBlue,
+		Fields: []discord.EmbedField{
+			{Name: "User", Value: fmt.Sprintf("%s (`%d`)", userMention(*entry.TargetID), *entry.TargetID)},
+		},
+	}
+	if len(added) > 0 {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Roles Added", Value: formatPartialRoleMentions(added),
+		})
+	}
+	if len(removed) > 0 {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Roles Removed", Value: formatPartialRoleMentions(removed),
+		})
+	}
+	appendAuditFields(&embed, entry)
+
+	if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
+		embed.Author = &discord.EmbedAuthor{
+			Name:    user.Username,
+			IconURL: user.EffectiveAvatarURL(),
+		}
+	}
+
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) handleMessageDeleteEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	// Only fires for mod-deletes (not self-deletes).
+	if entry.UserID == 0 {
+		return
+	}
+
+	embed := discord.Embed{
+		Title: "Message Deleted by Moderator",
+		Color: colorRed,
+	}
+	if entry.Options != nil && entry.Options.ChannelID != nil {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Channel", Value: channelMention(*entry.Options.ChannelID), Inline: boolPtr(true),
+		})
+	}
+	if entry.TargetID != nil {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Message Author", Value: userMention(*entry.TargetID), Inline: boolPtr(true),
+		})
+	}
+	appendAuditFields(&embed, entry)
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) handleChannelAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	var title string
+	var color int
+	switch entry.ActionType {
+	case discord.AuditLogEventChannelUpdate:
+		title = "Channel Updated"
+		color = colorYellow
+	case discord.AuditLogEventChannelDelete:
+		title = "Channel Deleted"
+		color = colorRed
+	}
+
+	embed := discord.Embed{
+		Title: title,
+		Color: color,
+	}
+	if entry.TargetID != nil {
+		if entry.ActionType == discord.AuditLogEventChannelUpdate {
+			embed.Fields = append(embed.Fields, discord.EmbedField{
+				Name: "Channel", Value: channelMention(*entry.TargetID), Inline: boolPtr(true),
+			})
+		} else {
+			embed.Fields = append(embed.Fields, discord.EmbedField{
+				Name: "Channel ID", Value: fmt.Sprintf("`%d`", *entry.TargetID), Inline: boolPtr(true),
+			})
+		}
+	}
+	appendAuditFields(&embed, entry)
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) handleRoleAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	var title string
+	var color int
+	switch entry.ActionType {
+	case discord.AuditLogEventRoleCreate:
+		title = "Role Created"
+		color = colorGreen
+	case discord.AuditLogEventRoleUpdate:
+		title = "Role Updated"
+		color = colorYellow
+	case discord.AuditLogEventRoleDelete:
+		title = "Role Deleted"
+		color = colorRed
+	}
+
+	embed := discord.Embed{
+		Title: title,
+		Color: color,
+	}
+
+	// Try to extract role name from changes
+	var roleName string
+	for _, change := range entry.Changes {
+		if change.Key == discord.AuditLogChangeKeyName {
+			// For create/update, new_value has the name; for delete, old_value
+			if entry.ActionType == discord.AuditLogEventRoleDelete {
+				_ = change.UnmarshalOldValue(&roleName)
+			} else {
+				_ = change.UnmarshalNewValue(&roleName)
+			}
+			break
+		}
+	}
+	if roleName != "" {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Role", Value: roleName, Inline: boolPtr(true),
+		})
+	} else if entry.TargetID != nil {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Role", Value: fmt.Sprintf("<@&%d>", *entry.TargetID), Inline: boolPtr(true),
+		})
+	}
+	appendAuditFields(&embed, entry)
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) handleGuildUpdateEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	embed := discord.Embed{
+		Title: "Server Updated",
+		Color: colorYellow,
+	}
+	appendAuditFields(&embed, entry)
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) handleThreadAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	embed := discord.Embed{
+		Title: "Thread Updated",
+		Color: colorYellow,
+	}
+	if entry.TargetID != nil {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Thread", Value: channelMention(*entry.TargetID), Inline: boolPtr(true),
+		})
+	}
+	appendAuditFields(&embed, entry)
+	b.postEventLog(guildID, embed)
+}
+
+// appendAuditFields appends "Responsible Moderator" and "Reason" fields from an audit log entry.
+func appendAuditFields(embed *discord.Embed, entry discord.AuditLogEntry) {
+	if entry.UserID != 0 {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Responsible Moderator", Value: userMention(entry.UserID), Inline: boolPtr(true),
+		})
+	}
+	if entry.Reason != nil && *entry.Reason != "" {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Reason", Value: *entry.Reason,
+		})
+	}
+}
+
 func (b *Bot) handleChannelOverwriteEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
 	if entry.TargetID == nil {
 		return
@@ -530,11 +718,7 @@ func (b *Bot) handleChannelOverwriteEntry(guildID snowflake.ID, entry discord.Au
 			{Name: "Channel", Value: channelMention(channelID), Inline: boolPtr(true)},
 		},
 	}
-	if entry.UserID != 0 {
-		embed.Fields = append(embed.Fields, discord.EmbedField{
-			Name: "Responsible Moderator", Value: userMention(entry.UserID), Inline: boolPtr(true),
-		})
-	}
+	appendAuditFields(&embed, entry)
 	b.postEventLog(guildID, embed)
 }
 
@@ -980,6 +1164,14 @@ func channelMentionOrDash(p *snowflake.ID) string {
 		return "-"
 	}
 	return channelMention(*p)
+}
+
+func formatPartialRoleMentions(roles []discord.PartialRole) string {
+	mentions := make([]string, len(roles))
+	for i, r := range roles {
+		mentions[i] = fmt.Sprintf("<@&%d>", r.ID)
+	}
+	return strings.Join(mentions, ", ")
 }
 
 func formatRoleMentions(ids []snowflake.ID) string {
