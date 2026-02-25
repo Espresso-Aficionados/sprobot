@@ -35,6 +35,7 @@ type threadReminder struct {
 	MaxIdleMins       int          `json:"max_idle_mins"`
 	MsgThreshold      int          `json:"msg_threshold"`
 	TimeThresholdMins int          `json:"time_threshold_mins"`
+	Buffer            int          `json:"buffer"`
 }
 
 func (r *threadReminder) applyDefaults() {
@@ -46,6 +47,9 @@ func (r *threadReminder) applyDefaults() {
 	}
 	if r.MsgThreshold == 0 {
 		r.MsgThreshold = 30
+	}
+	if r.Buffer == 0 {
+		r.Buffer = 5
 	}
 }
 
@@ -359,6 +363,30 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 	embed := b.buildThreadEmbed(r.GuildID, r.ChannelID)
 	if embed == nil {
 		return false
+	}
+
+	// Skip repost if the reminder is still within the last N messages (buffer).
+	if r.LastMessageID != 0 && r.Buffer > 0 {
+		msgs, err := b.Client.Rest.GetMessages(r.ChannelID, 0, 0, 0, r.Buffer)
+		if err == nil {
+			for _, m := range msgs {
+				if m.ID == r.LastMessageID {
+					// Still visible — update the embed in place.
+					_, err := b.Client.Rest.UpdateMessage(r.ChannelID, r.LastMessageID, discord.MessageUpdate{
+						Embeds: &[]discord.Embed{*embed},
+					})
+					if err == nil {
+						now := time.Now()
+						b.mu.Lock()
+						r.LastPostTime = now
+						b.mu.Unlock()
+						b.saveRemindersForGuild(r.GuildID)
+						return true
+					}
+					break
+				}
+			}
+		}
 	}
 
 	// If only bot messages were posted after our reminder, edit in place instead

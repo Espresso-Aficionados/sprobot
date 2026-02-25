@@ -26,6 +26,7 @@ const (
 	optMsgThreshold  = "msg_threshold"
 	optTimeThreshold = "time_threshold"
 	optPublic        = "public"
+	optBuffer        = "buffer"
 )
 
 func intPtr(v int) *int { return &v }
@@ -67,6 +68,11 @@ func (b *Bot) registerAllCommands() error {
 						discord.ApplicationCommandOptionInt{
 							Name:        optTimeThreshold,
 							Description: "Minutes to arm idle watch (default 720)",
+							MinValue:    intPtr(0),
+						},
+						discord.ApplicationCommandOptionInt{
+							Name:        optBuffer,
+							Description: "Skip repost if in last N messages (default 5)",
 							MinValue:    intPtr(0),
 						},
 					},
@@ -166,10 +172,19 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	if v, ok := data.OptInt(optTimeThreshold); ok {
 		timeThreshold = v
 	}
+	buffer := 5
+	if v, ok := data.OptInt(optBuffer); ok {
+		buffer = v
+	}
 
 	if maxIdle <= minIdle {
 		b.Log.Info("Enable rejected: max_idle <= min_idle", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 		botutil.RespondEphemeral(e, fmt.Sprintf("max_idle (%d) must be greater than min_idle (%d).", maxIdle, minIdle))
+		return
+	}
+	if msgThreshold > 0 && msgThreshold <= buffer {
+		b.Log.Info("Enable rejected: msg_threshold <= buffer", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
+		botutil.RespondEphemeral(e, fmt.Sprintf("msg_threshold (%d) must be greater than buffer (%d).", msgThreshold, buffer))
 		return
 	}
 	if msgThreshold == 0 && timeThreshold == 0 {
@@ -186,6 +201,7 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 		MaxIdleMins:       maxIdle,
 		MsgThreshold:      msgThreshold,
 		TimeThresholdMins: timeThreshold,
+		Buffer:            buffer,
 	}
 
 	// Replace any existing reminder in this channel
@@ -203,8 +219,8 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	b.startReminderGoroutine(r)
 	b.saveRemindersForGuild(guildID)
 
-	b.Log.Info("Reminder enabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", msgThreshold, "time_threshold", timeThreshold)
-	botutil.RespondEphemeral(e, fmt.Sprintf("Thread reminders enabled in <#%d>. Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", channelID, r.MinIdleMins, r.MaxIdleMins, r.MsgThreshold, r.TimeThresholdMins))
+	b.Log.Info("Reminder enabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", msgThreshold, "time_threshold", timeThreshold, "buffer", buffer)
+	botutil.RespondEphemeral(e, fmt.Sprintf("Thread reminders enabled in <#%d>. Idle: %d–%d min, msg threshold: %d, time threshold: %d min, buffer: %d msgs.", channelID, r.MinIdleMins, r.MaxIdleMins, r.MsgThreshold, r.TimeThresholdMins, r.Buffer))
 }
 
 func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
