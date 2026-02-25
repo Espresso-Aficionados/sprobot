@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
-	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -425,13 +424,10 @@ func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID
 }
 
 func (b *Bot) countThreadMembers(threadID snowflake.ID) int {
-	page := b.Client.Rest.GetThreadMembersPage(threadID, 0, 100)
-	total := 0
-	for page.Next() {
-		total += len(page.Items)
+	members, err := b.Client.Rest.GetThreadMembers(threadID)
+	if err != nil {
+		b.Log.Error("Failed to count thread members", "thread_id", threadID, "error", err)
+		return 0
 	}
-	if page.Err != nil && !errors.Is(page.Err, rest.ErrNoMorePages) {
-		b.Log.Error("Failed to count thread members", "thread_id", threadID, "error", page.Err)
-	}
-	return total
+	return len(members)
 }

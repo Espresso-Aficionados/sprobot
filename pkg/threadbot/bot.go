@@ -41,7 +41,6 @@ func New(token string) (*Bot, error) {
 			gateway.WithIntents(
 				gateway.IntentGuilds,
 				gateway.IntentGuildMessages,
-				gateway.IntentGuildMembers,
 			),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
