@@ -39,25 +39,33 @@ func PostWithRetry(restClient rest.Rest, channelID snowflake.ID, msg discord.Mes
 	return nil, err
 }
 
-// OnlyBotsAfter checks whether all messages in the channel after lastMsgID
-// were sent by bots. This prevents repost loops when multiple bots are active
-// in the same channel. Returns true if the bot's message is still present and
-// only bot messages follow it (or no messages follow it). Returns false if any
-// human message was posted after lastMsgID, or if lastMsgID is not found in
-// the recent history.
+// OnlyBotsAfter fetches the most recent messages in a channel and checks
+// whether the bot's last message is among them and all messages after it were
+// sent by bots. This prevents repost loops when multiple bots are active in
+// the same channel. Returns true if lastMsgID is found in the recent history
+// and only bot messages follow it (or nothing follows it). Returns false if
+// any human message was posted after lastMsgID, if lastMsgID is not found in
+// the recent history, or on error.
 func OnlyBotsAfter(restClient rest.Rest, channelID, lastMsgID snowflake.ID, log *slog.Logger) bool {
-	// Fetch up to 10 messages after our last message.
-	msgs, err := restClient.GetMessages(channelID, 0, 0, lastMsgID, 10)
+	// Fetch the 25 most recent messages (no after/before filter).
+	msgs, err := restClient.GetMessages(channelID, 0, 0, 0, 25)
 	if err != nil {
 		log.Error("Failed to fetch messages for bot-loop check", "channel_id", channelID, "error", err)
-		return false // On error, allow the repost.
+		return false
 	}
+	// msgs are returned newest-first. Walk from newest until we find our
+	// message; every message before it (i.e. newer) must be from a bot.
 	for _, m := range msgs {
+		if m.ID == lastMsgID {
+			return true // Found our message; everything newer was a bot.
+		}
 		if !m.Author.Bot && !m.Author.System {
-			return false
+			return false // A human posted after us.
 		}
 	}
-	return true
+	// Our message wasn't found in the recent history — too many messages
+	// have been posted since. Allow the repost.
+	return false
 }
 
 // RegisterGuildCommands registers the given commands for each guild matching the env.
