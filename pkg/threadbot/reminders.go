@@ -219,17 +219,14 @@ func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
 	now := time.Now()
 	const maxDescLen = 3900
 	var desc strings.Builder
+	var cachedCount int
 	for _, t := range threads {
 		memberCount := t.MemberCount
 		if cache != nil {
 			if n, ok := cache.Counts[t.ID]; ok && n > 0 {
-				b.Log.Debug("Using cached member count", "thread_id", t.ID, "cached", n, "api", t.MemberCount)
 				memberCount = n
-			} else {
-				b.Log.Debug("No cached member count, using API value", "thread_id", t.ID, "api", t.MemberCount)
+				cachedCount++
 			}
-		} else {
-			b.Log.Debug("No member count cache, using API value", "thread_id", t.ID, "api", t.MemberCount)
 		}
 		age := formatAge(now.Sub(t.CreatedAt))
 		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.MessageCount, memberCount, age)
@@ -238,6 +235,7 @@ func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
 		}
 		desc.WriteString(line)
 	}
+	b.Log.Info("Built thread embed", "guild_id", guildID, "channel_id", channelID, "threads", total, "cached_counts", cachedCount)
 	if total > 10 {
 		desc.WriteString(fmt.Sprintf("...and %d more threads\n", total-10))
 	}
@@ -323,11 +321,13 @@ func (b *Bot) buildAllThreadsEmbed(guildID snowflake.ID) *discord.Embed {
 	now := time.Now()
 	const maxDescLen = 3900
 	var desc strings.Builder
+	var cachedCount int
 	for _, t := range threads {
 		memberCount := t.MemberCount
 		if cache != nil {
 			if n, ok := cache.Counts[t.ID]; ok && n > 0 {
 				memberCount = n
+				cachedCount++
 			}
 		}
 		age := formatAge(now.Sub(t.CreatedAt))
@@ -337,6 +337,7 @@ func (b *Bot) buildAllThreadsEmbed(guildID snowflake.ID) *discord.Embed {
 		}
 		desc.WriteString(line)
 	}
+	b.Log.Info("Built all-threads embed", "guild_id", guildID, "threads", total, "cached_counts", cachedCount)
 	if total > maxShown {
 		desc.WriteString(fmt.Sprintf("...and %d more threads\n", total-maxShown))
 	}
@@ -528,7 +529,7 @@ func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID
 	stale := time.Since(cache.LastRefresh) >= 24*time.Hour
 	if len(missing) == 0 && !stale {
 		b.mu.Unlock()
-		b.Log.Debug("Skipping member count refresh, cache still fresh", "guild_id", guildID, "age", time.Since(cache.LastRefresh).Round(time.Minute))
+		b.Log.Info("Member count cache fresh, skipping refresh", "guild_id", guildID, "cached", len(cache.Counts), "age", time.Since(cache.LastRefresh).Round(time.Minute))
 		return
 	}
 	b.mu.Unlock()
