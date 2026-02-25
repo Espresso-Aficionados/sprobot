@@ -3,6 +3,7 @@ package bot
 import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 )
 
@@ -25,7 +26,7 @@ func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
 	if roleID == 0 {
 		return
 	}
-	if err := b.Client.Rest.AddMemberRole(e.GuildID, e.Member.User.ID, roleID); err != nil {
+	if err := b.Client.Rest.AddMemberRole(e.GuildID, e.Member.User.ID, roleID, rest.WithReason("Auto-role on member join")); err != nil {
 		b.Log.Error("Failed to assign auto-role on join", "user_id", e.Member.User.ID, "guild_id", e.GuildID, "error", err)
 	}
 }
@@ -43,7 +44,7 @@ func (b *Bot) ensureAutoRole(guildID snowflake.ID, msg discord.Message) {
 			return
 		}
 	}
-	if err := b.Client.Rest.AddMemberRole(guildID, msg.Author.ID, roleID); err != nil {
+	if err := b.Client.Rest.AddMemberRole(guildID, msg.Author.ID, roleID, rest.WithReason("Auto-role on first message")); err != nil {
 		b.Log.Error("Failed to assign auto-role on message", "user_id", msg.Author.ID, "guild_id", guildID, "error", err)
 	}
 }

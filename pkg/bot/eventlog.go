@@ -270,6 +270,8 @@ func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
 // --- Moderation events ---
 
 func (b *Bot) onGuildBan(e *events.GuildBan) {
+	// Basic embed — will be superseded by audit log entry if available,
+	// but serves as a fallback in case the audit log event doesn't arrive.
 	embed := discord.Embed{
 		Title: "Member Banned",
 		Color: colorDarkRed,
@@ -281,25 +283,14 @@ func (b *Bot) onGuildBan(e *events.GuildBan) {
 			{Name: "User", Value: fmt.Sprintf("%s (`%d`)", userMention(e.User.ID), e.User.ID)},
 		},
 	}
-	b.postEventLog(e.GuildID, embed)
 
-	// Cross-post to mod log forum thread
+	// Cross-post to mod log forum thread (audit log handler will also post,
+	// but the gateway event arrives first and ensures the thread exists).
 	b.crossPostToModLog(e.GuildID, e.User, embed)
 }
 
-func (b *Bot) onGuildUnban(e *events.GuildUnban) {
-	embed := discord.Embed{
-		Title: "Member Unbanned",
-		Color: colorTeal,
-		Author: &discord.EmbedAuthor{
-			Name:    e.User.Username,
-			IconURL: e.User.EffectiveAvatarURL(),
-		},
-		Fields: []discord.EmbedField{
-			{Name: "User", Value: fmt.Sprintf("%s (`%d`)", userMention(e.User.ID), e.User.ID)},
-		},
-	}
-	b.postEventLog(e.GuildID, embed)
+func (b *Bot) onGuildUnban(_ *events.GuildUnban) {
+	// Logged via audit log entry handler (handleBanEntry) which includes moderator + reason.
 }
 
 func (b *Bot) onAuditLogEntry(e *events.GuildAuditLogEntryCreate) {
@@ -308,6 +299,8 @@ func (b *Bot) onAuditLogEntry(e *events.GuildAuditLogEntryCreate) {
 	switch entry.ActionType {
 	case discord.AuditLogEventMemberKick:
 		b.handleKickEntry(e.GuildID, entry)
+	case discord.AuditLogEventMemberBanAdd, discord.AuditLogEventMemberBanRemove:
+		b.handleBanEntry(e.GuildID, entry)
 	case discord.AuditLogEventMemberUpdate:
 		b.handleMemberUpdateEntry(e.GuildID, entry)
 	case discord.AuditLogEventChannelOverwriteCreate,
@@ -353,6 +346,56 @@ func (b *Bot) handleKickEntry(guildID snowflake.ID, entry discord.AuditLogEntry)
 
 	// Cross-post to mod log forum thread
 	if entry.TargetID != nil {
+		if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
+			b.crossPostToModLog(guildID, *user, embed)
+		}
+	}
+}
+
+func (b *Bot) handleBanEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	isBan := entry.ActionType == discord.AuditLogEventMemberBanAdd
+	title := "Member Banned"
+	color := colorDarkRed
+	if !isBan {
+		title = "Member Unbanned"
+		color = colorTeal
+	}
+
+	embed := discord.Embed{
+		Title: title,
+		Color: color,
+		Fields: []discord.EmbedField{
+			{Name: "User ID", Value: fmt.Sprintf("`%d`", *entry.TargetID)},
+		},
+	}
+	if entry.UserID != 0 {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Moderator", Value: userMention(entry.UserID), Inline: boolPtr(true),
+		})
+	}
+	if entry.Reason != nil && *entry.Reason != "" {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Reason", Value: *entry.Reason,
+		})
+	}
+
+	// Try to get target user info for the embed author
+	if entry.TargetID != nil {
+		if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
+			embed.Author = &discord.EmbedAuthor{
+				Name:    user.Username,
+				IconURL: user.EffectiveAvatarURL(),
+			}
+			embed.Fields[0] = discord.EmbedField{
+				Name: "User", Value: fmt.Sprintf("%s (`%d`)", userMention(user.ID), user.ID),
+			}
+		}
+	}
+
+	b.postEventLog(guildID, embed)
+
+	// Cross-post bans to mod log forum thread
+	if isBan && entry.TargetID != nil {
 		if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
 			b.crossPostToModLog(guildID, *user, embed)
 		}

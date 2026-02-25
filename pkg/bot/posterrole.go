@@ -15,6 +15,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -124,7 +125,7 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, ch d
 	st.mu.Unlock()
 
 	if hasHistory && tracked+history >= cfg.Threshold {
-		if err := b.Client.Rest.AddMemberRole(guildID, userID, cfg.RoleID); err != nil {
+		if err := b.Client.Rest.AddMemberRole(guildID, userID, cfg.RoleID, rest.WithReason("Reached marketplace post threshold")); err != nil {
 			b.Log.Error("Failed to grant poster role", "user_id", userID, "guild_id", guildID, "error", err)
 		} else {
 			b.Log.Info("Granted poster role", "user_id", userID, "guild_id", guildID, "total", tracked+history)
@@ -193,7 +194,7 @@ func (b *Bot) searchAndGrantPosterRole(guildID snowflake.ID, userID snowflake.ID
 	b.Log.Info("Cached historical post count", "user_id", userID, "guild_id", guildID, "count", result.TotalResults)
 
 	if result.TotalResults >= cfg.Threshold {
-		if err := b.Client.Rest.AddMemberRole(guildID, userID, cfg.RoleID); err != nil {
+		if err := b.Client.Rest.AddMemberRole(guildID, userID, cfg.RoleID, rest.WithReason("Reached marketplace post threshold")); err != nil {
 			b.Log.Error("Failed to grant poster role", "user_id", userID, "guild_id", guildID, "error", err)
 		} else {
 			b.Log.Info("Granted poster role", "user_id", userID, "guild_id", guildID, "total", result.TotalResults)
