@@ -6,6 +6,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 )
 
@@ -229,7 +230,7 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 	}
 
 	if hasRole {
-		if err := b.Client.Rest.RemoveMemberRole(*guildID, e.User().ID, roleID); err != nil {
+		if err := b.Client.Rest.RemoveMemberRole(*guildID, e.User().ID, roleID, rest.WithReason("Self-role removal")); err != nil {
 			b.Log.Error("Failed to remove selfrole", "user_id", e.User().ID, "role_id", roleID, "error", err)
 			e.CreateMessage(discord.MessageCreate{
 				Content: "Something went wrong, please try again.",
@@ -243,7 +244,7 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 			Flags:   discord.MessageFlagEphemeral,
 		})
 	} else {
-		if err := b.Client.Rest.AddMemberRole(*guildID, e.User().ID, roleID); err != nil {
+		if err := b.Client.Rest.AddMemberRole(*guildID, e.User().ID, roleID, rest.WithReason("Self-role assignment")); err != nil {
 			b.Log.Error("Failed to add selfrole", "user_id", e.User().ID, "role_id", roleID, "error", err)
 			e.CreateMessage(discord.MessageCreate{
 				Content: "Something went wrong, please try again.",
