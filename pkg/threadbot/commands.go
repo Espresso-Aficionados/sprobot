@@ -154,10 +154,12 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	}
 
 	if maxIdle <= minIdle {
+		b.Log.Info("Enable rejected: max_idle <= min_idle", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 		botutil.RespondEphemeral(e, fmt.Sprintf("max_idle (%d) must be greater than min_idle (%d).", maxIdle, minIdle))
 		return
 	}
 	if msgThreshold == 0 && timeThreshold == 0 {
+		b.Log.Info("Enable rejected: both thresholds zero", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 		botutil.RespondEphemeral(e, "At least one of msg_threshold or time_threshold must be > 0.")
 		return
 	}
@@ -187,6 +189,7 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	b.startReminderGoroutine(r)
 	b.saveRemindersForGuild(guildID)
 
+	b.Log.Info("Reminder enabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", msgThreshold, "time_threshold", timeThreshold)
 	botutil.RespondEphemeral(e, fmt.Sprintf("Thread reminders enabled in <#%d>. Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", channelID, r.MinIdleMins, r.MaxIdleMins, r.MsgThreshold, r.TimeThresholdMins))
 }
 
@@ -198,12 +201,14 @@ func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
 	channels, ok := b.reminders[guildID]
 	if !ok {
 		b.mu.Unlock()
+		b.Log.Info("Disable: no reminder found", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 		botutil.RespondEphemeral(e, "No thread reminder in this channel.")
 		return
 	}
 	r, ok := channels[channelID]
 	if !ok {
 		b.mu.Unlock()
+		b.Log.Info("Disable: no reminder found", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 		botutil.RespondEphemeral(e, "No thread reminder in this channel.")
 		return
 	}
@@ -215,6 +220,7 @@ func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
 		_ = b.Client.Rest.DeleteMessage(channelID, r.LastMessageID)
 	}
 	b.saveRemindersForGuild(guildID)
+	b.Log.Info("Reminder disabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 	botutil.RespondEphemeral(e, "Thread reminders disabled.")
 }
 
@@ -222,6 +228,7 @@ func (b *Bot) handleThreads(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
 
+	b.Log.Info("Listing threads", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 	embed := b.buildThreadEmbed(guildID, channelID)
 	if embed == nil {
 		botutil.RespondEphemeral(e, "No active threads in this channel.")
@@ -241,6 +248,7 @@ func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
 	channels, ok := b.reminders[guildID]
 	if !ok || len(channels) == 0 {
 		b.mu.Unlock()
+		b.Log.Info("List reminders: none found", "user_id", e.User().ID, "guild_id", guildID)
 		botutil.RespondEphemeral(e, "No thread reminders in this server.")
 		return
 	}
@@ -254,6 +262,7 @@ func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
 	}
 	b.mu.Unlock()
 
+	b.Log.Info("List reminders", "user_id", e.User().ID, "guild_id", guildID, "count", len(lines))
 	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
 }
 
@@ -264,5 +273,6 @@ func (b *Bot) handleRefreshCounts(e *events.ApplicationCommandInteractionCreate)
 	delete(b.memberCounts, guildID)
 	b.mu.Unlock()
 
+	b.Log.Info("Member count cache cleared", "user_id", e.User().ID, "guild_id", guildID)
 	botutil.RespondEphemeral(e, "Thread member count cache cleared. Counts will refresh on the next reminder post or `/threads` command.")
 }
