@@ -148,6 +148,9 @@ func (b *Bot) confirmDeleteProfile(e *events.ComponentInteractionCreate, tmpl sp
 		})
 		return
 	}
+
+	b.Log.Info("Profile deleted", "user_id", userStr, "guild_id", guildStr, "template", tmpl.Name)
+
 	content := "Deleted!"
 	e.UpdateMessage(discord.MessageUpdate{
 		Content:    &content,
@@ -221,6 +224,8 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 			return
 		}
 	}
+
+	b.Log.Info("Profile image deleted", "user_id", userStr, "guild_id", guildStr, "template", tmpl.Name)
 
 	content := "Deleted!"
 	e.UpdateMessage(discord.MessageUpdate{

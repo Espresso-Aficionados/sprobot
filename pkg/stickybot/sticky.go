@@ -158,6 +158,7 @@ func (b *Bot) repostSticky(s *stickyMessage) bool {
 	if s.LastMessageID != 0 {
 		msgs, err := b.Client.Rest.GetMessages(s.ChannelID, 0, 0, 0, 1)
 		if err == nil && len(msgs) == 1 && msgs[0].ID == s.LastMessageID {
+			b.Log.Debug("Repost skipped, sticky is already last message", "channel_id", s.ChannelID, "guild_id", s.GuildID)
 			return true
 		}
 	}

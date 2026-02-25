@@ -74,6 +74,12 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 }
 
 func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
+	b.Log.Info("Processing getprofile menu",
+		"user_id", userIDStr(e),
+		"template", tmpl.Name,
+		"guild_id", guildIDStr(e),
+	)
+
 	guildStr := guildIDStr(e)
 	var targetUser discord.User
 	var targetID snowflake.ID

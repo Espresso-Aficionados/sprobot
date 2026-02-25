@@ -23,6 +23,8 @@ func (b *Bot) handleWiki(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
+	b.Log.Info("Wiki lookup", "user_id", e.User().ID, "guild_id", *e.GuildID(), "page", page)
+
 	for _, link := range sprobot.WikiLinks {
 		if link.Shortcut == page {
 			e.CreateMessage(discord.MessageCreate{

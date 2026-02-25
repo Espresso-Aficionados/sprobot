@@ -131,6 +131,8 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 	st.indices[name] = (idx + 1) % n
 	st.mu.Unlock()
 
+	b.Log.Info("Shortcut used", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
+
 	response = expandShortcutVars(response, e.User().ID)
 
 	username := getNickOrName(e.Member())
@@ -249,6 +251,8 @@ func (b *Bot) handleShortcutConfigSet(e *events.ApplicationCommandInteractionCre
 		return
 	}
 
+	b.Log.Info("Shortcut config set", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
+
 	// Pre-fill with existing responses if the shortcut already exists
 	var prefills [shortcutResponseSlots]string
 	st := b.shortcuts[*guildID]
@@ -347,6 +351,8 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 		return
 	}
 
+	b.Log.Info("Shortcut saved", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name, "responses", len(responses))
+
 	botutil.RespondEphemeral(e, fmt.Sprintf("Shortcut %q saved with %d response(s).", name, len(responses)))
 }
 
@@ -366,6 +372,8 @@ func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteraction
 	if guildID == nil {
 		return
 	}
+
+	b.Log.Info("Shortcut config remove", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
 
 	st := b.shortcuts[*guildID]
 	if st == nil {
@@ -397,6 +405,8 @@ func (b *Bot) handleShortcutConfigList(e *events.ApplicationCommandInteractionCr
 	if guildID == nil {
 		return
 	}
+
+	b.Log.Info("Shortcut config list", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.shortcuts[*guildID]
 	if st == nil {

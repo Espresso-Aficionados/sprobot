@@ -351,6 +351,8 @@ func (b *Bot) handleTicketOpen(e *events.ComponentInteractionCreate) {
 }
 
 func (b *Bot) handleTicketCloseConfirm(e *events.ComponentInteractionCreate) {
+	b.Log.Info("Ticket close confirm", "user_id", e.User().ID, "channel_id", e.Channel().ID())
+
 	e.UpdateMessage(discord.MessageUpdate{
 		Embeds: &[]discord.Embed{{Description: "Are you sure you want to close this ticket?"}},
 		Components: &[]discord.LayoutComponent{
@@ -363,6 +365,8 @@ func (b *Bot) handleTicketCloseConfirm(e *events.ComponentInteractionCreate) {
 }
 
 func (b *Bot) handleTicketCloseCancel(e *events.ComponentInteractionCreate) {
+	b.Log.Info("Ticket close cancelled", "user_id", e.User().ID, "channel_id", e.Channel().ID())
+
 	guildID := e.GuildID()
 	cfg := ticketConfig{
 		CloseButtonLabel: "Close Ticket",

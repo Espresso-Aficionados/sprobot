@@ -237,6 +237,7 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 			})
 			return
 		}
+		b.Log.Info("Selfrole removed", "user_id", e.User().ID, "guild_id", *guildID, "role_id", roleID, "label", label)
 		e.CreateMessage(discord.MessageCreate{
 			Content: fmt.Sprintf("Removed **%s**", label),
 			Flags:   discord.MessageFlagEphemeral,
@@ -250,6 +251,7 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 			})
 			return
 		}
+		b.Log.Info("Selfrole added", "user_id", e.User().ID, "guild_id", *guildID, "role_id", roleID, "label", label)
 		e.CreateMessage(discord.MessageCreate{
 			Content: fmt.Sprintf("Added **%s**", label),
 			Flags:   discord.MessageFlagEphemeral,

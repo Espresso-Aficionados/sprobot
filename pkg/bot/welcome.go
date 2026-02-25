@@ -150,6 +150,8 @@ func (b *Bot) handleWelcomeSet(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
+	b.Log.Info("Welcome set", "user_id", e.User().ID, "guild_id", *guildID)
+
 	// Pre-fill with existing message
 	var prefill string
 	st := b.welcome[*guildID]
@@ -184,6 +186,8 @@ func (b *Bot) handleWelcomeSetModal(e *events.ModalSubmitInteractionCreate) {
 	if guildID == nil {
 		return
 	}
+
+	b.Log.Info("Welcome set modal submitted", "user_id", e.User().ID, "guild_id", *guildID)
 
 	msg := e.Data.Text("message")
 	if strings.TrimSpace(msg) == "" {
@@ -221,6 +225,8 @@ func (b *Bot) handleWelcomeClear(e *events.ApplicationCommandInteractionCreate) 
 		return
 	}
 
+	b.Log.Info("Welcome clear", "user_id", e.User().ID, "guild_id", *guildID)
+
 	st := b.welcome[*guildID]
 	if st == nil {
 		botutil.RespondEphemeral(e, "Something went wrong.")
@@ -245,6 +251,8 @@ func (b *Bot) handleWelcomeShow(e *events.ApplicationCommandInteractionCreate) {
 	if guildID == nil {
 		return
 	}
+
+	b.Log.Info("Welcome show", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.welcome[*guildID]
 	if st == nil {
@@ -274,6 +282,8 @@ func (b *Bot) handleWelcomeTest(e *events.ApplicationCommandInteractionCreate) {
 	if guildID == nil {
 		return
 	}
+
+	b.Log.Info("Welcome test", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.welcome[*guildID]
 	if st == nil {
@@ -317,6 +327,8 @@ func (b *Bot) handleWelcomeEnable(e *events.ApplicationCommandInteractionCreate)
 		return
 	}
 
+	b.Log.Info("Welcome enable", "user_id", e.User().ID, "guild_id", *guildID)
+
 	st := b.welcome[*guildID]
 	if st == nil {
 		botutil.RespondEphemeral(e, "Something went wrong.")
@@ -347,6 +359,8 @@ func (b *Bot) handleWelcomeDisable(e *events.ApplicationCommandInteractionCreate
 	if guildID == nil {
 		return
 	}
+
+	b.Log.Info("Welcome disable", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.welcome[*guildID]
 	if st == nil {

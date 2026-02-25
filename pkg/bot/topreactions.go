@@ -438,6 +438,8 @@ func (b *Bot) handleStarboardConfig(e *events.ApplicationCommandInteractionCreat
 func (b *Bot) handleSBConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
+	b.Log.Info("Starboard config set", "user_id", e.User().ID, "guild_id", guildID)
+
 	st.mu.Lock()
 	if ch, ok := data.OptChannel("channel"); ok {
 		st.Settings.OutputChannelID = ch.ID
@@ -469,6 +471,8 @@ func (b *Bot) handleSBConfigSet(e *events.ApplicationCommandInteractionCreate, g
 }
 
 func (b *Bot) handleSBConfigShow(e *events.ApplicationCommandInteractionCreate, st *starboardState) {
+	b.Log.Info("Starboard config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
+
 	st.mu.Lock()
 	s := st.Settings
 	entryCount := len(st.Entries)
@@ -499,6 +503,8 @@ func (b *Bot) handleSBConfigShow(e *events.ApplicationCommandInteractionCreate, 
 }
 
 func (b *Bot) handleSBConfigDisable(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
+	b.Log.Info("Starboard config disable", "user_id", e.User().ID, "guild_id", guildID)
+
 	st.mu.Lock()
 	st.Settings.OutputChannelID = 0
 	st.mu.Unlock()
@@ -552,6 +558,8 @@ func (b *Bot) handleSBBlacklistAdd(e *events.ApplicationCommandInteractionCreate
 		return
 	}
 
+	b.Log.Info("Starboard blacklist add", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
+
 	st.mu.Lock()
 	if st.Settings.isBlacklisted(ch.ID) {
 		st.mu.Unlock()
@@ -577,6 +585,8 @@ func (b *Bot) handleSBBlacklistRemove(e *events.ApplicationCommandInteractionCre
 		botutil.RespondEphemeral(e, "Please provide a channel.")
 		return
 	}
+
+	b.Log.Info("Starboard blacklist remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
 
 	st.mu.Lock()
 	found := false
@@ -604,6 +614,8 @@ func (b *Bot) handleSBBlacklistRemove(e *events.ApplicationCommandInteractionCre
 }
 
 func (b *Bot) handleSBBlacklistList(e *events.ApplicationCommandInteractionCreate, st *starboardState) {
+	b.Log.Info("Starboard blacklist list", "user_id", e.User().ID, "guild_id", *e.GuildID())
+
 	st.mu.Lock()
 	bl := make([]snowflake.ID, len(st.Settings.Blacklist))
 	copy(bl, st.Settings.Blacklist)

@@ -252,6 +252,8 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	}
 	guildID := *e.GuildID()
 
+	b.Log.Info("Market progress", "user_id", e.User().ID, "guild_id", guildID)
+
 	cfg, ok := b.posterRoleConfig[guildID]
 	if !ok {
 		botutil.RespondEphemeral(e, "Poster role is not configured.")

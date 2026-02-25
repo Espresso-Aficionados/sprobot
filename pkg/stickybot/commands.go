@@ -111,6 +111,8 @@ func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 	}
 	msg := data.TargetMessage()
 
+	b.Log.Info("Sticky menu opened", "user_id", e.User().ID, "guild_id", *e.GuildID(), "channel_id", msg.ChannelID, "message_id", msg.ID)
+
 	// Encode channel+message IDs into the modal custom ID
 	err := e.Modal(discord.ModalCreate{
 		CustomID: fmt.Sprintf("%s%d_%d", modalPrefix, msg.ChannelID, msg.ID),
@@ -296,12 +298,16 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	// Save to S3 immediately
 	b.saveStickiesForGuild(guildID)
 
+	b.Log.Info("Sticky created", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", threshold, "time_threshold", timeThreshold)
+
 	b.followup(e, fmt.Sprintf("Sticky created in <#%d>! Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", channelID, minIdle, maxIdle, threshold, timeThreshold))
 }
 
 func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
+
+	b.Log.Info("Sticky stop", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 
 	b.mu.Lock()
 	s := b.getSticky(guildID, channelID)
@@ -322,6 +328,8 @@ func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
 
+	b.Log.Info("Sticky start", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
+
 	b.mu.Lock()
 	s := b.getSticky(guildID, channelID)
 	if s == nil {
@@ -331,6 +339,7 @@ func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
 	}
 	if s.Active {
 		b.mu.Unlock()
+		b.Log.Info("Sticky already active", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 		botutil.RespondEphemeral(e, "Sticky is already active.")
 		return
 	}
@@ -345,6 +354,8 @@ func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
 func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
+
+	b.Log.Info("Sticky remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 
 	b.mu.Lock()
 	channels, ok := b.stickies[guildID]
@@ -372,6 +383,8 @@ func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) 
 
 func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
+
+	b.Log.Info("Sticky list", "user_id", e.User().ID, "guild_id", guildID)
 
 	b.mu.Lock()
 	channels, ok := b.stickies[guildID]

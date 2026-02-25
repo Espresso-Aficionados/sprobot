@@ -185,6 +185,8 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 	}
 	guildID := *e.GuildID()
 
+	b.Log.Info("Top posters", "user_id", e.User().ID, "guild_id", guildID)
+
 	configs := b.topPostersConfig
 	if _, ok := configs[guildID]; !ok {
 		botutil.RespondEphemeral(e, "This command is not configured for this server.")
