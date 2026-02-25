@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	cmdSlash       = "threadbot"
-	cmdListThreads = "threads"
-	subEnable      = "enable"
-	subDisable     = "disable"
-	subList        = "list"
+	cmdSlash         = "threadbot"
+	cmdListThreads   = "threads"
+	subEnable        = "enable"
+	subDisable       = "disable"
+	subList          = "list"
+	subRefreshCounts = "refreshcounts"
 
 	optMinIdle       = "min_idle"
 	optMaxIdle       = "max_idle"
@@ -76,6 +77,10 @@ func (b *Bot) registerAllCommands() error {
 					Name:        subList,
 					Description: "List all channels with thread reminders in this server",
 				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        subRefreshCounts,
+					Description: "Refresh cached thread member counts for this server",
+				},
 			},
 		},
 		discord.SlashCommandCreate{
@@ -120,6 +125,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			b.handleDisable(e)
 		case subList:
 			b.handleList(e)
+		case subRefreshCounts:
+			b.handleRefreshCounts(e)
 		}
 	}
 }
@@ -248,4 +255,14 @@ func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
 	b.mu.Unlock()
 
 	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
+}
+
+func (b *Bot) handleRefreshCounts(e *events.ApplicationCommandInteractionCreate) {
+	guildID := *e.GuildID()
+
+	b.mu.Lock()
+	delete(b.memberCounts, guildID)
+	b.mu.Unlock()
+
+	botutil.RespondEphemeral(e, "Thread member count cache cleared. Counts will refresh on the next reminder post or `/threads` command.")
 }

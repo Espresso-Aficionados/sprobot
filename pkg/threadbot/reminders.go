@@ -343,8 +343,6 @@ func (b *Bot) loadMemberCounts() {
 		if cache.Counts == nil {
 			cache.Counts = make(map[snowflake.ID]int)
 		}
-		// Clear LastRefresh so the first embed build triggers a fresh count
-		cache.LastRefresh = time.Time{}
 		b.memberCounts[guildID] = &cache
 		b.Log.Info("Loaded thread member counts", "guild_id", guildID, "count", len(cache.Counts))
 	}
@@ -393,15 +391,18 @@ func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID
 	cache := b.memberCounts[guildID]
 	if cache != nil && time.Since(cache.LastRefresh) < 24*time.Hour {
 		b.mu.Unlock()
+		b.Log.Debug("Skipping member count refresh, cache still fresh", "guild_id", guildID, "age", time.Since(cache.LastRefresh).Round(time.Minute))
 		return
 	}
 	b.mu.Unlock()
 
+	b.Log.Info("Refreshing thread member counts", "guild_id", guildID, "threads", len(threadIDs))
 	counts := make(map[snowflake.ID]int, len(threadIDs))
 	for _, threadID := range threadIDs {
 		n := b.countThreadMembers(threadID)
 		counts[threadID] = n
 	}
+	b.Log.Info("Finished refreshing thread member counts", "guild_id", guildID, "threads", len(counts))
 
 	b.mu.Lock()
 	b.memberCounts[guildID] = &memberCountCache{
@@ -429,5 +430,6 @@ func (b *Bot) countThreadMembers(threadID snowflake.ID) int {
 		b.Log.Error("Failed to count thread members", "thread_id", threadID, "error", err)
 		return 0
 	}
+	b.Log.Info("Fetched thread member count", "thread_id", threadID, "count", len(members))
 	return len(members)
 }
