@@ -383,6 +383,11 @@ func TestFormatAge(t *testing.T) {
 		{"1 day", 24 * time.Hour, "1 day"},
 		{"7 days", 7 * 24 * time.Hour, "7 days"},
 		{"1.5 days", 36 * time.Hour, "1 day"},
+		{"364 days", 364 * 24 * time.Hour, "364 days"},
+		{"exactly 1 year", 365 * 24 * time.Hour, "1 year"},
+		{"1 year 1 day", 366 * 24 * time.Hour, "1 year 1 day"},
+		{"2 years", 730 * 24 * time.Hour, "2 years"},
+		{"4 years 135 days", (4*365 + 135) * 24 * time.Hour, "4 years 135 days"},
 	}
 
 	for _, tt := range tests {
