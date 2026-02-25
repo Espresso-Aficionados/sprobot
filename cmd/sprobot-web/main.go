@@ -162,7 +162,7 @@ func accessLog(next http.Handler) http.Handler {
 		if ip == "" {
 			ip = r.RemoteAddr
 		}
-		log.Printf("%s %s %s %d %s %q", ip, r.Method, r.URL.RequestURI(), rec.status, time.Since(start), r.UserAgent())
+		log.Printf("%s %s %s %d %s %q", sanitizeLog(ip), r.Method, sanitizeLog(r.URL.RequestURI()), rec.status, time.Since(start), sanitizeLog(r.UserAgent()))
 	})
 }
 
@@ -174,6 +174,12 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' https:;")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// sanitizeLog replaces newlines and carriage returns to prevent log injection.
+func sanitizeLog(s string) string {
+	r := strings.NewReplacer("\n", "", "\r", "")
+	return r.Replace(s)
 }
 
 func render404(w http.ResponseWriter) {
