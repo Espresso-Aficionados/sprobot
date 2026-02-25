@@ -72,27 +72,24 @@ func TestGetPosterRoleConfigZeroThreshold(t *testing.T) {
 func TestPosterRoleProgressMath(t *testing.T) {
 	tests := []struct {
 		name          string
-		tracked       int
-		history       int
+		count         int
 		threshold     int
 		wantPct       int
 		wantRemaining int
 	}{
-		{"zero progress", 0, 0, 100, 0, 100},
-		{"half way", 25, 25, 100, 50, 50},
-		{"at threshold", 50, 50, 100, 100, 0},
-		{"over threshold", 60, 50, 100, 110, 0},
-		{"history only", 0, 75, 100, 75, 25},
-		{"tracked only", 30, 0, 100, 30, 70},
+		{"zero progress", 0, 100, 0, 100},
+		{"half way", 50, 100, 50, 50},
+		{"at threshold", 100, 100, 100, 0},
+		{"over threshold", 110, 100, 110, 0},
+		{"low count", 30, 100, 30, 70},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			total := tt.tracked + tt.history
 			pct := 0
 			if tt.threshold > 0 {
-				pct = total * 100 / tt.threshold
+				pct = tt.count * 100 / tt.threshold
 			}
-			remaining := tt.threshold - total
+			remaining := tt.threshold - tt.count
 			if remaining < 0 {
 				remaining = 0
 			}
@@ -109,9 +106,8 @@ func TestPosterRoleProgressMath(t *testing.T) {
 
 func TestPosterRoleStateJSONRoundTrip(t *testing.T) {
 	st := &posterRoleState{
-		Tracked:   map[string]int{"111": 5, "222": 10},
-		History:   map[string]int{"111": 50},
-		searching: map[string]bool{"333": true},
+		Counts:  map[string]int{"111": 55, "222": 10},
+		Fetched: map[string]bool{"111": true},
 	}
 
 	data, err := json.Marshal(st)
@@ -124,15 +120,14 @@ func TestPosterRoleStateJSONRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if loaded.Tracked["111"] != 5 {
-		t.Errorf("Tracked[111] = %d, want 5", loaded.Tracked["111"])
+	if loaded.Counts["111"] != 55 {
+		t.Errorf("Counts[111] = %d, want 55", loaded.Counts["111"])
 	}
-	if loaded.History["111"] != 50 {
-		t.Errorf("History[111] = %d, want 50", loaded.History["111"])
+	if !loaded.Fetched["111"] {
+		t.Error("Fetched[111] should be true")
 	}
-	// searching is unexported and should not be serialized
-	if loaded.searching != nil {
-		t.Error("searching should be nil after JSON round-trip")
+	if loaded.Fetched["222"] {
+		t.Error("Fetched[222] should be false")
 	}
 }
 

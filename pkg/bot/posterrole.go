@@ -70,10 +70,9 @@ func getPosterRoleConfig(env string) map[snowflake.ID]posterRoleConfig {
 }
 
 type posterRoleState struct {
-	mu        sync.Mutex
-	Tracked   map[string]int `json:"tracked"`
-	History   map[string]int `json:"history"`
-	searching map[string]bool
+	mu      sync.Mutex
+	Counts  map[string]int  `json:"counts"`
+	Fetched map[string]bool `json:"fetched"`
 }
 
 func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, ch discord.GuildMessageChannel, msg discord.Message) {
@@ -110,25 +109,25 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, ch d
 	}
 
 	st.mu.Lock()
-	st.Tracked[userIDStr]++
-	tracked := st.Tracked[userIDStr]
-
-	history, hasHistory := st.History[userIDStr]
-	isSearching := st.searching[userIDStr]
-
-	if !hasHistory && !isSearching {
-		st.searching[userIDStr] = true
-		st.mu.Unlock()
-		go b.searchAndGrantPosterRole(guildID, userID, userIDStr, cfg)
-		return
-	}
+	st.Counts[userIDStr]++
+	fetched := st.Fetched[userIDStr]
 	st.mu.Unlock()
 
-	if hasHistory && tracked+history >= cfg.Threshold {
+	if !fetched {
+		b.fetchPosterRoleHistory(guildID, userID, userIDStr)
+	}
+
+	st.mu.Lock()
+	count := st.Counts[userIDStr]
+	fetched = st.Fetched[userIDStr]
+	st.mu.Unlock()
+
+	if fetched && count >= cfg.Threshold {
 		if err := b.Client.Rest.AddMemberRole(guildID, userID, cfg.RoleID, rest.WithReason("Reached marketplace post threshold")); err != nil {
 			b.Log.Error("Failed to grant poster role", "user_id", userID, "guild_id", guildID, "error", err)
 		} else {
-			b.Log.Info("Granted poster role", "user_id", userID, "guild_id", guildID, "total", tracked+history)
+			b.Log.Info("Granted poster role", "user_id", userID, "guild_id", guildID, "total", count)
+			b.clearPosterRoleTracking(guildID, userIDStr)
 		}
 	}
 }
@@ -137,19 +136,12 @@ type discordSearchResponse struct {
 	TotalResults int `json:"total_results"`
 }
 
-func (b *Bot) searchAndGrantPosterRole(guildID snowflake.ID, userID snowflake.ID, userIDStr string, cfg posterRoleConfig) {
-	defer func() {
-		if r := recover(); r != nil {
-			b.Log.Error("Panic in poster role search", "error", r)
-		}
-	}()
-
+func (b *Bot) fetchPosterRoleHistory(guildID snowflake.ID, userID snowflake.ID, userIDStr string) {
 	url := fmt.Sprintf("https://discord.com/api/v10/guilds/%d/messages/search?author_id=%d", guildID, userID)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		b.Log.Error("Failed to create search request", "user_id", userID, "error", err)
-		b.clearPosterRoleSearching(guildID, userIDStr)
 		return
 	}
 	req.Header.Set("Authorization", "Bot "+b.Client.Token)
@@ -157,26 +149,22 @@ func (b *Bot) searchAndGrantPosterRole(guildID snowflake.ID, userID snowflake.ID
 	resp, err := b.searchClient.Do(req)
 	if err != nil {
 		b.Log.Error("Failed to execute search request", "user_id", userID, "error", err)
-		b.clearPosterRoleSearching(guildID, userIDStr)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusAccepted {
 		b.Log.Info("Search index not ready, will retry on next message", "user_id", userID)
-		b.clearPosterRoleSearching(guildID, userIDStr)
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
 		b.Log.Error("Search API returned non-200", "user_id", userID, "status", resp.StatusCode)
-		b.clearPosterRoleSearching(guildID, userIDStr)
 		return
 	}
 
 	var result discordSearchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		b.Log.Error("Failed to decode search response", "user_id", userID, "error", err)
-		b.clearPosterRoleSearching(guildID, userIDStr)
 		return
 	}
 
@@ -186,29 +174,21 @@ func (b *Bot) searchAndGrantPosterRole(guildID snowflake.ID, userID snowflake.ID
 	}
 
 	st.mu.Lock()
-	st.History[userIDStr] = result.TotalResults
-	st.Tracked[userIDStr] = 0
-	delete(st.searching, userIDStr)
+	st.Counts[userIDStr] += result.TotalResults
+	st.Fetched[userIDStr] = true
 	st.mu.Unlock()
 
 	b.Log.Info("Cached historical post count", "user_id", userID, "guild_id", guildID, "count", result.TotalResults)
-
-	if result.TotalResults >= cfg.Threshold {
-		if err := b.Client.Rest.AddMemberRole(guildID, userID, cfg.RoleID, rest.WithReason("Reached marketplace post threshold")); err != nil {
-			b.Log.Error("Failed to grant poster role", "user_id", userID, "guild_id", guildID, "error", err)
-		} else {
-			b.Log.Info("Granted poster role", "user_id", userID, "guild_id", guildID, "total", result.TotalResults)
-		}
-	}
 }
 
-func (b *Bot) clearPosterRoleSearching(guildID snowflake.ID, userIDStr string) {
+func (b *Bot) clearPosterRoleTracking(guildID snowflake.ID, userIDStr string) {
 	st := b.posterRole[guildID]
 	if st == nil {
 		return
 	}
 	st.mu.Lock()
-	delete(st.searching, userIDStr)
+	delete(st.Counts, userIDStr)
+	delete(st.Fetched, userIDStr)
 	st.mu.Unlock()
 }
 
@@ -221,9 +201,8 @@ func (b *Bot) loadPosterRole() {
 	ctx := context.Background()
 	for guildID := range configs {
 		st := &posterRoleState{
-			Tracked:   make(map[string]int),
-			History:   make(map[string]int),
-			searching: make(map[string]bool),
+			Counts:  make(map[string]int),
+			Fetched: make(map[string]bool),
 		}
 
 		data, err := b.S3.FetchGuildJSON(ctx, "posterroles", fmt.Sprintf("%d", guildID))
@@ -235,17 +214,16 @@ func (b *Bot) loadPosterRole() {
 			if err := json.Unmarshal(data, st); err != nil {
 				b.Log.Error("Failed to decode poster role data", "guild_id", guildID, "error", err)
 			}
-			if st.Tracked == nil {
-				st.Tracked = make(map[string]int)
+			if st.Counts == nil {
+				st.Counts = make(map[string]int)
 			}
-			if st.History == nil {
-				st.History = make(map[string]int)
+			if st.Fetched == nil {
+				st.Fetched = make(map[string]bool)
 			}
-			st.searching = make(map[string]bool)
 		}
 
 		b.posterRole[guildID] = st
-		b.Log.Info("Loaded poster role state", "guild_id", guildID, "tracked", len(st.Tracked), "history", len(st.History))
+		b.Log.Info("Loaded poster role state", "guild_id", guildID, "users", len(st.Counts))
 	}
 }
 
@@ -277,7 +255,7 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 
 	b.Log.Info("Market progress", "user_id", e.User().ID, "guild_id", guildID, "target_user", user.ID, "public", public)
 
-	// Defer since GetMember is a network call.
+	// Defer since GetMember (for the specified user) is a network call.
 	if err := e.DeferCreateMessage(ephemeral); err != nil {
 		b.Log.Error("Failed to defer marketprogress response", "error", err)
 		return
@@ -313,22 +291,20 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	}
 
 	st.mu.Lock()
-	tracked := st.Tracked[userIDStr]
-	history := st.History[userIDStr]
+	count := st.Counts[userIDStr]
 	st.mu.Unlock()
 
-	total := tracked + history
 	pct := 0
 	if cfg.Threshold > 0 {
-		pct = total * 100 / cfg.Threshold
+		pct = count * 100 / cfg.Threshold
 	}
-	remaining := cfg.Threshold - total
+	remaining := cfg.Threshold - count
 	if remaining < 0 {
 		remaining = 0
 	}
 
-	content := fmt.Sprintf("Poster role progress for %s:\n- Historical posts: %d\n- Session posts: %d\n- Total: %d / %d (%d%%)\n- %d more posts needed",
-		mention, history, tracked, total, cfg.Threshold, pct, remaining)
+	content := fmt.Sprintf("Poster role progress for %s:\n- Posts: %d / %d (%d%%)\n- %d more posts needed",
+		mention, count, cfg.Threshold, pct, remaining)
 
 	msg := discord.MessageCreate{
 		Content: content,
@@ -406,56 +382,27 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 		return
 	}
 
-	// Snapshot state under lock: union of Tracked and History keys
+	// Snapshot counts under lock
 	st.mu.Lock()
-	users := make(map[string]int, len(st.Tracked)+len(st.History))
-	for uid, count := range st.History {
-		users[uid] += count
-	}
-	for uid, count := range st.Tracked {
-		users[uid] += count
+	entries := make([]leaderboardEntry, 0, len(st.Counts))
+	for uid, total := range st.Counts {
+		entries = append(entries, leaderboardEntry{UserID: uid, Total: total})
 	}
 	st.mu.Unlock()
 
-	// Build sorted slice
-	entries := make([]leaderboardEntry, 0, len(users))
-	for uid, total := range users {
-		entries = append(entries, leaderboardEntry{UserID: uid, Total: total})
-	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Total > entries[j].Total
 	})
 
-	// Filter out users who already have the role, take top 20
-	var filtered []leaderboardEntry
-	for _, entry := range entries {
-		if len(filtered) >= 20 {
-			break
-		}
-		uid, err := snowflake.Parse(entry.UserID)
-		if err != nil {
-			continue
-		}
-		member, err := b.Client.Rest.GetMember(guildID, uid)
-		if err == nil {
-			hasRole := false
-			for _, roleID := range member.RoleIDs {
-				if roleID == cfg.RoleID {
-					hasRole = true
-					break
-				}
-			}
-			if hasRole {
-				continue
-			}
-		}
-		// On error, include the user since we can't confirm they have the role
-		filtered = append(filtered, entry)
+	// Users who have been granted the role are removed from tracking data,
+	// so the leaderboard only contains users still working toward the threshold.
+	if len(entries) > 20 {
+		entries = entries[:20]
 	}
 
 	// Build embed
 	var lines []string
-	for rank, entry := range filtered {
+	for rank, entry := range entries {
 		pct := 0
 		if cfg.Threshold > 0 {
 			pct = entry.Total * 100 / cfg.Threshold

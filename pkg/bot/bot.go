@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo"
@@ -26,6 +27,7 @@ type Bot struct {
 	tickets          map[snowflake.ID]*ticketState
 	shortcuts        map[snowflake.ID]*shortcutState
 	welcome          map[snowflake.ID]*welcomeState
+	welcomeSentMu    sync.Mutex
 	welcomeSent      map[snowflake.ID]time.Time
 	msgCache         *cappedGroupedCache[discord.Message]
 	memberCache      *cappedGroupedCache[discord.Member]
@@ -71,6 +73,7 @@ func New(token string) (*Bot, error) {
 	b.loadMemberCache()
 
 	client, err := disgo.New(token,
+		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
 		bot.WithCacheConfigOpts(
 			cache.WithCaches(cache.FlagMessages|cache.FlagMembers),
 			cache.WithMessageCache(cache.NewMessageCache(msgCache)),

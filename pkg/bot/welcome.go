@@ -80,6 +80,7 @@ func (b *Bot) saveWelcome() {
 
 func (b *Bot) sendWelcomeDM(guildID, userID snowflake.ID) {
 	// Clean up stale entries and check for recent welcome
+	b.welcomeSentMu.Lock()
 	now := time.Now()
 	for uid, t := range b.welcomeSent {
 		if now.Sub(t) > 5*time.Minute {
@@ -87,11 +88,13 @@ func (b *Bot) sendWelcomeDM(guildID, userID snowflake.ID) {
 		}
 	}
 	if _, seen := b.welcomeSent[userID]; seen {
+		b.welcomeSentMu.Unlock()
 		return
 	}
 
 	st := b.welcome[guildID]
 	if st == nil {
+		b.welcomeSentMu.Unlock()
 		return
 	}
 
@@ -101,10 +104,12 @@ func (b *Bot) sendWelcomeDM(guildID, userID snowflake.ID) {
 	st.mu.Unlock()
 
 	if !enabled || msg == "" {
+		b.welcomeSentMu.Unlock()
 		return
 	}
 
 	b.welcomeSent[userID] = now
+	b.welcomeSentMu.Unlock()
 
 	ch, err := b.Client.Rest.CreateDMChannel(userID)
 	if err != nil {
