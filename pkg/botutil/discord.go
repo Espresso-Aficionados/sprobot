@@ -39,6 +39,27 @@ func PostWithRetry(restClient rest.Rest, channelID snowflake.ID, msg discord.Mes
 	return nil, err
 }
 
+// OnlyBotsAfter checks whether all messages in the channel after lastMsgID
+// were sent by bots. This prevents repost loops when multiple bots are active
+// in the same channel. Returns true if the bot's message is still present and
+// only bot messages follow it (or no messages follow it). Returns false if any
+// human message was posted after lastMsgID, or if lastMsgID is not found in
+// the recent history.
+func OnlyBotsAfter(restClient rest.Rest, channelID, lastMsgID snowflake.ID, log *slog.Logger) bool {
+	// Fetch up to 10 messages after our last message.
+	msgs, err := restClient.GetMessages(channelID, 0, 0, lastMsgID, 10)
+	if err != nil {
+		log.Error("Failed to fetch messages for bot-loop check", "channel_id", channelID, "error", err)
+		return false // On error, allow the repost.
+	}
+	for _, m := range msgs {
+		if !m.Author.Bot && !m.Author.System {
+			return false
+		}
+	}
+	return true
+}
+
 // RegisterGuildCommands registers the given commands for each guild matching the env.
 func RegisterGuildCommands(client *bot.Client, env string, commands []discord.ApplicationCommandCreate, log *slog.Logger) error {
 	for _, guildID := range GetGuildIDs(env) {
