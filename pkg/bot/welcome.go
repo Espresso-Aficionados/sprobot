@@ -301,16 +301,28 @@ func (b *Bot) handleWelcomeTest(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
+	// Defer since CreateDMChannel + CreateMessage are two sequential REST calls.
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer welcome test response", "error", err)
+		return
+	}
+
 	// Send the test DM regardless of enabled state
 	ch, err := b.Client.Rest.CreateDMChannel(e.User().ID)
 	if err != nil {
 		b.Log.Error("Failed to create DM channel for welcome test", "user_id", e.User().ID, "guild_id", *guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to send test DM.")
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+			Content: "Failed to send test DM.",
+			Flags:   discord.MessageFlagEphemeral,
+		})
 		return
 	}
 	if _, err := b.Client.Rest.CreateMessage(ch.ID(), discord.MessageCreate{Content: msg}); err != nil {
 		b.Log.Error("Failed to send welcome test DM", "user_id", e.User().ID, "guild_id", *guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to send test DM.")
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+			Content: "Failed to send test DM.",
+			Flags:   discord.MessageFlagEphemeral,
+		})
 		return
 	}
 
@@ -318,7 +330,10 @@ func (b *Bot) handleWelcomeTest(e *events.ApplicationCommandInteractionCreate) {
 	if !enabled {
 		note = " (currently disabled — new members will not receive this)"
 	}
-	botutil.RespondEphemeral(e, fmt.Sprintf("Welcome DM sent. Check your DMs!%s", note))
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+		Content: fmt.Sprintf("Welcome DM sent. Check your DMs!%s", note),
+		Flags:   discord.MessageFlagEphemeral,
+	})
 }
 
 func (b *Bot) handleWelcomeEnable(e *events.ApplicationCommandInteractionCreate) {

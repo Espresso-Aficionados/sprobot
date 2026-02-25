@@ -25,6 +25,12 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 		"guild_id", guildStr,
 	)
 
+	// Defer since GetMember + FetchProfile may exceed the 3s deadline.
+	if err := e.DeferCreateMessage(false); err != nil {
+		b.Log.Error("Failed to defer getprofile response", "error", err)
+		return
+	}
+
 	targetID := e.User().ID
 	targetName := getNickOrName(e.Member())
 	isSelf := true
@@ -57,16 +63,22 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 			} else {
 				msg = fmt.Sprintf("Whoops! Unable to find a profile for %s.", targetName)
 			}
-			botutil.RespondEphemeral(e, msg)
+			b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+				Content: msg,
+				Flags:   discord.MessageFlagEphemeral,
+			})
 			return
 		}
 		b.Log.Error("Failed to fetch profile", "error", err)
-		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+			Content: "Oops! Something went wrong.",
+			Flags:   discord.MessageFlagEphemeral,
+		})
 		return
 	}
 
 	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr, b.S3.Bucket())
-	if err := e.CreateMessage(discord.MessageCreate{
+	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}); err != nil {
 		b.Log.Error("Failed to send profile embed", "error", err)
@@ -97,6 +109,12 @@ func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl 
 		return
 	}
 
+	// Defer since GetMember + FetchProfile are two sequential network calls.
+	if err := e.DeferCreateMessage(false); err != nil {
+		b.Log.Error("Failed to defer getmenu response", "error", err)
+		return
+	}
+
 	targetIDStr := fmt.Sprintf("%d", targetID)
 	targetName := targetUser.Username
 	member, err := b.Client.Rest.GetMember(*e.GuildID(), targetID)
@@ -110,19 +128,28 @@ func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl 
 	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, targetIDStr)
 	if err != nil {
 		if errors.Is(err, s3client.ErrNotFound) {
+			var msg string
 			if targetID == e.User().ID {
-				botutil.RespondEphemeral(e, fmt.Sprintf("Whoops! Unable to find a profile for you. To set one up run /edit%s", tmpl.ShortName))
+				msg = fmt.Sprintf("Whoops! Unable to find a profile for you. To set one up run /edit%s", tmpl.ShortName)
 			} else {
-				botutil.RespondEphemeral(e, fmt.Sprintf("Whoops! Unable to find a %s profile for %s.", tmpl.Name, targetName))
+				msg = fmt.Sprintf("Whoops! Unable to find a %s profile for %s.", tmpl.Name, targetName)
 			}
+			b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+				Content: msg,
+				Flags:   discord.MessageFlagEphemeral,
+			})
 			return
 		}
-		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
+		b.Log.Error("Failed to fetch profile", "error", err)
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+			Content: "Oops! Something went wrong.",
+			Flags:   discord.MessageFlagEphemeral,
+		})
 		return
 	}
 
 	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr, b.S3.Bucket())
-	if err := e.CreateMessage(discord.MessageCreate{
+	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}); err != nil {
 		b.Log.Error("Failed to send profile embed", "error", err)
