@@ -25,6 +25,7 @@ const (
 	optMaxIdle       = "max_idle"
 	optMsgThreshold  = "msg_threshold"
 	optTimeThreshold = "time_threshold"
+	optPublic        = "public"
 )
 
 func intPtr(v int) *int { return &v }
@@ -85,6 +86,12 @@ func (b *Bot) registerAllCommands() error {
 				discord.ApplicationCommandOptionSubCommand{
 					Name:        subFetchAll,
 					Description: "Show all active threads across the entire server",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionBool{
+							Name:        optPublic,
+							Description: "Post the result publicly in the channel (default: hidden)",
+						},
+					},
 				},
 			},
 		},
@@ -260,28 +267,38 @@ func (b *Bot) handleThreads(e *events.ApplicationCommandInteractionCreate) {
 
 func (b *Bot) handleFetchAll(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
+	data := e.Data.(discord.SlashCommandInteractionData)
 
-	b.Log.Info("Fetching all threads", "user_id", e.User().ID, "guild_id", guildID)
+	public, _ := data.OptBool(optPublic)
+	ephemeral := !public
+
+	b.Log.Info("Fetching all threads", "user_id", e.User().ID, "guild_id", guildID, "public", public)
 
 	// Defer since fetching threads + member counts may exceed the 3s deadline.
-	if err := e.DeferCreateMessage(true); err != nil {
+	if err := e.DeferCreateMessage(ephemeral); err != nil {
 		b.Log.Error("Failed to defer fetchall response", "error", err)
 		return
 	}
 
 	embed := b.buildAllThreadsEmbed(guildID)
 	if embed == nil {
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+		msg := discord.MessageCreate{
 			Content: "No active threads in this server.",
-			Flags:   discord.MessageFlagEphemeral,
-		})
+		}
+		if ephemeral {
+			msg.Flags = discord.MessageFlagEphemeral
+		}
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
 		return
 	}
 
-	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+	msg := discord.MessageCreate{
 		Embeds: []discord.Embed{*embed},
-		Flags:  discord.MessageFlagEphemeral,
-	})
+	}
+	if ephemeral {
+		msg.Flags = discord.MessageFlagEphemeral
+	}
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
 }
 
 func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
