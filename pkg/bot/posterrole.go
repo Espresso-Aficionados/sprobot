@@ -42,9 +42,11 @@ type posterRoleState struct {
 	Settings posterRoleSettings `json:"settings"`
 	Counts   map[string]int     `json:"counts"`
 	Fetched  map[string]bool    `json:"fetched"`
+
+	parentCache sync.Map // channelID → channelParents
 }
 
-func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, ch discord.GuildMessageChannel, msg discord.Message) {
+func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg discord.Message) {
 	st := b.posterRole[guildID]
 	if st == nil {
 		return
@@ -58,13 +60,8 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, ch d
 		return
 	}
 
-	if cfg.isSkipped(channelID) {
+	if cfg.isSkipped(b.resolveChannelParents(channelID, &st.parentCache)...) {
 		return
-	}
-	if thread, ok := ch.(discord.GuildThread); ok {
-		if parentID := thread.ParentID(); parentID != nil && cfg.isSkipped(*parentID) {
-			return
-		}
 	}
 
 	if msg.Member == nil {

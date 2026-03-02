@@ -65,10 +65,10 @@ func (s *starboardSettings) isBlacklisted(ids ...snowflake.ID) bool {
 
 // resolveChannelParents returns the channel ID plus any parent/category IDs,
 // using an in-memory cache to avoid repeated REST calls.
-func (b *Bot) resolveChannelParents(channelID snowflake.ID, st *starboardState) []snowflake.ID {
+func (b *Bot) resolveChannelParents(channelID snowflake.ID, cache *sync.Map) []snowflake.ID {
 	ids := []snowflake.ID{channelID}
 
-	cached, ok := st.parentCache.Load(channelID)
+	cached, ok := cache.Load(channelID)
 	if !ok {
 		cp := channelParents{}
 		if ch, err := b.Client.Rest.GetChannel(channelID); err == nil {
@@ -93,7 +93,7 @@ func (b *Bot) resolveChannelParents(channelID snowflake.ID, st *starboardState) 
 				}
 			}
 		}
-		st.parentCache.Store(channelID, cp)
+		cache.Store(channelID, cp)
 		cached = cp
 	}
 
@@ -228,7 +228,7 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 	}
 
 	// Resolve the channel's parent chain for blacklist checks (cached).
-	blacklistIDs := b.resolveChannelParents(e.ChannelID, st)
+	blacklistIDs := b.resolveChannelParents(e.ChannelID, &st.parentCache)
 
 	st.mu.Lock()
 
