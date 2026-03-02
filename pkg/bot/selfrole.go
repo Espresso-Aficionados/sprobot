@@ -11,15 +11,15 @@ import (
 )
 
 type selfroleButton struct {
-	Label  string
-	Emoji  string
-	RoleID snowflake.ID
+	Label  string       `json:"label"`
+	Emoji  string       `json:"emoji"`
+	RoleID snowflake.ID `json:"role_id"`
 }
 
 type selfroleConfig struct {
-	ChannelID snowflake.ID
-	Message   string
-	Buttons   []selfroleButton
+	ChannelID snowflake.ID     `json:"channel_id"`
+	Message   string           `json:"message"`
+	Buttons   []selfroleButton `json:"buttons"`
 }
 
 func getSelfroleConfig(env string) map[snowflake.ID][]selfroleConfig {
@@ -94,12 +94,11 @@ func selfrolePanelButtons(cfg selfroleConfig) []discord.LayoutComponent {
 }
 
 func (b *Bot) ensureSelfrolePanels() {
-	configs := getSelfroleConfig(b.Env)
-	if configs == nil {
+	if len(b.selfroles) == 0 {
 		return
 	}
 
-	for guildID, cfgs := range configs {
+	for guildID, cfgs := range b.selfroles {
 		for _, cfg := range cfgs {
 			if cfg.ChannelID == 0 {
 				continue
@@ -200,9 +199,8 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 		return
 	}
 
-	configs := getSelfroleConfig(b.Env)
 	valid := false
-	for _, cfg := range configs[*guildID] {
+	for _, cfg := range b.selfroles[*guildID] {
 		for _, btn := range cfg.Buttons {
 			if btn.RoleID == roleID {
 				valid = true
@@ -217,7 +215,7 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 		return
 	}
 
-	label := selfroleLabel(*guildID, roleID, b.Env)
+	label := selfroleLabel(b.selfroles[*guildID], roleID)
 
 	hasRole := false
 	if e.Member() != nil {
@@ -262,17 +260,11 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 	}
 }
 
-func selfroleLabel(guildID, roleID snowflake.ID, env string) string {
-	configs := getSelfroleConfig(env)
-	if configs == nil {
-		return "role"
-	}
-	for _, cfgs := range configs {
-		for _, cfg := range cfgs {
-			for _, btn := range cfg.Buttons {
-				if btn.RoleID == roleID {
-					return btn.Label
-				}
+func selfroleLabel(cfgs []selfroleConfig, roleID snowflake.ID) string {
+	for _, cfg := range cfgs {
+		for _, btn := range cfg.Buttons {
+			if btn.RoleID == roleID {
+				return btn.Label
 			}
 		}
 	}

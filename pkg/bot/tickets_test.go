@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/disgoorg/disgo/discord"
@@ -51,6 +52,28 @@ func TestTicketPanelEmbed(t *testing.T) {
 	embed := ticketPanelEmbed(cfg)
 	if embed.Description == "" {
 		t.Error("embed description should not be empty")
+	}
+	if embed.Description != cfg.PanelMessage {
+		t.Error("embed should use PanelMessage field")
+	}
+}
+
+func TestPanelMessageFallback(t *testing.T) {
+	cfg := ticketConfig{StaffRoleID: 123}
+	msg := cfg.panelMessage()
+	if msg == "" {
+		t.Error("fallback panel message should not be empty")
+	}
+	if !strings.Contains(msg, "<@&123>") {
+		t.Error("fallback should mention staff role")
+	}
+}
+
+func TestPanelMessageUsesField(t *testing.T) {
+	cfg := ticketConfig{PanelMessage: "Custom panel text", StaffRoleID: 456}
+	msg := cfg.panelMessage()
+	if msg != "Custom panel text" {
+		t.Errorf("panelMessage() = %q, want %q", msg, "Custom panel text")
 	}
 }
 

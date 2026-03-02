@@ -597,6 +597,22 @@ func (c *Client) SaveTemplates(ctx context.Context, guildID string, data []byte)
 	return c.SaveGuildJSON(ctx, "config_templates", guildID, data)
 }
 
+func (c *Client) FetchSelfroles(ctx context.Context, guildID string) ([]byte, error) {
+	return c.FetchGuildJSON(ctx, "config_selfroles", guildID)
+}
+
+func (c *Client) SaveSelfroles(ctx context.Context, guildID string, data []byte) error {
+	return c.SaveGuildJSON(ctx, "config_selfroles", guildID, data)
+}
+
+func (c *Client) FetchTicketConfig(ctx context.Context, guildID string) ([]byte, error) {
+	return c.FetchGuildJSON(ctx, "config_tickets", guildID)
+}
+
+func (c *Client) SaveTicketConfig(ctx context.Context, guildID string, data []byte) error {
+	return c.SaveGuildJSON(ctx, "config_tickets", guildID, data)
+}
+
 func (c *Client) FetchStickies(ctx context.Context, guildID string) ([]byte, error) {
 	return c.FetchGuildJSON(ctx, "stickies", guildID)
 }

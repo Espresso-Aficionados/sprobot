@@ -376,6 +376,14 @@ func (b *Bot) registerAllCommands() error {
 					Name:        "profiles",
 					Description: "Open the profile template configuration page",
 				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "selfroles",
+					Description: "Open the self-assign roles configuration page",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "tickets",
+					Description: "Open the ticket system configuration page",
+				},
 			},
 		})
 

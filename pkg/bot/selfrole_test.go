@@ -39,21 +39,23 @@ func TestIsSelfroleInteractionEmpty(t *testing.T) {
 }
 
 func TestSelfroleLabel(t *testing.T) {
-	label := selfroleLabel(1013566342345019512, 1015493549430685706, "dev")
+	cfgs := getSelfroleConfig("dev")[1013566342345019512]
+	label := selfroleLabel(cfgs, 1015493549430685706)
 	if label != "BOTBROS" {
 		t.Errorf("label = %q, want %q", label, "BOTBROS")
 	}
 }
 
 func TestSelfrroleLabelNotFound(t *testing.T) {
-	label := selfroleLabel(1013566342345019512, 999, "dev")
+	cfgs := getSelfroleConfig("dev")[1013566342345019512]
+	label := selfroleLabel(cfgs, 999)
 	if label != "role" {
 		t.Errorf("label = %q, want %q", label, "role")
 	}
 }
 
 func TestSelfrroleLabelNilConfig(t *testing.T) {
-	label := selfroleLabel(1013566342345019512, 1015493549430685706, "unknown")
+	label := selfroleLabel(nil, 1015493549430685706)
 	if label != "role" {
 		t.Errorf("label = %q, want %q", label, "role")
 	}

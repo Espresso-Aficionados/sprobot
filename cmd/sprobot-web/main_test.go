@@ -24,7 +24,7 @@ func TestMain(m *testing.M) {
 		}
 		pageTemplates[name] = t
 	}
-	for _, name := range []string{"login.html", "admin_dashboard.html", "admin_profiles.html"} {
+	for _, name := range []string{"login.html", "admin_dashboard.html", "admin_guild.html", "admin_profiles.html", "admin_selfroles.html", "admin_tickets.html"} {
 		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/"+name)
 		if err != nil {
 			log.Fatalf("Failed to parse admin template %s: %v", name, err)
@@ -611,7 +611,7 @@ func TestAdminDashboardTemplateRenders(t *testing.T) {
 	if !strings.Contains(body, "Test Server") {
 		t.Error("dashboard missing guild name")
 	}
-	if !strings.Contains(body, "/admin/123/profiles") {
+	if !strings.Contains(body, "/admin/123/") {
 		t.Error("dashboard missing guild link")
 	}
 }
@@ -737,5 +737,197 @@ func TestGetOAuthConfigDevInsecureCookie(t *testing.T) {
 	}
 	if cfg.SecureCookie {
 		t.Error("SecureCookie should be false for dev")
+	}
+}
+
+func TestGuildHubTemplateRenders(t *testing.T) {
+	rec := httptest.NewRecorder()
+	renderAdminPage(rec, "admin_guild.html", struct {
+		GuildID string
+	}{"123456"})
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	checks := []string{
+		"Server Settings",
+		"/admin/123456/profiles",
+		"/admin/123456/selfroles",
+		"/admin/123456/tickets",
+		"Profile Templates",
+		"Self-Assign Roles",
+		"Tickets",
+	}
+	for _, want := range checks {
+		if !strings.Contains(body, want) {
+			t.Errorf("guild hub page missing %q", want)
+		}
+	}
+}
+
+func TestSelfroleTemplateRenders(t *testing.T) {
+	rec := httptest.NewRecorder()
+	renderAdminPage(rec, "admin_selfroles.html", struct {
+		GuildID string
+		Panels  []selfrolePanel
+		Success bool
+		Error   string
+	}{
+		GuildID: "123",
+		Panels: []selfrolePanel{
+			{
+				ChannelID: 999,
+				Message:   "Test message",
+				Buttons: []selfroleButton{
+					{Label: "TestBtn", Emoji: "X", RoleID: 111},
+				},
+			},
+		},
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	checks := []string{
+		"Self-Assign Roles",
+		"Test message",
+		"TestBtn",
+		"panel_0_channel_id",
+		"panel_0_btn_0_label",
+	}
+	for _, want := range checks {
+		if !strings.Contains(body, want) {
+			t.Errorf("selfrole page missing %q", want)
+		}
+	}
+}
+
+func TestSelfroleTemplateEmpty(t *testing.T) {
+	rec := httptest.NewRecorder()
+	renderAdminPage(rec, "admin_selfroles.html", struct {
+		GuildID string
+		Panels  []selfrolePanel
+		Success bool
+		Error   string
+	}{GuildID: "123"})
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestTicketTemplateRendersWithConfig(t *testing.T) {
+	rec := httptest.NewRecorder()
+	renderAdminPage(rec, "admin_tickets.html", struct {
+		GuildID   string
+		Config    ticketWebConfig
+		HasConfig bool
+		Success   bool
+		Error     string
+	}{
+		GuildID: "123",
+		Config: ticketWebConfig{
+			ChannelID:        999,
+			StaffRoleID:      888,
+			CounterOffset:    100,
+			PanelButtonLabel: "Open Ticket",
+			PanelMessage:     "Click below!",
+			TicketIntro:      "Hello %s",
+			CloseButtonLabel: "Close Ticket",
+		},
+		HasConfig: true,
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	checks := []string{
+		"Ticket System",
+		"Click below!",
+		"Open Ticket",
+		"Close Ticket",
+		"channel_id",
+		"staff_role_id",
+		"Remove Configuration",
+	}
+	for _, want := range checks {
+		if !strings.Contains(body, want) {
+			t.Errorf("ticket page missing %q", want)
+		}
+	}
+}
+
+func TestTicketTemplateRendersWithoutConfig(t *testing.T) {
+	rec := httptest.NewRecorder()
+	renderAdminPage(rec, "admin_tickets.html", struct {
+		GuildID   string
+		Config    ticketWebConfig
+		HasConfig bool
+		Success   bool
+		Error     string
+	}{GuildID: "123", HasConfig: false})
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "No ticket system configured") {
+		t.Error("ticket page should show empty state when no config")
+	}
+	if !strings.Contains(body, "Set Up Tickets") {
+		t.Error("ticket page should show setup form when no config")
+	}
+}
+
+func TestGetHardcodedSelfroles(t *testing.T) {
+	dev := getHardcodedSelfroles("dev")
+	if dev == nil {
+		t.Fatal("dev selfroles nil")
+	}
+	panels, ok := dev["1013566342345019512"]
+	if !ok || len(panels) != 1 {
+		t.Errorf("expected 1 dev panel, got %d", len(panels))
+	}
+
+	prod := getHardcodedSelfroles("prod")
+	if prod == nil {
+		t.Fatal("prod selfroles nil")
+	}
+	panels, ok = prod["726985544038612993"]
+	if !ok || len(panels) != 2 {
+		t.Errorf("expected 2 prod panels, got %d", len(panels))
+	}
+
+	if getHardcodedSelfroles("staging") != nil {
+		t.Error("expected nil for unknown env")
+	}
+}
+
+func TestGetHardcodedTickets(t *testing.T) {
+	dev := getHardcodedTickets("dev")
+	if dev == nil {
+		t.Fatal("dev tickets nil")
+	}
+	cfg, ok := dev["1013566342345019512"]
+	if !ok {
+		t.Fatal("missing dev guild")
+	}
+	if cfg.ChannelID == 0 {
+		t.Error("dev ChannelID should be set")
+	}
+	if cfg.PanelMessage == "" {
+		t.Error("dev PanelMessage should be set")
+	}
+
+	prod := getHardcodedTickets("prod")
+	if prod == nil {
+		t.Fatal("prod tickets nil")
+	}
+
+	if getHardcodedTickets("staging") != nil {
+		t.Error("expected nil for unknown env")
 	}
 }

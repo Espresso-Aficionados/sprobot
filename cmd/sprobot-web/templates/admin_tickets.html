@@ -1,0 +1,239 @@
+{{define "title"}}Tickets - sprobot{{end}}
+{{define "extra_css"}}
+        .admin-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .admin-header h2 {
+            font-size: 1.2em;
+            color: #f2f3f5;
+        }
+        .nav-links {
+            display: flex;
+            gap: 16px;
+        }
+        .nav-links a {
+            color: #b5bac1;
+            text-decoration: none;
+            font-size: 0.9em;
+        }
+        .nav-links a:hover {
+            color: #dbdee1;
+        }
+        .flash {
+            padding: 10px 14px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+            font-size: 0.9em;
+        }
+        .flash-success {
+            background-color: #248046;
+            color: #fff;
+        }
+        .flash-error {
+            background-color: #da373c;
+            color: #fff;
+        }
+        .note {
+            background-color: #313338;
+            border-left: 4px solid #5865F2;
+            padding: 10px 14px;
+            margin-bottom: 16px;
+            font-size: 0.85em;
+            color: #b5bac1;
+        }
+        .config-card {
+            background-color: #313338;
+            border-radius: 4px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .config-card h3 {
+            font-size: 1em;
+            color: #f2f3f5;
+            margin-bottom: 12px;
+        }
+        .form-group {
+            margin-bottom: 10px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 0.8em;
+            font-weight: 600;
+            color: #b5bac1;
+            margin-bottom: 4px;
+        }
+        .form-group input, .form-group textarea {
+            width: 100%;
+            padding: 8px 10px;
+            background-color: #1e1f22;
+            border: 1px solid #3b3d44;
+            border-radius: 4px;
+            color: #dbdee1;
+            font-size: 0.9em;
+            font-family: inherit;
+        }
+        .form-group textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+        .form-group input:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: #5865F2;
+        }
+        .form-group .hint {
+            font-size: 0.75em;
+            color: #b5bac1;
+            margin-top: 2px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+        .btn-primary {
+            background-color: #5865F2;
+            color: #fff;
+        }
+        .btn-primary:hover {
+            background-color: #4752C4;
+        }
+        .btn-danger {
+            background-color: #da373c;
+            color: #fff;
+        }
+        .btn-danger:hover {
+            background-color: #a12d31;
+        }
+        .form-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .empty-state {
+            background-color: #313338;
+            border-radius: 4px;
+            padding: 24px;
+            text-align: center;
+            color: #b5bac1;
+            margin-bottom: 16px;
+        }
+{{end}}
+{{define "content"}}
+    <div class="admin-header">
+        <h2>Ticket System</h2>
+        <div class="nav-links">
+            <a href="/admin/{{.GuildID}}/">Settings</a>
+            <a href="/admin/">Servers</a>
+            <a href="/admin/logout">Logout</a>
+        </div>
+    </div>
+
+    {{if .Success}}
+    <div class="flash flash-success">Ticket configuration saved successfully.</div>
+    {{end}}
+    {{if .Error}}
+    <div class="flash flash-error">{{.Error}}</div>
+    {{end}}
+
+    <div class="note">
+        Restart the bot after making changes for them to take effect.
+        The Panel Message and Ticket Intro support Discord mention syntax:
+        <code>&lt;@&amp;ROLE_ID&gt;</code> for roles, <code>&lt;#CHANNEL_ID&gt;</code> for channels, <code>&lt;@USER_ID&gt;</code> for users.
+        The Ticket Intro uses <code>%s</code> as a placeholder for the ticket opener's mention.
+    </div>
+
+    {{if .HasConfig}}
+    <form method="POST" action="/admin/{{.GuildID}}/tickets">
+        <div class="config-card">
+            <h3>Ticket Configuration</h3>
+            <div class="form-group">
+                <label>Channel ID</label>
+                <input type="text" name="channel_id" value="{{.Config.ChannelID}}" required pattern="[0-9]+">
+                <div class="hint">The channel where the ticket panel is posted.</div>
+            </div>
+            <div class="form-group">
+                <label>Staff Role ID</label>
+                <input type="text" name="staff_role_id" value="{{.Config.StaffRoleID}}" required pattern="[0-9]+">
+                <div class="hint">Role pinged when a ticket is opened.</div>
+            </div>
+            <div class="form-group">
+                <label>Counter Offset</label>
+                <input type="number" name="counter_offset" value="{{.Config.CounterOffset}}" min="0" required>
+                <div class="hint">Added to the internal counter to produce ticket numbers (e.g. 300 means first ticket is ticket-301).</div>
+            </div>
+            <div class="form-group">
+                <label>Panel Button Label</label>
+                <input type="text" name="panel_button_label" value="{{.Config.PanelButtonLabel}}" required>
+            </div>
+            <div class="form-group">
+                <label>Panel Message</label>
+                <textarea name="panel_message" required>{{.Config.PanelMessage}}</textarea>
+                <div class="hint">The embed description shown on the ticket panel.</div>
+            </div>
+            <div class="form-group">
+                <label>Ticket Intro</label>
+                <textarea name="ticket_intro" required>{{.Config.TicketIntro}}</textarea>
+                <div class="hint">Shown when a ticket is opened. Use %s for the user's mention.</div>
+            </div>
+            <div class="form-group">
+                <label>Close Button Label</label>
+                <input type="text" name="close_button_label" value="{{.Config.CloseButtonLabel}}" required>
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="submit" name="action" value="delete" class="btn btn-danger" onclick="return confirm('Remove ticket configuration for this server?')">Remove Configuration</button>
+        </div>
+    </form>
+    {{else}}
+    <div class="empty-state">
+        <p>No ticket system configured for this server.</p>
+    </div>
+    <form method="POST" action="/admin/{{.GuildID}}/tickets">
+        <div class="config-card">
+            <h3>Set Up Tickets</h3>
+            <div class="form-group">
+                <label>Channel ID</label>
+                <input type="text" name="channel_id" required pattern="[0-9]+">
+            </div>
+            <div class="form-group">
+                <label>Staff Role ID</label>
+                <input type="text" name="staff_role_id" required pattern="[0-9]+">
+            </div>
+            <div class="form-group">
+                <label>Counter Offset</label>
+                <input type="number" name="counter_offset" value="0" min="0" required>
+            </div>
+            <div class="form-group">
+                <label>Panel Button Label</label>
+                <input type="text" name="panel_button_label" value="Open Ticket" required>
+            </div>
+            <div class="form-group">
+                <label>Panel Message</label>
+                <textarea name="panel_message" required>**Open a ticket!**
+Click the button below, and a staff member will be with you shortly!</textarea>
+            </div>
+            <div class="form-group">
+                <label>Ticket Intro</label>
+                <textarea name="ticket_intro" required>Hello, %s! Thank you for contacting support.
+Please describe your issue and wait for a response.</textarea>
+            </div>
+            <div class="form-group">
+                <label>Close Button Label</label>
+                <input type="text" name="close_button_label" value="Close Ticket" required>
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+    </form>
+    {{end}}
+{{end}}

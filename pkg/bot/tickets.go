@@ -15,32 +15,22 @@ import (
 )
 
 type ticketConfig struct {
-	ChannelID        snowflake.ID
-	StaffRoleID      snowflake.ID
-	FAQChannel1      snowflake.ID // referenced in panel message
-	FAQChannel2      snowflake.ID // referenced in panel message
-	CounterOffset    int
-	PanelButtonLabel string
-	TicketIntro      string // supports %s for user mention
-	CloseButtonLabel string
+	ChannelID        snowflake.ID `json:"channel_id"`
+	StaffRoleID      snowflake.ID `json:"staff_role_id"`
+	CounterOffset    int          `json:"counter_offset"`
+	PanelButtonLabel string       `json:"panel_button_label"`
+	PanelMessage     string       `json:"panel_message"`
+	TicketIntro      string       `json:"ticket_intro"`
+	CloseButtonLabel string       `json:"close_button_label"`
 }
 
-// panelMessage returns the formatted panel text with role and channel mentions.
+// panelMessage returns the panel embed text.
+// If PanelMessage is set, it is returned directly; otherwise a generic fallback is used.
 func (cfg ticketConfig) panelMessage() string {
-	return fmt.Sprintf(`**Open a ticket!**
-Click the button below, and one of our <@&%d> will be with you shortly!
-
-Questions regarding buy/sell/trade have been answered in <#%d> and <#%d>. We do not make exceptions for the policy and will not answer questions about specific requirements for access.
-
-Possible Reasons to open a ticket are:
-- Make a private suggestion to the @Staff about a way we can improve the server!
-- Get some help working out an issue you have with a server member.
-- Report a technical problem to the @Staff.
-- Any other issue that needs resolved by a member of our team.
-- Apply for the professional role. Please send a couple lines about your experience so we know more about you!
-
-Please don't use the tickets for joke posts; we try to respond quickly to tickets so we'll get pulled away from something important to answer.`,
-		cfg.StaffRoleID, cfg.FAQChannel1, cfg.FAQChannel2)
+	if cfg.PanelMessage != "" {
+		return cfg.PanelMessage
+	}
+	return fmt.Sprintf("**Open a ticket!**\nClick the button below, and one of our <@&%d> will be with you shortly!", cfg.StaffRoleID)
 }
 
 const introMessage = `Hello, %s! Thank you for contacting support.
@@ -58,6 +48,24 @@ For what I should hope are fairly obvious reasons, we will not be revealing the 
 **Will my access lapse if I don't interact in the server for some time?**
 No - once you have access you will always have access, unless removed manually by staff.`
 
+// hardcodedPanelMessage returns the fully formatted panel message for the old hardcoded configs.
+func hardcodedPanelMessage(staffRoleID, faqChannel1, faqChannel2 snowflake.ID) string {
+	return fmt.Sprintf(`**Open a ticket!**
+Click the button below, and one of our <@&%d> will be with you shortly!
+
+Questions regarding buy/sell/trade have been answered in <#%d> and <#%d>. We do not make exceptions for the policy and will not answer questions about specific requirements for access.
+
+Possible Reasons to open a ticket are:
+- Make a private suggestion to the @Staff about a way we can improve the server!
+- Get some help working out an issue you have with a server member.
+- Report a technical problem to the @Staff.
+- Any other issue that needs resolved by a member of our team.
+- Apply for the professional role. Please send a couple lines about your experience so we know more about you!
+
+Please don't use the tickets for joke posts; we try to respond quickly to tickets so we'll get pulled away from something important to answer.`,
+		staffRoleID, faqChannel1, faqChannel2)
+}
+
 func getTicketConfig(env string) map[snowflake.ID]ticketConfig {
 	switch env {
 	case "prod":
@@ -65,10 +73,9 @@ func getTicketConfig(env string) map[snowflake.ID]ticketConfig {
 			726985544038612993: {
 				ChannelID:        733016849561944156,
 				StaffRoleID:      738986689749450769,
-				FAQChannel1:      727212292684644412,
-				FAQChannel2:      727325278820368456,
 				CounterOffset:    300,
 				PanelButtonLabel: "Open Ticket",
+				PanelMessage:     hardcodedPanelMessage(738986689749450769, 727212292684644412, 727325278820368456),
 				TicketIntro:      introMessage,
 				CloseButtonLabel: "Close Ticket",
 			},
@@ -78,10 +85,9 @@ func getTicketConfig(env string) map[snowflake.ID]ticketConfig {
 			1013566342345019512: {
 				ChannelID:        1475318848956661921,
 				StaffRoleID:      1015493549430685706,
-				FAQChannel1:      1019680095893471322,
-				FAQChannel2:      1013566342865092671,
 				CounterOffset:    40,
 				PanelButtonLabel: "Open Ticket",
+				PanelMessage:     hardcodedPanelMessage(1015493549430685706, 1019680095893471322, 1013566342865092671),
 				TicketIntro:      introMessage,
 				CloseButtonLabel: "Close Ticket",
 			},
@@ -97,13 +103,12 @@ type ticketState struct {
 }
 
 func (b *Bot) loadTickets() {
-	configs := getTicketConfig(b.Env)
-	if configs == nil {
+	if len(b.ticketConfigs) == 0 {
 		return
 	}
 
 	ctx := context.Background()
-	for guildID := range configs {
+	for guildID := range b.ticketConfigs {
 		st := &ticketState{Counter: 1}
 
 		data, err := b.S3.FetchGuildJSON(ctx, "tickets", fmt.Sprintf("%d", guildID))
@@ -146,12 +151,11 @@ func (b *Bot) saveTickets() {
 }
 
 func (b *Bot) ensureTicketPanels() {
-	configs := getTicketConfig(b.Env)
-	if configs == nil {
+	if len(b.ticketConfigs) == 0 {
 		return
 	}
 
-	for guildID, cfg := range configs {
+	for guildID, cfg := range b.ticketConfigs {
 		if cfg.ChannelID == 0 {
 			continue
 		}
@@ -273,8 +277,7 @@ func (b *Bot) handleTicketOpen(e *events.ComponentInteractionCreate) {
 		return
 	}
 
-	configs := getTicketConfig(b.Env)
-	cfg, ok := configs[*guildID]
+	cfg, ok := b.ticketConfigs[*guildID]
 	if !ok {
 		return
 	}
@@ -385,8 +388,7 @@ func (b *Bot) handleTicketCloseCancel(e *events.ComponentInteractionCreate) {
 		TicketIntro:      "Ticket",
 	}
 	if guildID != nil {
-		configs := getTicketConfig(b.Env)
-		if c, ok := configs[*guildID]; ok {
+		if c, ok := b.ticketConfigs[*guildID]; ok {
 			cfg = c
 		}
 	}

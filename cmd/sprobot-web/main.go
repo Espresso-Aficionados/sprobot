@@ -226,6 +226,155 @@ func seedTemplates(ctx context.Context, s3 *s3client.Client, env string) {
 	}
 }
 
+// --- Selfrole types (mirrored from pkg/bot for JSON) ---
+
+type selfroleButton struct {
+	Label  string `json:"label"`
+	Emoji  string `json:"emoji"`
+	RoleID uint64 `json:"role_id"`
+}
+
+type selfrolePanel struct {
+	ChannelID uint64           `json:"channel_id"`
+	Message   string           `json:"message"`
+	Buttons   []selfroleButton `json:"buttons"`
+}
+
+type ticketWebConfig struct {
+	ChannelID        uint64 `json:"channel_id"`
+	StaffRoleID      uint64 `json:"staff_role_id"`
+	CounterOffset    int    `json:"counter_offset"`
+	PanelButtonLabel string `json:"panel_button_label"`
+	PanelMessage     string `json:"panel_message"`
+	TicketIntro      string `json:"ticket_intro"`
+	CloseButtonLabel string `json:"close_button_label"`
+}
+
+func seedSelfroles(ctx context.Context, s3 *s3client.Client, env string) {
+	configs := getHardcodedSelfroles(env)
+	if configs == nil {
+		return
+	}
+
+	for guildID, panels := range configs {
+		_, err := s3.FetchSelfroles(ctx, guildID)
+		if err == nil {
+			continue
+		}
+
+		data, err := json.Marshal(panels)
+		if err != nil {
+			log.Printf("Failed to marshal seed selfroles for guild %s: %v", guildID, err)
+			continue
+		}
+		if err := s3.SaveSelfroles(ctx, guildID, data); err != nil {
+			log.Printf("Failed to seed selfroles for guild %s: %v", guildID, err)
+		} else {
+			log.Printf("Seeded selfroles for guild %s", guildID)
+		}
+	}
+}
+
+func seedTicketConfigs(ctx context.Context, s3 *s3client.Client, env string) {
+	configs := getHardcodedTickets(env)
+	if configs == nil {
+		return
+	}
+
+	for guildID, cfg := range configs {
+		_, err := s3.FetchTicketConfig(ctx, guildID)
+		if err == nil {
+			continue
+		}
+
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			log.Printf("Failed to marshal seed ticket config for guild %s: %v", guildID, err)
+			continue
+		}
+		if err := s3.SaveTicketConfig(ctx, guildID, data); err != nil {
+			log.Printf("Failed to seed ticket config for guild %s: %v", guildID, err)
+		} else {
+			log.Printf("Seeded ticket config for guild %s", guildID)
+		}
+	}
+}
+
+func getHardcodedSelfroles(env string) map[string][]selfrolePanel {
+	switch env {
+	case "prod":
+		return map[string][]selfrolePanel{
+			"726985544038612993": {
+				{
+					ChannelID: 727325278820368456,
+					Message:   "Want to share your pronouns? Clicking the buttons below will add a role that will allow other people to click your username and identify your pronouns! Please note that there is no need to share your pronouns if you don't want to for any reason.\n\n:one: \"Ask Me/Check Profile\"\n:two: \"They/them\"\n:three: \"She/her\"\n:four: \"He/him\"\n:five: \"It/its\"\n\nIf your chosen pronouns are not present and you would like them to be, please make a ticket to let us know. We do ask you to respect other people and not make a joke of pronouns here or in bot profiles.\n\nMade a mistake? Just click again to remove the role",
+					Buttons: []selfroleButton{
+						{Label: "Ask Me/Check Profile", Emoji: "1\ufe0f\u20e3", RoleID: 807495977362653214},
+						{Label: "They/them", Emoji: "2\ufe0f\u20e3", RoleID: 807495948405178379},
+						{Label: "She/her", Emoji: "3\ufe0f\u20e3", RoleID: 807495895499014165},
+						{Label: "He/him", Emoji: "4\ufe0f\u20e3", RoleID: 807495784756936745},
+						{Label: "It/its", Emoji: "5\ufe0f\u20e3", RoleID: 1088661493685432391},
+					},
+				},
+				{
+					ChannelID: 727325278820368456,
+					Message:   "Are you excellent at dialing shots in? Do you know a lot about fixing espresso machines? Want to help people? Don't mind getting pings? Clicking the reaction below will add a role that will allow other people to request your help. You'll be able to be pinged via this role, and you'll get automatically pinged when a help thread hasn't been responded to in 24 hours.\n\nMade a mistake? Hate pings? Just click again to remove the role.",
+					Buttons: []selfroleButton{
+						{Label: "Helper", Emoji: "\U0001f527", RoleID: 1020401507121774722},
+					},
+				},
+			},
+		}
+	case "dev":
+		return map[string][]selfrolePanel{
+			"1013566342345019512": {
+				{
+					ChannelID: 1019680095893471322,
+					Message:   "Click a button below to toggle a role on or off.",
+					Buttons: []selfroleButton{
+						{Label: "BOTBROS", Emoji: "\U0001f916", RoleID: 1015493549430685706},
+					},
+				},
+			},
+		}
+	default:
+		return nil
+	}
+}
+
+func getHardcodedTickets(env string) map[string]ticketWebConfig {
+	introMessage := "Hello, %s! Thank you for contacting support.\nPlease describe your issue and wait for a response.\n\nWe've had a lot of questions about access to buying, selling, and trading recently. If this question is in regards to that topic, please see the answers below.\n\n**Marketplace Access FAQ:**\n**How do I (re)gain access to the Marketplace?**\nSimple - by interacting in the rest of the server. We are first and foremost a community server, not a buy/sell/trade server. As a matter of protecting members from fraudulent activity as well as philosophically, we only want people who engage in the server otherwise to have access.\n\n**How much does it take to (re)gain access?**\nFor what I should hope are fairly obvious reasons, we will not be revealing the exact parameters for gaining access so it is harder to game.\n\n**Will my access lapse if I don't interact in the server for some time?**\nNo - once you have access you will always have access, unless removed manually by staff."
+
+	switch env {
+	case "prod":
+		return map[string]ticketWebConfig{
+			"726985544038612993": {
+				ChannelID:        733016849561944156,
+				StaffRoleID:      738986689749450769,
+				CounterOffset:    300,
+				PanelButtonLabel: "Open Ticket",
+				PanelMessage:     fmt.Sprintf("**Open a ticket!**\nClick the button below, and one of our <@&%d> will be with you shortly!\n\nQuestions regarding buy/sell/trade have been answered in <#%d> and <#%d>. We do not make exceptions for the policy and will not answer questions about specific requirements for access.\n\nPossible Reasons to open a ticket are:\n- Make a private suggestion to the @Staff about a way we can improve the server!\n- Get some help working out an issue you have with a server member.\n- Report a technical problem to the @Staff.\n- Any other issue that needs resolved by a member of our team.\n- Apply for the professional role. Please send a couple lines about your experience so we know more about you!\n\nPlease don't use the tickets for joke posts; we try to respond quickly to tickets so we'll get pulled away from something important to answer.", 738986689749450769, 727212292684644412, 727325278820368456),
+				TicketIntro:      introMessage,
+				CloseButtonLabel: "Close Ticket",
+			},
+		}
+	case "dev":
+		return map[string]ticketWebConfig{
+			"1013566342345019512": {
+				ChannelID:        1475318848956661921,
+				StaffRoleID:      1015493549430685706,
+				CounterOffset:    40,
+				PanelButtonLabel: "Open Ticket",
+				PanelMessage:     fmt.Sprintf("**Open a ticket!**\nClick the button below, and one of our <@&%d> will be with you shortly!\n\nQuestions regarding buy/sell/trade have been answered in <#%d> and <#%d>. We do not make exceptions for the policy and will not answer questions about specific requirements for access.\n\nPossible Reasons to open a ticket are:\n- Make a private suggestion to the @Staff about a way we can improve the server!\n- Get some help working out an issue you have with a server member.\n- Report a technical problem to the @Staff.\n- Any other issue that needs resolved by a member of our team.\n- Apply for the professional role. Please send a couple lines about your experience so we know more about you!\n\nPlease don't use the tickets for joke posts; we try to respond quickly to tickets so we'll get pulled away from something important to answer.", 1015493549430685706, 1019680095893471322, 1013566342865092671),
+				TicketIntro:      introMessage,
+				CloseButtonLabel: "Close Ticket",
+			},
+		}
+	default:
+		return nil
+	}
+}
+
 // --- Main ---
 
 func main() {
@@ -242,7 +391,7 @@ func main() {
 		pageTemplates[name] = t
 	}
 
-	adminTemplateNames := []string{"login.html", "admin_dashboard.html", "admin_profiles.html"}
+	adminTemplateNames := []string{"login.html", "admin_dashboard.html", "admin_guild.html", "admin_profiles.html", "admin_selfroles.html", "admin_tickets.html"}
 	for _, name := range adminTemplateNames {
 		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/"+name)
 		if err != nil {
@@ -258,6 +407,8 @@ func main() {
 
 	env := os.Getenv("SPROBOT_ENV")
 	seedTemplates(context.Background(), s3, env)
+	seedSelfroles(context.Background(), s3, env)
+	seedTicketConfigs(context.Background(), s3, env)
 
 	sessions := newSessionStore()
 	oauth := getOAuthConfig()
@@ -273,8 +424,13 @@ func main() {
 		mux.HandleFunc("GET /admin/logout", handleLogout(oauth, sessions))
 		botToken := os.Getenv("SPROBOT_DISCORD_TOKEN")
 		mux.HandleFunc("GET /admin/{$}", adminAuth(sessions, handleDashboard(botToken)))
+		mux.HandleFunc("GET /admin/{guildID}/{$}", adminAuth(sessions, handleGuildHub()))
 		mux.HandleFunc("GET /admin/{guildID}/profiles", adminAuth(sessions, handleAdminProfiles(s3)))
 		mux.HandleFunc("POST /admin/{guildID}/profiles", adminAuth(sessions, handleSaveProfiles(s3)))
+		mux.HandleFunc("GET /admin/{guildID}/selfroles", adminAuth(sessions, handleAdminSelfroles(s3)))
+		mux.HandleFunc("POST /admin/{guildID}/selfroles", adminAuth(sessions, handleSaveSelfroles(s3)))
+		mux.HandleFunc("GET /admin/{guildID}/tickets", adminAuth(sessions, handleAdminTickets(s3)))
+		mux.HandleFunc("POST /admin/{guildID}/tickets", adminAuth(sessions, handleSaveTickets(s3)))
 	} else {
 		log.Println("DISCORD_CLIENT_ID/SECRET/REDIRECT_URI not set — admin routes disabled")
 		adminDisabled := func(w http.ResponseWriter, r *http.Request) {
@@ -683,6 +839,258 @@ func handleSaveProfiles(s3 *s3client.Client) http.HandlerFunc {
 
 func redirectProfilesError(w http.ResponseWriter, r *http.Request, guildID, msg string) {
 	http.Redirect(w, r, fmt.Sprintf("/admin/%s/profiles?error=%s", guildID, url.QueryEscape(msg)), http.StatusSeeOther)
+}
+
+// --- Guild hub handler ---
+
+func handleGuildHub() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildID := r.PathValue("guildID")
+		renderAdminPage(w, "admin_guild.html", struct {
+			GuildID string
+		}{guildID})
+	}
+}
+
+// --- Selfrole handlers ---
+
+func handleAdminSelfroles(s3 *s3client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildID := r.PathValue("guildID")
+
+		var panels []selfrolePanel
+		data, err := s3.FetchSelfroles(r.Context(), guildID)
+		if err == nil {
+			json.Unmarshal(data, &panels)
+		}
+
+		success := r.URL.Query().Get("saved") == "1"
+		errMsg := r.URL.Query().Get("error")
+
+		renderAdminPage(w, "admin_selfroles.html", struct {
+			GuildID string
+			Panels  []selfrolePanel
+			Success bool
+			Error   string
+		}{guildID, panels, success, errMsg})
+	}
+}
+
+func handleSaveSelfroles(s3 *s3client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildID := r.PathValue("guildID")
+
+		if err := r.ParseForm(); err != nil {
+			redirectSelfroleError(w, r, guildID, "Invalid form data.")
+			return
+		}
+
+		var panels []selfrolePanel
+		for i := 0; ; i++ {
+			prefix := fmt.Sprintf("panel_%d_", i)
+			channelIDStr := strings.TrimSpace(r.FormValue(prefix + "channel_id"))
+			if channelIDStr == "" {
+				break
+			}
+
+			channelID, err := strconv.ParseUint(channelIDStr, 10, 64)
+			if err != nil || channelID == 0 {
+				redirectSelfroleError(w, r, guildID, fmt.Sprintf("Invalid Channel ID for panel %d.", i+1))
+				return
+			}
+
+			message := strings.TrimSpace(r.FormValue(prefix + "message"))
+			if message == "" {
+				redirectSelfroleError(w, r, guildID, fmt.Sprintf("Message is required for panel %d.", i+1))
+				return
+			}
+
+			var buttons []selfroleButton
+			for j := 0; j < 5; j++ {
+				bPrefix := fmt.Sprintf("%sbtn_%d_", prefix, j)
+				label := strings.TrimSpace(r.FormValue(bPrefix + "label"))
+				if label == "" {
+					continue
+				}
+				emoji := strings.TrimSpace(r.FormValue(bPrefix + "emoji"))
+				roleIDStr := strings.TrimSpace(r.FormValue(bPrefix + "role_id"))
+				roleID, err := strconv.ParseUint(roleIDStr, 10, 64)
+				if err != nil || roleID == 0 {
+					redirectSelfroleError(w, r, guildID, fmt.Sprintf("Invalid Role ID for panel %d, button %d.", i+1, j+1))
+					return
+				}
+				buttons = append(buttons, selfroleButton{
+					Label:  label,
+					Emoji:  emoji,
+					RoleID: roleID,
+				})
+			}
+
+			if len(buttons) == 0 {
+				redirectSelfroleError(w, r, guildID, fmt.Sprintf("Panel %d must have at least 1 button.", i+1))
+				return
+			}
+			if len(buttons) > 5 {
+				redirectSelfroleError(w, r, guildID, fmt.Sprintf("Panel %d has too many buttons (max 5).", i+1))
+				return
+			}
+
+			panels = append(panels, selfrolePanel{
+				ChannelID: channelID,
+				Message:   message,
+				Buttons:   buttons,
+			})
+		}
+
+		if len(panels) == 0 {
+			redirectSelfroleError(w, r, guildID, "At least one panel is required.")
+			return
+		}
+
+		data, err := json.Marshal(panels)
+		if err != nil {
+			redirectSelfroleError(w, r, guildID, "Failed to encode selfroles.")
+			return
+		}
+
+		if err := s3.SaveSelfroles(r.Context(), guildID, data); err != nil {
+			log.Printf("Failed to save selfroles for guild %s: %v", guildID, err)
+			redirectSelfroleError(w, r, guildID, "Failed to save selfroles.")
+			return
+		}
+
+		log.Printf("Selfroles saved for guild %s by admin", guildID)
+		http.Redirect(w, r, fmt.Sprintf("/admin/%s/selfroles?saved=1", guildID), http.StatusSeeOther)
+	}
+}
+
+func redirectSelfroleError(w http.ResponseWriter, r *http.Request, guildID, msg string) {
+	http.Redirect(w, r, fmt.Sprintf("/admin/%s/selfroles?error=%s", guildID, url.QueryEscape(msg)), http.StatusSeeOther)
+}
+
+// --- Ticket handlers ---
+
+func handleAdminTickets(s3 *s3client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildID := r.PathValue("guildID")
+
+		var cfg ticketWebConfig
+		hasConfig := false
+		data, err := s3.FetchTicketConfig(r.Context(), guildID)
+		if err == nil {
+			if json.Unmarshal(data, &cfg) == nil && cfg.ChannelID != 0 {
+				hasConfig = true
+			}
+		}
+
+		success := r.URL.Query().Get("saved") == "1"
+		errMsg := r.URL.Query().Get("error")
+
+		renderAdminPage(w, "admin_tickets.html", struct {
+			GuildID   string
+			Config    ticketWebConfig
+			HasConfig bool
+			Success   bool
+			Error     string
+		}{guildID, cfg, hasConfig, success, errMsg})
+	}
+}
+
+func handleSaveTickets(s3 *s3client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildID := r.PathValue("guildID")
+
+		if err := r.ParseForm(); err != nil {
+			redirectTicketError(w, r, guildID, "Invalid form data.")
+			return
+		}
+
+		// Handle delete action
+		if r.FormValue("action") == "delete" {
+			// Save an empty config (zero ChannelID signals no config)
+			data, _ := json.Marshal(ticketWebConfig{})
+			if err := s3.SaveTicketConfig(r.Context(), guildID, data); err != nil {
+				log.Printf("Failed to delete ticket config for guild %s: %v", guildID, err)
+				redirectTicketError(w, r, guildID, "Failed to remove configuration.")
+				return
+			}
+			log.Printf("Ticket config removed for guild %s by admin", guildID)
+			http.Redirect(w, r, fmt.Sprintf("/admin/%s/tickets?saved=1", guildID), http.StatusSeeOther)
+			return
+		}
+
+		channelIDStr := strings.TrimSpace(r.FormValue("channel_id"))
+		channelID, err := strconv.ParseUint(channelIDStr, 10, 64)
+		if err != nil || channelID == 0 {
+			redirectTicketError(w, r, guildID, "Invalid Channel ID.")
+			return
+		}
+
+		staffRoleIDStr := strings.TrimSpace(r.FormValue("staff_role_id"))
+		staffRoleID, err := strconv.ParseUint(staffRoleIDStr, 10, 64)
+		if err != nil || staffRoleID == 0 {
+			redirectTicketError(w, r, guildID, "Invalid Staff Role ID.")
+			return
+		}
+
+		counterOffset := intFromForm(r.FormValue("counter_offset"))
+		if counterOffset < 0 {
+			counterOffset = 0
+		}
+
+		panelButtonLabel := strings.TrimSpace(r.FormValue("panel_button_label"))
+		if panelButtonLabel == "" {
+			redirectTicketError(w, r, guildID, "Panel Button Label is required.")
+			return
+		}
+
+		panelMessage := strings.TrimSpace(r.FormValue("panel_message"))
+		if panelMessage == "" {
+			redirectTicketError(w, r, guildID, "Panel Message is required.")
+			return
+		}
+
+		ticketIntro := strings.TrimSpace(r.FormValue("ticket_intro"))
+		if ticketIntro == "" {
+			redirectTicketError(w, r, guildID, "Ticket Intro is required.")
+			return
+		}
+
+		closeButtonLabel := strings.TrimSpace(r.FormValue("close_button_label"))
+		if closeButtonLabel == "" {
+			redirectTicketError(w, r, guildID, "Close Button Label is required.")
+			return
+		}
+
+		cfg := ticketWebConfig{
+			ChannelID:        channelID,
+			StaffRoleID:      staffRoleID,
+			CounterOffset:    counterOffset,
+			PanelButtonLabel: panelButtonLabel,
+			PanelMessage:     panelMessage,
+			TicketIntro:      ticketIntro,
+			CloseButtonLabel: closeButtonLabel,
+		}
+
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			redirectTicketError(w, r, guildID, "Failed to encode ticket config.")
+			return
+		}
+
+		if err := s3.SaveTicketConfig(r.Context(), guildID, data); err != nil {
+			log.Printf("Failed to save ticket config for guild %s: %v", guildID, err)
+			redirectTicketError(w, r, guildID, "Failed to save ticket config.")
+			return
+		}
+
+		log.Printf("Ticket config saved for guild %s by admin", guildID)
+		http.Redirect(w, r, fmt.Sprintf("/admin/%s/tickets?saved=1", guildID), http.StatusSeeOther)
+	}
+}
+
+func redirectTicketError(w http.ResponseWriter, r *http.Request, guildID, msg string) {
+	http.Redirect(w, r, fmt.Sprintf("/admin/%s/tickets?error=%s", guildID, url.QueryEscape(msg)), http.StatusSeeOther)
 }
 
 // --- Rendering ---

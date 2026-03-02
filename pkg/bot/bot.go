@@ -36,6 +36,8 @@ type Bot struct {
 	topPostersConfig map[snowflake.ID]topPostersConfig
 	renameLogs       map[snowflake.ID]*renameLogState
 	templates        map[snowflake.ID][]sprobot.Template
+	selfroles        map[snowflake.ID][]selfroleConfig
+	ticketConfigs    map[snowflake.ID]ticketConfig
 	eventLogConfig   map[snowflake.ID]eventLogChannelConfig
 	starboardConfig  map[snowflake.ID]starboardStaticConfig
 	autoRoleID       snowflake.ID
@@ -64,6 +66,8 @@ func New(token string) (*Bot, error) {
 		starboard:        make(map[snowflake.ID]*starboardState),
 		renameLogs:       make(map[snowflake.ID]*renameLogState),
 		templates:        make(map[snowflake.ID][]sprobot.Template),
+		selfroles:        make(map[snowflake.ID][]selfroleConfig),
+		ticketConfigs:    make(map[snowflake.ID]ticketConfig),
 		msgCache:         msgCache,
 		memberCache:      memberCache,
 		topPostersConfig: getTopPostersConfig(base.Env),
@@ -135,6 +139,8 @@ func (b *Bot) Run() error {
 	defer b.Client.Close(ctx)
 
 	b.loadTemplates()
+	b.loadSelfroles()
+	b.loadTicketConfigs()
 	b.loadTopPosters()
 	b.loadPosterRole()
 	b.loadTickets()
