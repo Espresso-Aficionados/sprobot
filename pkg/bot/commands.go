@@ -145,36 +145,98 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
-		// /marketprogress and /marketleaderboard
-		if _, ok := b.posterRoleConfig[guildID]; ok {
-			commands = append(commands, discord.SlashCommandCreate{
-				Name:                     "marketprogress",
-				Description:              "Check a user's progress toward marketplace access",
-				DefaultMemberPermissions: omit.NewPtr(perm),
-				Options: []discord.ApplicationCommandOption{
-					discord.ApplicationCommandOptionUser{
-						Name:        "user",
-						Description: "User to check progress for",
-						Required:    true,
-					},
-					discord.ApplicationCommandOptionBool{
-						Name:        "public",
-						Description: "Post the result publicly in the channel (default: hidden)",
+		// /marketprogress, /marketleaderboard, /marketconfig, /marketblacklist
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "marketprogress",
+			Description:              "Check a user's progress toward marketplace access",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionUser{
+					Name:        "user",
+					Description: "User to check progress for",
+					Required:    true,
+				},
+				discord.ApplicationCommandOptionBool{
+					Name:        "public",
+					Description: "Post the result publicly in the channel (default: hidden)",
+				},
+			},
+		})
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "marketleaderboard",
+			Description:              "Show top users by progress toward marketplace access",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionBool{
+					Name:        "public",
+					Description: "Post the result publicly in the channel (default: hidden)",
+				},
+			},
+		})
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "marketconfig",
+			Description:              "Configure marketplace poster role",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "set",
+					Description: "Update marketplace settings",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionRole{
+							Name:        "role",
+							Description: "Role to grant when threshold is reached",
+						},
+						discord.ApplicationCommandOptionInt{
+							Name:        "threshold",
+							Description: "Number of posts required (1-10000)",
+							MinValue:    intPtr(1),
+							MaxValue:    intPtr(10000),
+						},
 					},
 				},
-			})
-			commands = append(commands, discord.SlashCommandCreate{
-				Name:                     "marketleaderboard",
-				Description:              "Show top users by progress toward marketplace access",
-				DefaultMemberPermissions: omit.NewPtr(perm),
-				Options: []discord.ApplicationCommandOption{
-					discord.ApplicationCommandOptionBool{
-						Name:        "public",
-						Description: "Post the result publicly in the channel (default: hidden)",
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "show",
+					Description: "Show current marketplace configuration",
+				},
+			},
+		})
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "marketblacklist",
+			Description:              "Manage marketplace channel blacklist",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "add",
+					Description: "Add a channel to the blacklist",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionChannel{
+							Name:        "channel",
+							Description: "Channel to blacklist",
+							Required:    true,
+						},
 					},
 				},
-			})
-		}
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "remove",
+					Description: "Remove a channel from the blacklist",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionChannel{
+							Name:        "channel",
+							Description: "Channel to remove from blacklist",
+							Required:    true,
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "list",
+					Description: "List all blacklisted channels",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "clear",
+					Description: "Remove all channels from the blacklist",
+				},
+			},
+		})
 
 		// /sbconfig and /sbblacklist
 		emojiMaxLen := 50
@@ -377,6 +439,10 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleWelcome(e)
 	case "warn":
 		b.handleWarn(e)
+	case "marketconfig":
+		b.handleMarketConfig(e)
+	case "marketblacklist":
+		b.handleMarketBlacklist(e)
 	case "sbconfig":
 		b.handleStarboardConfig(e)
 	case "sbblacklist":

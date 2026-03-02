@@ -33,7 +33,6 @@ type Bot struct {
 	memberCache      *cappedGroupedCache[discord.Member]
 	starboard        map[snowflake.ID]*starboardState
 	topPostersConfig map[snowflake.ID]topPostersConfig
-	posterRoleConfig map[snowflake.ID]posterRoleConfig
 	eventLogConfig   map[snowflake.ID]eventLogChannelConfig
 	starboardConfig  map[snowflake.ID]starboardStaticConfig
 	autoRoleID       snowflake.ID
@@ -63,7 +62,6 @@ func New(token string) (*Bot, error) {
 		msgCache:         msgCache,
 		memberCache:      memberCache,
 		topPostersConfig: getTopPostersConfig(base.Env),
-		posterRoleConfig: getPosterRoleConfig(base.Env),
 		eventLogConfig:   getEventLogConfig(base.Env),
 		starboardConfig:  getStarboardConfig(base.Env),
 		autoRoleID:       getAutoRoleID(base.Env),

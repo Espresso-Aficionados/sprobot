@@ -3,69 +3,79 @@ package bot
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/disgoorg/snowflake/v2"
 )
 
-func TestGetPosterRoleConfigDev(t *testing.T) {
-	t.Setenv("SPROBOT_POSTER_ROLE_THRESHOLD", "100")
-	cfg := getPosterRoleConfig("dev")
-	if cfg == nil {
-		t.Fatal("dev config is nil")
+func TestPosterRoleSettingsJSONRoundTrip(t *testing.T) {
+	s := posterRoleSettings{
+		RoleID:       1234567890,
+		Threshold:    50,
+		SkipChannels: []snowflake.ID{111, 222, 333},
 	}
-	c, ok := cfg[1013566342345019512]
-	if !ok {
-		t.Fatal("missing dev guild entry")
+
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if c.RoleID == 0 {
-		t.Error("dev RoleID should be set")
+
+	var loaded posterRoleSettings
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatal(err)
 	}
-	if c.Threshold != 100 {
-		t.Errorf("threshold = %d, want 100", c.Threshold)
+
+	if loaded.RoleID != s.RoleID {
+		t.Errorf("RoleID = %d, want %d", loaded.RoleID, s.RoleID)
+	}
+	if loaded.Threshold != s.Threshold {
+		t.Errorf("Threshold = %d, want %d", loaded.Threshold, s.Threshold)
+	}
+	if len(loaded.SkipChannels) != len(s.SkipChannels) {
+		t.Fatalf("SkipChannels len = %d, want %d", len(loaded.SkipChannels), len(s.SkipChannels))
+	}
+	for i, id := range loaded.SkipChannels {
+		if id != s.SkipChannels[i] {
+			t.Errorf("SkipChannels[%d] = %d, want %d", i, id, s.SkipChannels[i])
+		}
 	}
 }
 
-func TestGetPosterRoleConfigProd(t *testing.T) {
-	t.Setenv("SPROBOT_POSTER_ROLE_THRESHOLD", "50")
-	cfg := getPosterRoleConfig("prod")
-	if cfg == nil {
-		t.Fatal("prod config is nil")
+func TestIsSkippedSingle(t *testing.T) {
+	s := posterRoleSettings{
+		SkipChannels: []snowflake.ID{100, 200, 300},
 	}
-	c, ok := cfg[726985544038612993]
-	if !ok {
-		t.Fatal("missing prod guild entry")
+
+	if !s.isSkipped(200) {
+		t.Error("expected 200 to be skipped")
 	}
-	if c.RoleID == 0 {
-		t.Error("prod RoleID should be set")
-	}
-	if len(c.SkipChannels) == 0 {
-		t.Error("prod SkipChannels should not be empty")
+	if s.isSkipped(400) {
+		t.Error("expected 400 to not be skipped")
 	}
 }
 
-func TestGetPosterRoleConfigUnknown(t *testing.T) {
-	t.Setenv("SPROBOT_POSTER_ROLE_THRESHOLD", "100")
-	if getPosterRoleConfig("staging") != nil {
-		t.Error("expected nil for unknown env")
+func TestIsSkippedVariadic(t *testing.T) {
+	s := posterRoleSettings{
+		SkipChannels: []snowflake.ID{100, 200},
+	}
+
+	if !s.isSkipped(999, 200) {
+		t.Error("expected match when second arg is in skip list")
+	}
+	if s.isSkipped(999, 888) {
+		t.Error("expected no match when neither arg is in skip list")
 	}
 }
 
-func TestGetPosterRoleConfigMissingThreshold(t *testing.T) {
-	t.Setenv("SPROBOT_POSTER_ROLE_THRESHOLD", "")
-	if getPosterRoleConfig("dev") != nil {
-		t.Error("expected nil when threshold not set")
-	}
-}
+func TestIsSkippedEmpty(t *testing.T) {
+	s := posterRoleSettings{}
 
-func TestGetPosterRoleConfigInvalidThreshold(t *testing.T) {
-	t.Setenv("SPROBOT_POSTER_ROLE_THRESHOLD", "notanumber")
-	if getPosterRoleConfig("dev") != nil {
-		t.Error("expected nil for invalid threshold")
+	if s.isSkipped(100) {
+		t.Error("expected no match with nil skip list")
 	}
-}
 
-func TestGetPosterRoleConfigZeroThreshold(t *testing.T) {
-	t.Setenv("SPROBOT_POSTER_ROLE_THRESHOLD", "0")
-	if getPosterRoleConfig("dev") != nil {
-		t.Error("expected nil for zero threshold")
+	s.SkipChannels = []snowflake.ID{}
+	if s.isSkipped(100) {
+		t.Error("expected no match with empty skip list")
 	}
 }
 
@@ -106,6 +116,11 @@ func TestPosterRoleProgressMath(t *testing.T) {
 
 func TestPosterRoleStateJSONRoundTrip(t *testing.T) {
 	st := &posterRoleState{
+		Settings: posterRoleSettings{
+			RoleID:       9999,
+			Threshold:    100,
+			SkipChannels: []snowflake.ID{111},
+		},
 		Counts:  map[string]int{"111": 55, "222": 10},
 		Fetched: map[string]bool{"111": true},
 	}
@@ -120,6 +135,12 @@ func TestPosterRoleStateJSONRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if loaded.Settings.RoleID != 9999 {
+		t.Errorf("Settings.RoleID = %d, want 9999", loaded.Settings.RoleID)
+	}
+	if loaded.Settings.Threshold != 100 {
+		t.Errorf("Settings.Threshold = %d, want 100", loaded.Settings.Threshold)
+	}
 	if loaded.Counts["111"] != 55 {
 		t.Errorf("Counts[111] = %d, want 55", loaded.Counts["111"])
 	}

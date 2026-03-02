@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -20,73 +17,52 @@ import (
 
 	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
-type posterRoleConfig struct {
-	RoleID       snowflake.ID
-	Threshold    int
-	SkipChannels map[snowflake.ID]bool
+type posterRoleSettings struct {
+	RoleID       snowflake.ID   `json:"role_id"`
+	Threshold    int            `json:"threshold"`
+	SkipChannels []snowflake.ID `json:"skip_channels"`
 }
 
-func getPosterRoleConfig(env string) map[snowflake.ID]posterRoleConfig {
-	thresholdStr := os.Getenv("SPROBOT_POSTER_ROLE_THRESHOLD")
-	if thresholdStr == "" {
-		slog.Info("SPROBOT_POSTER_ROLE_THRESHOLD not set, poster role disabled")
-		return nil
-	}
-	threshold, err := strconv.Atoi(thresholdStr)
-	if err != nil || threshold <= 0 {
-		slog.Error("Invalid SPROBOT_POSTER_ROLE_THRESHOLD", "value", thresholdStr)
-		return nil
-	}
-
-	switch env {
-	case "prod":
-		return map[snowflake.ID]posterRoleConfig{
-			726985544038612993: {
-				RoleID:    1367728202885365821,
-				Threshold: threshold,
-				SkipChannels: map[snowflake.ID]bool{
-					837161791137513524: true,
-					727195533936164944: true,
-					727186774622994535: true,
-					729492001233567785: true,
-					792586872140070981: true,
-					733016849561944156: true,
-				},
-			},
+func (s *posterRoleSettings) isSkipped(ids ...snowflake.ID) bool {
+	for _, id := range ids {
+		for _, skip := range s.SkipChannels {
+			if id == skip {
+				return true
+			}
 		}
-	case "dev":
-		return map[snowflake.ID]posterRoleConfig{
-			1013566342345019512: {
-				RoleID:       1475379099307343882,
-				Threshold:    threshold,
-				SkipChannels: map[snowflake.ID]bool{},
-			},
-		}
-	default:
-		return nil
 	}
+	return false
 }
 
 type posterRoleState struct {
-	mu      sync.Mutex
-	Counts  map[string]int  `json:"counts"`
-	Fetched map[string]bool `json:"fetched"`
+	mu       sync.Mutex
+	Settings posterRoleSettings `json:"settings"`
+	Counts   map[string]int     `json:"counts"`
+	Fetched  map[string]bool    `json:"fetched"`
 }
 
 func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, ch discord.GuildMessageChannel, msg discord.Message) {
-	configs := b.posterRoleConfig
-	cfg, ok := configs[guildID]
-	if !ok {
+	st := b.posterRole[guildID]
+	if st == nil {
 		return
 	}
 
-	if cfg.SkipChannels[channelID] {
+	st.mu.Lock()
+	cfg := st.Settings
+	st.mu.Unlock()
+
+	if cfg.RoleID == 0 || cfg.Threshold == 0 {
+		return
+	}
+
+	if cfg.isSkipped(channelID) {
 		return
 	}
 	if thread, ok := ch.(discord.GuildThread); ok {
-		if parentID := thread.ParentID(); parentID != nil && cfg.SkipChannels[*parentID] {
+		if parentID := thread.ParentID(); parentID != nil && cfg.isSkipped(*parentID) {
 			return
 		}
 	}
@@ -102,11 +78,6 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, ch d
 
 	userID := msg.Author.ID
 	userIDStr := fmt.Sprintf("%d", userID)
-
-	st := b.posterRole[guildID]
-	if st == nil {
-		return
-	}
 
 	st.mu.Lock()
 	st.Counts[userIDStr]++
@@ -193,13 +164,13 @@ func (b *Bot) clearPosterRoleTracking(guildID snowflake.ID, userIDStr string) {
 }
 
 func (b *Bot) loadPosterRole() {
-	configs := b.posterRoleConfig
-	if configs == nil {
+	templates := sprobot.AllTemplates(b.Env)
+	if templates == nil {
 		return
 	}
 
 	ctx := context.Background()
-	for guildID := range configs {
+	for guildID := range templates {
 		st := &posterRoleState{
 			Counts:  make(map[string]int),
 			Fetched: make(map[string]bool),
@@ -227,15 +198,44 @@ func (b *Bot) loadPosterRole() {
 	}
 }
 
+func (b *Bot) persistPosterRole(guildID snowflake.ID, st *posterRoleState) error {
+	st.mu.Lock()
+	data, err := json.Marshal(st)
+	st.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	return b.S3.SaveGuildJSON(context.Background(), "posterroles", fmt.Sprintf("%d", guildID), data)
+}
+
+func (b *Bot) savePosterRole() {
+	for guildID, st := range b.posterRole {
+		if err := b.persistPosterRole(guildID, st); err != nil {
+			b.Log.Error("Failed to save poster role data", "guild_id", guildID, "error", err)
+		} else {
+			b.Log.Info("Saved poster role state", "guild_id", guildID)
+		}
+	}
+}
+
 func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate) {
 	if e.GuildID() == nil {
 		return
 	}
 	guildID := *e.GuildID()
 
-	cfg, ok := b.posterRoleConfig[guildID]
-	if !ok {
-		botutil.RespondEphemeral(e, "Poster role is not configured.")
+	st := b.posterRole[guildID]
+	if st == nil {
+		botutil.RespondEphemeral(e, "Poster role is not configured for this server.")
+		return
+	}
+
+	st.mu.Lock()
+	cfg := st.Settings
+	st.mu.Unlock()
+
+	if cfg.RoleID == 0 || cfg.Threshold == 0 {
+		botutil.RespondEphemeral(e, "Poster role is not configured. Use `/marketconfig set` first.")
 		return
 	}
 
@@ -258,15 +258,6 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	// Defer since GetMember (for the specified user) is a network call.
 	if err := e.DeferCreateMessage(ephemeral); err != nil {
 		b.Log.Error("Failed to defer marketprogress response", "error", err)
-		return
-	}
-
-	st := b.posterRole[guildID]
-	if st == nil {
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-			Content: "No tracking data yet.",
-			Flags:   discord.MessageFlagEphemeral,
-		})
 		return
 	}
 
@@ -315,26 +306,6 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
 }
 
-func (b *Bot) savePosterRole() {
-	ctx := context.Background()
-	for guildID, st := range b.posterRole {
-		st.mu.Lock()
-		data, err := json.Marshal(st)
-		st.mu.Unlock()
-
-		if err != nil {
-			b.Log.Error("Failed to marshal poster role data", "guild_id", guildID, "error", err)
-			continue
-		}
-
-		if err := b.S3.SaveGuildJSON(ctx, "posterroles", fmt.Sprintf("%d", guildID), data); err != nil {
-			b.Log.Error("Failed to save poster role data", "guild_id", guildID, "error", err)
-		} else {
-			b.Log.Info("Saved poster role state", "guild_id", guildID)
-		}
-	}
-}
-
 type leaderboardEntry struct {
 	UserID string
 	Total  int
@@ -346,9 +317,18 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 	}
 	guildID := *e.GuildID()
 
-	cfg, ok := b.posterRoleConfig[guildID]
-	if !ok {
-		botutil.RespondEphemeral(e, "Poster role is not configured.")
+	st := b.posterRole[guildID]
+	if st == nil {
+		botutil.RespondEphemeral(e, "Poster role is not configured for this server.")
+		return
+	}
+
+	st.mu.Lock()
+	cfg := st.Settings
+	st.mu.Unlock()
+
+	if cfg.RoleID == 0 || cfg.Threshold == 0 {
+		botutil.RespondEphemeral(e, "Poster role is not configured. Use `/marketconfig set` first.")
 		return
 	}
 
@@ -364,15 +344,6 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 
 	if err := e.DeferCreateMessage(ephemeral); err != nil {
 		b.Log.Error("Failed to defer marketleaderboard response", "error", err)
-		return
-	}
-
-	st := b.posterRole[guildID]
-	if st == nil {
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-			Content: "No tracking data yet.",
-			Flags:   discord.MessageFlagEphemeral,
-		})
 		return
 	}
 
@@ -429,4 +400,230 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 		msg.Flags = discord.MessageFlagEphemeral
 	}
 	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
+}
+
+// --- /marketconfig handlers ---
+
+func (b *Bot) handleMarketConfig(e *events.ApplicationCommandInteractionCreate) {
+	data, ok := e.Data.(discord.SlashCommandInteractionData)
+	if !ok {
+		return
+	}
+
+	guildID := e.GuildID()
+	if guildID == nil {
+		return
+	}
+
+	st := b.posterRole[*guildID]
+	if st == nil {
+		botutil.RespondEphemeral(e, "Marketplace feature is not available for this server.")
+		return
+	}
+
+	subCmd := data.SubCommandName
+	if subCmd == nil {
+		return
+	}
+
+	switch *subCmd {
+	case "set":
+		b.handleMarketConfigSet(e, *guildID, st)
+	case "show":
+		b.handleMarketConfigShow(e, st)
+	}
+}
+
+func (b *Bot) handleMarketConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
+	data := e.Data.(discord.SlashCommandInteractionData)
+
+	b.Log.Info("Market config set", "user_id", e.User().ID, "guild_id", guildID)
+
+	st.mu.Lock()
+	if role, ok := data.OptRole("role"); ok {
+		st.Settings.RoleID = role.ID
+	}
+	if v, ok := data.OptInt("threshold"); ok {
+		st.Settings.Threshold = v
+	}
+	st.mu.Unlock()
+
+	if err := b.persistPosterRole(guildID, st); err != nil {
+		b.Log.Error("Failed to persist market config", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, "Marketplace configuration updated.")
+}
+
+func (b *Bot) handleMarketConfigShow(e *events.ApplicationCommandInteractionCreate, st *posterRoleState) {
+	b.Log.Info("Market config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
+
+	st.mu.Lock()
+	s := st.Settings
+	st.mu.Unlock()
+
+	var roleStr string
+	if s.RoleID == 0 {
+		roleStr = "Not set"
+	} else {
+		roleStr = fmt.Sprintf("<@&%d>", s.RoleID)
+	}
+
+	var thresholdStr string
+	if s.Threshold == 0 {
+		thresholdStr = "Not set"
+	} else {
+		thresholdStr = fmt.Sprintf("%d", s.Threshold)
+	}
+
+	lines := []string{
+		fmt.Sprintf("**Role:** %s", roleStr),
+		fmt.Sprintf("**Threshold:** %s", thresholdStr),
+		fmt.Sprintf("**Blacklisted Channels:** %d", len(s.SkipChannels)),
+	}
+
+	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
+}
+
+// --- /marketblacklist handlers ---
+
+func (b *Bot) handleMarketBlacklist(e *events.ApplicationCommandInteractionCreate) {
+	data, ok := e.Data.(discord.SlashCommandInteractionData)
+	if !ok {
+		return
+	}
+
+	guildID := e.GuildID()
+	if guildID == nil {
+		return
+	}
+
+	st := b.posterRole[*guildID]
+	if st == nil {
+		botutil.RespondEphemeral(e, "Marketplace feature is not available for this server.")
+		return
+	}
+
+	subCmd := data.SubCommandName
+	if subCmd == nil {
+		return
+	}
+
+	switch *subCmd {
+	case "add":
+		b.handleMarketBlacklistAdd(e, *guildID, st)
+	case "remove":
+		b.handleMarketBlacklistRemove(e, *guildID, st)
+	case "list":
+		b.handleMarketBlacklistList(e, st)
+	case "clear":
+		b.handleMarketBlacklistClear(e, *guildID, st)
+	}
+}
+
+func (b *Bot) handleMarketBlacklistAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
+	data := e.Data.(discord.SlashCommandInteractionData)
+	ch, ok := data.OptChannel("channel")
+	if !ok {
+		botutil.RespondEphemeral(e, "Please provide a channel.")
+		return
+	}
+
+	b.Log.Info("Market blacklist add", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
+
+	st.mu.Lock()
+	if st.Settings.isSkipped(ch.ID) {
+		st.mu.Unlock()
+		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> is already blacklisted.", ch.ID))
+		return
+	}
+	st.Settings.SkipChannels = append(st.Settings.SkipChannels, ch.ID)
+	st.mu.Unlock()
+
+	if err := b.persistPosterRole(guildID, st); err != nil {
+		b.Log.Error("Failed to persist market blacklist", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save blacklist.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> added to blacklist.", ch.ID))
+}
+
+func (b *Bot) handleMarketBlacklistRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
+	data := e.Data.(discord.SlashCommandInteractionData)
+	ch, ok := data.OptChannel("channel")
+	if !ok {
+		botutil.RespondEphemeral(e, "Please provide a channel.")
+		return
+	}
+
+	b.Log.Info("Market blacklist remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
+
+	st.mu.Lock()
+	found := false
+	for i, id := range st.Settings.SkipChannels {
+		if id == ch.ID {
+			st.Settings.SkipChannels = append(st.Settings.SkipChannels[:i], st.Settings.SkipChannels[i+1:]...)
+			found = true
+			break
+		}
+	}
+	st.mu.Unlock()
+
+	if !found {
+		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> is not blacklisted.", ch.ID))
+		return
+	}
+
+	if err := b.persistPosterRole(guildID, st); err != nil {
+		b.Log.Error("Failed to persist market blacklist", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save blacklist.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> removed from blacklist.", ch.ID))
+}
+
+func (b *Bot) handleMarketBlacklistList(e *events.ApplicationCommandInteractionCreate, st *posterRoleState) {
+	b.Log.Info("Market blacklist list", "user_id", e.User().ID, "guild_id", *e.GuildID())
+
+	st.mu.Lock()
+	bl := make([]snowflake.ID, len(st.Settings.SkipChannels))
+	copy(bl, st.Settings.SkipChannels)
+	st.mu.Unlock()
+
+	if len(bl) == 0 {
+		botutil.RespondEphemeral(e, "No channels are blacklisted.")
+		return
+	}
+
+	var lines []string
+	for _, id := range bl {
+		lines = append(lines, fmt.Sprintf("<#%d>", id))
+	}
+	botutil.RespondEphemeral(e, "**Blacklisted channels:**\n"+strings.Join(lines, "\n"))
+}
+
+func (b *Bot) handleMarketBlacklistClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
+	b.Log.Info("Market blacklist clear", "user_id", e.User().ID, "guild_id", guildID)
+
+	st.mu.Lock()
+	count := len(st.Settings.SkipChannels)
+	st.Settings.SkipChannels = nil
+	st.mu.Unlock()
+
+	if count == 0 {
+		botutil.RespondEphemeral(e, "Blacklist is already empty.")
+		return
+	}
+
+	if err := b.persistPosterRole(guildID, st); err != nil {
+		b.Log.Error("Failed to persist market blacklist", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save blacklist.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("Cleared %d entries from the blacklist.", count))
 }
