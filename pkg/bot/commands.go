@@ -34,46 +34,41 @@ func (b *Bot) registerAllCommands() error {
 				Value: tmpl.ShortName,
 			})
 		}
+		typeOpt := discord.ApplicationCommandOptionString{
+			Name:        "type",
+			Description: "Profile type",
+			Choices:     typeChoices,
+		}
 
-		// /editprofile
+		// /profile edit|view|delete
 		commands = append(commands, discord.SlashCommandCreate{
-			Name:        "editprofile",
-			Description: "Edit or create your profile",
+			Name:        "profile",
+			Description: "Manage your profile",
 			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionString{
-					Name:        "type",
-					Description: "Profile type",
-					Choices:     typeChoices,
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "edit",
+					Description: "Edit or create your profile",
+					Options: []discord.ApplicationCommandOption{
+						typeOpt,
+					},
 				},
-			},
-		})
-
-		// /getprofile
-		commands = append(commands, discord.SlashCommandCreate{
-			Name:        "getprofile",
-			Description: "Get a user's profile",
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionString{
-					Name:        "type",
-					Description: "Profile type",
-					Choices:     typeChoices,
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "view",
+					Description: "View a user's profile",
+					Options: []discord.ApplicationCommandOption{
+						typeOpt,
+						discord.ApplicationCommandOptionUser{
+							Name:        "name",
+							Description: "User to get profile for",
+						},
+					},
 				},
-				discord.ApplicationCommandOptionUser{
-					Name:        "name",
-					Description: "User to get profile for",
-				},
-			},
-		})
-
-		// /deleteprofile
-		commands = append(commands, discord.SlashCommandCreate{
-			Name:        "deleteprofile",
-			Description: "Delete profile or profile image",
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionString{
-					Name:        "type",
-					Description: "Profile type",
-					Choices:     typeChoices,
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "delete",
+					Description: "Delete profile or profile image",
+					Options: []discord.ApplicationCommandOption{
+						typeOpt,
+					},
 				},
 			},
 		})
@@ -518,22 +513,23 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	// Consolidated profile commands
-	if name == "editprofile" || name == "getprofile" || name == "deleteprofile" {
-		var typeName string
-		if data, ok := e.Data.(discord.SlashCommandInteractionData); ok {
-			typeName, _ = data.OptString("type")
+	// /profile edit|view|delete
+	if name == "profile" {
+		data, ok := e.Data.(discord.SlashCommandInteractionData)
+		if !ok || data.SubCommandName == nil {
+			return
 		}
+		typeName, _ := data.OptString("type")
 		tmpl, ok := resolveTemplate(tmpls, typeName)
 		if !ok {
 			return
 		}
-		switch name {
-		case "editprofile":
+		switch *data.SubCommandName {
+		case "edit":
 			b.handleEdit(e, tmpl)
-		case "getprofile":
+		case "view":
 			b.handleGet(e, tmpl)
-		case "deleteprofile":
+		case "delete":
 			b.handleDelete(e, tmpl)
 		}
 		return
