@@ -162,3 +162,101 @@ func TestDiscordSearchResponseJSON(t *testing.T) {
 		t.Errorf("TotalResults = %d, want 42", resp.TotalResults)
 	}
 }
+
+func TestDiscordSearchResponseWithMessages(t *testing.T) {
+	data := []byte(`{
+		"total_results": 3,
+		"messages": [
+			[{"channel_id": "100"}],
+			[{"channel_id": "200"}],
+			[{"channel_id": "100"}]
+		]
+	}`)
+	var resp discordSearchResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.TotalResults != 3 {
+		t.Errorf("TotalResults = %d, want 3", resp.TotalResults)
+	}
+	if len(resp.Messages) != 3 {
+		t.Fatalf("Messages len = %d, want 3", len(resp.Messages))
+	}
+	if resp.Messages[0][0].ChannelID != 100 {
+		t.Errorf("Messages[0][0].ChannelID = %d, want 100", resp.Messages[0][0].ChannelID)
+	}
+	if resp.Messages[1][0].ChannelID != 200 {
+		t.Errorf("Messages[1][0].ChannelID = %d, want 200", resp.Messages[1][0].ChannelID)
+	}
+}
+
+func TestTopChannels(t *testing.T) {
+	t.Run("multiple channels", func(t *testing.T) {
+		resp := &discordSearchResponse{
+			Messages: [][]searchHitMessage{
+				{{ChannelID: 100}},
+				{{ChannelID: 200}},
+				{{ChannelID: 100}},
+				{{ChannelID: 300}},
+				{{ChannelID: 100}},
+				{{ChannelID: 200}},
+			},
+		}
+		top := topChannels(resp, 5)
+		if len(top) != 3 {
+			t.Fatalf("len = %d, want 3", len(top))
+		}
+		if top[0].ChannelID != 100 || top[0].Count != 3 {
+			t.Errorf("top[0] = {%d, %d}, want {100, 3}", top[0].ChannelID, top[0].Count)
+		}
+		if top[1].ChannelID != 200 || top[1].Count != 2 {
+			t.Errorf("top[1] = {%d, %d}, want {200, 2}", top[1].ChannelID, top[1].Count)
+		}
+		if top[2].ChannelID != 300 || top[2].Count != 1 {
+			t.Errorf("top[2] = {%d, %d}, want {300, 1}", top[2].ChannelID, top[2].Count)
+		}
+	})
+
+	t.Run("capped at n", func(t *testing.T) {
+		resp := &discordSearchResponse{
+			Messages: [][]searchHitMessage{
+				{{ChannelID: 1}},
+				{{ChannelID: 2}},
+				{{ChannelID: 3}},
+				{{ChannelID: 4}},
+			},
+		}
+		top := topChannels(resp, 2)
+		if len(top) != 2 {
+			t.Fatalf("len = %d, want 2", len(top))
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		resp := &discordSearchResponse{}
+		top := topChannels(resp, 5)
+		if len(top) != 0 {
+			t.Errorf("len = %d, want 0", len(top))
+		}
+	})
+
+	t.Run("tie breaking by channel ID", func(t *testing.T) {
+		resp := &discordSearchResponse{
+			Messages: [][]searchHitMessage{
+				{{ChannelID: 300}},
+				{{ChannelID: 100}},
+			},
+		}
+		top := topChannels(resp, 5)
+		if len(top) != 2 {
+			t.Fatalf("len = %d, want 2", len(top))
+		}
+		// Same count (1 each), should sort by channel ID ascending
+		if top[0].ChannelID != 100 {
+			t.Errorf("top[0].ChannelID = %d, want 100", top[0].ChannelID)
+		}
+		if top[1].ChannelID != 300 {
+			t.Errorf("top[1].ChannelID = %d, want 300", top[1].ChannelID)
+		}
+	})
+}

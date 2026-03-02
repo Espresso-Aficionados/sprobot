@@ -103,39 +103,86 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, ch d
 	}
 }
 
-type discordSearchResponse struct {
-	TotalResults int `json:"total_results"`
+type searchHitMessage struct {
+	ChannelID snowflake.ID `json:"channel_id"`
 }
 
-func (b *Bot) fetchPosterRoleHistory(guildID snowflake.ID, userID snowflake.ID, userIDStr string) {
+type discordSearchResponse struct {
+	TotalResults int                  `json:"total_results"`
+	Messages     [][]searchHitMessage `json:"messages"`
+}
+
+type channelCount struct {
+	ChannelID snowflake.ID
+	Count     int
+}
+
+// topChannels returns the top n channels by message count from a search response.
+func topChannels(resp *discordSearchResponse, n int) []channelCount {
+	counts := make(map[snowflake.ID]int)
+	for _, hits := range resp.Messages {
+		if len(hits) > 0 {
+			counts[hits[0].ChannelID]++
+		}
+	}
+
+	result := make([]channelCount, 0, len(counts))
+	for id, c := range counts {
+		result = append(result, channelCount{ChannelID: id, Count: c})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Count != result[j].Count {
+			return result[i].Count > result[j].Count
+		}
+		return result[i].ChannelID < result[j].ChannelID
+	})
+
+	if len(result) > n {
+		result = result[:n]
+	}
+	return result
+}
+
+var errSearchIndexing = errors.New("search index not ready")
+
+func (b *Bot) searchUserMessages(guildID, userID snowflake.ID) (*discordSearchResponse, error) {
 	url := fmt.Sprintf("https://discord.com/api/v10/guilds/%d/messages/search?author_id=%d", guildID, userID)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		b.Log.Error("Failed to create search request", "user_id", userID, "error", err)
-		return
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bot "+b.Client.Token)
 
 	resp, err := b.searchClient.Do(req)
 	if err != nil {
-		b.Log.Error("Failed to execute search request", "user_id", userID, "error", err)
-		return
+		return nil, fmt.Errorf("execute request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusAccepted {
-		b.Log.Info("Search index not ready, will retry on next message", "user_id", userID)
-		return
+		return nil, errSearchIndexing
 	}
 	if resp.StatusCode != http.StatusOK {
-		b.Log.Error("Search API returned non-200", "user_id", userID, "status", resp.StatusCode)
-		return
+		return nil, fmt.Errorf("search API returned status %d", resp.StatusCode)
 	}
 
 	var result discordSearchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		b.Log.Error("Failed to decode search response", "user_id", userID, "error", err)
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+func (b *Bot) fetchPosterRoleHistory(guildID snowflake.ID, userID snowflake.ID, userIDStr string) {
+	result, err := b.searchUserMessages(guildID, userID)
+	if err != nil {
+		if errors.Is(err, errSearchIndexing) {
+			b.Log.Info("Search index not ready, will retry on next message", "user_id", userID)
+		} else {
+			b.Log.Error("Failed to fetch poster role history", "user_id", userID, "error", err)
+		}
 		return
 	}
 
@@ -255,50 +302,109 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 
 	b.Log.Info("Market progress", "user_id", e.User().ID, "guild_id", guildID, "target_user", user.ID, "public", public)
 
-	// Defer since GetMember (for the specified user) is a network call.
 	if err := e.DeferCreateMessage(ephemeral); err != nil {
 		b.Log.Error("Failed to defer marketprogress response", "error", err)
 		return
 	}
 
-	userIDStr := fmt.Sprintf("%d", user.ID)
-	mention := fmt.Sprintf("<@%d>", user.ID)
-
-	// Check if user already has the role
-	member, err := b.Client.Rest.GetMember(guildID, user.ID)
-	if err == nil {
+	// Fetch member info (for role check + join date)
+	var hasRole bool
+	var joinedAt *string
+	member, memberErr := b.Client.Rest.GetMember(guildID, user.ID)
+	if memberErr == nil {
 		for _, roleID := range member.RoleIDs {
 			if roleID == cfg.RoleID {
-				msg := discord.MessageCreate{
-					Content: fmt.Sprintf("%s already has access to the marketplace.", mention),
-				}
-				if ephemeral {
-					msg.Flags = discord.MessageFlagEphemeral
-				}
-				b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
-				return
+				hasRole = true
+				break
 			}
+		}
+		if member.JoinedAt != nil {
+			ts := fmt.Sprintf("<t:%d:R>", member.JoinedAt.Unix())
+			joinedAt = &ts
 		}
 	}
 
-	st.mu.Lock()
-	count := st.Counts[userIDStr]
-	st.mu.Unlock()
-
-	pct := 0
-	if cfg.Threshold > 0 {
-		pct = count * 100 / cfg.Threshold
+	// Fetch live search results
+	searchResult, searchErr := b.searchUserMessages(guildID, user.ID)
+	if searchErr != nil && errors.Is(searchErr, errSearchIndexing) {
+		msg := discord.MessageCreate{
+			Content: "Search index is building, please try again shortly.",
+		}
+		if ephemeral {
+			msg.Flags = discord.MessageFlagEphemeral
+		}
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
+		return
 	}
-	remaining := cfg.Threshold - count
-	if remaining < 0 {
-		remaining = 0
+
+	count := 0
+	if searchResult != nil {
+		count = searchResult.TotalResults
 	}
 
-	content := fmt.Sprintf("Poster role progress for %s:\n- Posts: %d / %d (%d%%)\n- %d more posts needed",
-		mention, count, cfg.Threshold, pct, remaining)
+	// Build embed fields
+	var fields []discord.EmbedField
+	if memberErr == nil {
+		hasRoleStr := "No"
+		if hasRole {
+			hasRoleStr = "Yes"
+		}
+		fields = append(fields, discord.EmbedField{
+			Name:   "Has Role",
+			Value:  hasRoleStr,
+			Inline: boolPtr(true),
+		})
+	}
+	if joinedAt != nil {
+		fields = append(fields, discord.EmbedField{
+			Name:   "Joined",
+			Value:  *joinedAt,
+			Inline: boolPtr(true),
+		})
+	}
+
+	fields = append(fields, discord.EmbedField{
+		Name:   "Total Posts",
+		Value:  fmt.Sprintf("%d", count),
+		Inline: boolPtr(true),
+	})
+
+	if !hasRole {
+		pct := 0
+		if cfg.Threshold > 0 {
+			pct = count * 100 / cfg.Threshold
+		}
+		remaining := cfg.Threshold - count
+		if remaining < 0 {
+			remaining = 0
+		}
+		fields = append(fields, discord.EmbedField{
+			Name:  "Progress",
+			Value: fmt.Sprintf("%d / %d (%d%%) — %d more needed", count, cfg.Threshold, pct, remaining),
+		})
+	}
+
+	if searchResult != nil {
+		top := topChannels(searchResult, 5)
+		if len(top) > 0 {
+			var lines []string
+			for _, tc := range top {
+				lines = append(lines, fmt.Sprintf("<#%d>: %d", tc.ChannelID, tc.Count))
+			}
+			fields = append(fields, discord.EmbedField{
+				Name:  "Recent Activity (last 25 posts)",
+				Value: strings.Join(lines, "\n"),
+			})
+		}
+	}
+
+	embed := discord.Embed{
+		Title:  fmt.Sprintf("Marketplace Progress for %s", user.Username),
+		Fields: fields,
+	}
 
 	msg := discord.MessageCreate{
-		Content: content,
+		Embeds: []discord.Embed{embed},
 	}
 	if ephemeral {
 		msg.Flags = discord.MessageFlagEphemeral
