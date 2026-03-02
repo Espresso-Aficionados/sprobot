@@ -1,27 +1,6 @@
 {{define "title"}}Profile Templates - sprobot{{end}}
 {{define "extra_css"}}
-        .admin-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-        }
-        .admin-header h2 {
-            font-size: 1.2em;
-            color: #f2f3f5;
-        }
-        .nav-links {
-            display: flex;
-            gap: 16px;
-        }
-        .nav-links a {
-            color: #b5bac1;
-            text-decoration: none;
-            font-size: 0.9em;
-        }
-        .nav-links a:hover {
-            color: #dbdee1;
-        }
+{{template "admin_layout_css"}}
         .flash {
             padding: 10px 14px;
             border-radius: 4px;
@@ -154,13 +133,10 @@
         }
 {{end}}
 {{define "content"}}
-    <div class="admin-header">
-        <h2>Profile Templates</h2>
-        <div class="nav-links">
-            <a href="/admin/">Servers</a>
-            <a href="/admin/logout">Logout</a>
-        </div>
-    </div>
+    <div class="admin-layout">
+    {{template "sidebar" .}}
+    <div class="admin-content">
+    <h2>Profile Templates</h2>
 
     {{if .Success}}
     <div class="flash flash-success">Templates saved successfully.</div>
@@ -285,4 +261,6 @@
         container.appendChild(card);
     }
     </script>
+    </div>
+    </div>
 {{end}}

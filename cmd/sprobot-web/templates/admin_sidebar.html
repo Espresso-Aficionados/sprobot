@@ -1,0 +1,105 @@
+{{define "admin_layout_css"}}
+        .container {
+            max-width: 960px;
+        }
+        .admin-layout {
+            display: flex;
+            gap: 0;
+            min-height: 60vh;
+        }
+        .admin-sidebar {
+            width: 200px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            background-color: #2b2d31;
+            border-right: 1px solid #3b3d44;
+            padding: 16px 0;
+        }
+        .sidebar-label {
+            font-size: 0.7em;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: #b5bac1;
+            padding: 0 12px;
+            margin-bottom: 4px;
+            letter-spacing: 0.02em;
+        }
+        .sidebar-link {
+            display: block;
+            padding: 8px 12px;
+            color: #b5bac1;
+            text-decoration: none;
+            font-size: 0.9em;
+            border-radius: 4px;
+            margin: 1px 8px;
+        }
+        .sidebar-link:hover {
+            background-color: #36373d;
+            color: #dbdee1;
+        }
+        .sidebar-link.active {
+            background-color: #404249;
+            color: #f2f3f5;
+            font-weight: 600;
+        }
+        .sidebar-bottom {
+            margin-top: auto;
+            border-top: 1px solid #3b3d44;
+            padding-top: 8px;
+        }
+        .admin-content {
+            flex: 1;
+            padding: 16px 0 16px 24px;
+            min-width: 0;
+        }
+        .admin-content h2 {
+            font-size: 1.2em;
+            color: #f2f3f5;
+            margin-bottom: 16px;
+        }
+        @media (max-width: 700px) {
+            .admin-layout {
+                flex-direction: column;
+            }
+            .admin-sidebar {
+                width: 100%;
+                flex-direction: row;
+                flex-wrap: wrap;
+                align-items: center;
+                border-right: none;
+                border-bottom: 1px solid #3b3d44;
+                padding: 8px 0;
+            }
+            .sidebar-label {
+                width: 100%;
+                margin-bottom: 2px;
+            }
+            .sidebar-link {
+                margin: 2px 4px;
+            }
+            .sidebar-bottom {
+                margin-top: 0;
+                margin-left: auto;
+                border-top: none;
+                padding-top: 0;
+                display: flex;
+                gap: 0;
+            }
+            .admin-content {
+                padding: 16px 0 0 0;
+            }
+        }
+{{end}}
+{{define "sidebar"}}
+    <nav class="admin-sidebar">
+        <div class="sidebar-label">Configuration</div>
+        <a class="sidebar-link{{if eq .ActiveTab "profiles"}} active{{end}}" href="/admin/{{.GuildID}}/profiles">Profile Templates</a>
+        <a class="sidebar-link{{if eq .ActiveTab "selfroles"}} active{{end}}" href="/admin/{{.GuildID}}/selfroles">Self-Assign Roles</a>
+        <a class="sidebar-link{{if eq .ActiveTab "tickets"}} active{{end}}" href="/admin/{{.GuildID}}/tickets">Tickets</a>
+        <div class="sidebar-bottom">
+            <a class="sidebar-link" href="/admin/">Servers</a>
+            <a class="sidebar-link" href="/admin/logout">Logout</a>
+        </div>
+    </nav>
+{{end}}

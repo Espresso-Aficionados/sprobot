@@ -461,9 +461,15 @@ func main() {
 		pageTemplates[name] = t
 	}
 
-	adminTemplateNames := []string{"login.html", "admin_dashboard.html", "admin_guild.html", "admin_profiles.html", "admin_selfroles.html", "admin_tickets.html"}
-	for _, name := range adminTemplateNames {
+	for _, name := range []string{"login.html", "admin_dashboard.html"} {
 		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/"+name)
+		if err != nil {
+			log.Fatalf("Failed to parse admin template %s: %v", name, err)
+		}
+		pageTemplates[name] = t
+	}
+	for _, name := range []string{"admin_profiles.html", "admin_selfroles.html", "admin_tickets.html"} {
+		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/admin_sidebar.html", "templates/"+name)
 		if err != nil {
 			log.Fatalf("Failed to parse admin template %s: %v", name, err)
 		}
@@ -788,10 +794,11 @@ func handleAdminProfiles(s3 *s3client.Client) http.HandlerFunc {
 
 		renderAdminPage(w, "admin_profiles.html", struct {
 			GuildID   string
+			ActiveTab string
 			Templates []sprout
 			Success   bool
 			Error     string
-		}{guildID, templates, success, errMsg})
+		}{guildID, "profiles", templates, success, errMsg})
 	}
 }
 
@@ -916,9 +923,7 @@ func redirectProfilesError(w http.ResponseWriter, r *http.Request, guildID, msg 
 func handleGuildHub() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		guildID := r.PathValue("guildID")
-		renderAdminPage(w, "admin_guild.html", struct {
-			GuildID string
-		}{guildID})
+		http.Redirect(w, r, fmt.Sprintf("/admin/%s/profiles", guildID), http.StatusSeeOther)
 	}
 }
 
@@ -952,13 +957,14 @@ func handleAdminSelfroles(s3 *s3client.Client, botToken string) http.HandlerFunc
 		errMsg := r.URL.Query().Get("error")
 
 		renderAdminPage(w, "admin_selfroles.html", struct {
-			GuildID  string
-			Panels   []selfrolePanel
-			Channels []discordChannel
-			Roles    []discordRole
-			Success  bool
-			Error    string
-		}{guildID, panels, channels, roles, success, errMsg})
+			GuildID   string
+			ActiveTab string
+			Panels    []selfrolePanel
+			Channels  []discordChannel
+			Roles     []discordRole
+			Success   bool
+			Error     string
+		}{guildID, "selfroles", panels, channels, roles, success, errMsg})
 	}
 }
 
@@ -1088,13 +1094,14 @@ func handleAdminTickets(s3 *s3client.Client, botToken string) http.HandlerFunc {
 
 		renderAdminPage(w, "admin_tickets.html", struct {
 			GuildID   string
+			ActiveTab string
 			Config    ticketWebConfig
 			HasConfig bool
 			Channels  []discordChannel
 			Roles     []discordRole
 			Success   bool
 			Error     string
-		}{guildID, cfg, hasConfig, channels, roles, success, errMsg})
+		}{guildID, "tickets", cfg, hasConfig, channels, roles, success, errMsg})
 	}
 }
 

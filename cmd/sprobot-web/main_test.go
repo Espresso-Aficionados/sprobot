@@ -29,8 +29,15 @@ func TestMain(m *testing.M) {
 		}
 		pageTemplates[name] = t
 	}
-	for _, name := range []string{"login.html", "admin_dashboard.html", "admin_guild.html", "admin_profiles.html", "admin_selfroles.html", "admin_tickets.html"} {
+	for _, name := range []string{"login.html", "admin_dashboard.html"} {
 		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/"+name)
+		if err != nil {
+			log.Fatalf("Failed to parse admin template %s: %v", name, err)
+		}
+		pageTemplates[name] = t
+	}
+	for _, name := range []string{"admin_profiles.html", "admin_selfroles.html", "admin_tickets.html"} {
+		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/admin_sidebar.html", "templates/"+name)
 		if err != nil {
 			log.Fatalf("Failed to parse admin template %s: %v", name, err)
 		}
@@ -616,7 +623,7 @@ func TestAdminDashboardTemplateRenders(t *testing.T) {
 	if !strings.Contains(body, "Test Server") {
 		t.Error("dashboard missing guild name")
 	}
-	if !strings.Contains(body, "/admin/123/") {
+	if !strings.Contains(body, "/admin/123/profiles") {
 		t.Error("dashboard missing guild link")
 	}
 }
@@ -745,43 +752,35 @@ func TestGetOAuthConfigDevInsecureCookie(t *testing.T) {
 	}
 }
 
-func TestGuildHubTemplateRenders(t *testing.T) {
+func TestGuildHubRedirects(t *testing.T) {
+	handler := handleGuildHub()
 	rec := httptest.NewRecorder()
-	renderAdminPage(rec, "admin_guild.html", struct {
-		GuildID string
-	}{"123456"})
+	req := httptest.NewRequest(http.MethodGet, "/admin/123456/", nil)
+	req.SetPathValue("guildID", "123456")
+	handler(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rec.Code)
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("status = %d, want 303", rec.Code)
 	}
-	body := rec.Body.String()
-	checks := []string{
-		"Server Settings",
-		"/admin/123456/profiles",
-		"/admin/123456/selfroles",
-		"/admin/123456/tickets",
-		"Profile Templates",
-		"Self-Assign Roles",
-		"Tickets",
-	}
-	for _, want := range checks {
-		if !strings.Contains(body, want) {
-			t.Errorf("guild hub page missing %q", want)
-		}
+	loc := rec.Header().Get("Location")
+	if loc != "/admin/123456/profiles" {
+		t.Errorf("Location = %q, want /admin/123456/profiles", loc)
 	}
 }
 
 func TestSelfroleTemplateRenders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	renderAdminPage(rec, "admin_selfroles.html", struct {
-		GuildID  string
-		Panels   []selfrolePanel
-		Channels []discordChannel
-		Roles    []discordRole
-		Success  bool
-		Error    string
+		GuildID   string
+		ActiveTab string
+		Panels    []selfrolePanel
+		Channels  []discordChannel
+		Roles     []discordRole
+		Success   bool
+		Error     string
 	}{
-		GuildID: "123",
+		GuildID:   "123",
+		ActiveTab: "selfroles",
 		Panels: []selfrolePanel{
 			{
 				ChannelID: 999,
@@ -808,6 +807,10 @@ func TestSelfroleTemplateRenders(t *testing.T) {
 		"#general",
 		"@TestRole",
 		"selected",
+		"admin-sidebar",
+		"active",
+		"Profile Templates",
+		"Tickets",
 	}
 	for _, want := range checks {
 		if !strings.Contains(body, want) {
@@ -819,13 +822,14 @@ func TestSelfroleTemplateRenders(t *testing.T) {
 func TestSelfroleTemplateEmpty(t *testing.T) {
 	rec := httptest.NewRecorder()
 	renderAdminPage(rec, "admin_selfroles.html", struct {
-		GuildID  string
-		Panels   []selfrolePanel
-		Channels []discordChannel
-		Roles    []discordRole
-		Success  bool
-		Error    string
-	}{GuildID: "123"})
+		GuildID   string
+		ActiveTab string
+		Panels    []selfrolePanel
+		Channels  []discordChannel
+		Roles     []discordRole
+		Success   bool
+		Error     string
+	}{GuildID: "123", ActiveTab: "selfroles"})
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Code)
@@ -836,6 +840,7 @@ func TestTicketTemplateRendersWithConfig(t *testing.T) {
 	rec := httptest.NewRecorder()
 	renderAdminPage(rec, "admin_tickets.html", struct {
 		GuildID   string
+		ActiveTab string
 		Config    ticketWebConfig
 		HasConfig bool
 		Channels  []discordChannel
@@ -843,7 +848,8 @@ func TestTicketTemplateRendersWithConfig(t *testing.T) {
 		Success   bool
 		Error     string
 	}{
-		GuildID: "123",
+		GuildID:   "123",
+		ActiveTab: "tickets",
 		Config: ticketWebConfig{
 			ChannelID:        999,
 			StaffRoleID:      888,
@@ -873,6 +879,10 @@ func TestTicketTemplateRendersWithConfig(t *testing.T) {
 		"#tickets",
 		"@Staff",
 		"selected",
+		"admin-sidebar",
+		"active",
+		"Profile Templates",
+		"Self-Assign Roles",
 	}
 	for _, want := range checks {
 		if !strings.Contains(body, want) {
@@ -885,13 +895,14 @@ func TestTicketTemplateRendersWithoutConfig(t *testing.T) {
 	rec := httptest.NewRecorder()
 	renderAdminPage(rec, "admin_tickets.html", struct {
 		GuildID   string
+		ActiveTab string
 		Config    ticketWebConfig
 		HasConfig bool
 		Channels  []discordChannel
 		Roles     []discordRole
 		Success   bool
 		Error     string
-	}{GuildID: "123", HasConfig: false})
+	}{GuildID: "123", ActiveTab: "tickets", HasConfig: false})
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Code)
