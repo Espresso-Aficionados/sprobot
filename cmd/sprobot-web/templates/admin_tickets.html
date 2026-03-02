@@ -65,7 +65,7 @@
             color: #b5bac1;
             margin-bottom: 4px;
         }
-        .form-group input, .form-group textarea {
+        .form-group input, .form-group textarea, .form-group select {
             width: 100%;
             padding: 8px 10px;
             background-color: #1e1f22;
@@ -79,7 +79,7 @@
             min-height: 100px;
             resize: vertical;
         }
-        .form-group input:focus, .form-group textarea:focus {
+        .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
             outline: none;
             border-color: #5865F2;
         }
@@ -153,13 +153,23 @@
         <div class="config-card">
             <h3>Ticket Configuration</h3>
             <div class="form-group">
-                <label>Channel ID</label>
-                <input type="text" name="channel_id" value="{{.Config.ChannelID}}" required pattern="[0-9]+">
+                <label>Channel</label>
+                <select name="channel_id" required>
+                    <option value="">Select a channel</option>
+                    {{range $.Channels}}
+                    <option value="{{.ID}}" {{if eq .ID (printf "%d" $.Config.ChannelID)}}selected{{end}}>#{{.Name}}</option>
+                    {{end}}
+                </select>
                 <div class="hint">The channel where the ticket panel is posted.</div>
             </div>
             <div class="form-group">
-                <label>Staff Role ID</label>
-                <input type="text" name="staff_role_id" value="{{.Config.StaffRoleID}}" required pattern="[0-9]+">
+                <label>Staff Role</label>
+                <select name="staff_role_id" required>
+                    <option value="">Select a role</option>
+                    {{range $.Roles}}
+                    <option value="{{.ID}}" {{if eq .ID (printf "%d" $.Config.StaffRoleID)}}selected{{end}}>@{{.Name}}</option>
+                    {{end}}
+                </select>
                 <div class="hint">Role pinged when a ticket is opened.</div>
             </div>
             <div class="form-group">
@@ -200,12 +210,22 @@
         <div class="config-card">
             <h3>Set Up Tickets</h3>
             <div class="form-group">
-                <label>Channel ID</label>
-                <input type="text" name="channel_id" required pattern="[0-9]+">
+                <label>Channel</label>
+                <select name="channel_id" required>
+                    <option value="">Select a channel</option>
+                    {{range $.Channels}}
+                    <option value="{{.ID}}">#{{.Name}}</option>
+                    {{end}}
+                </select>
             </div>
             <div class="form-group">
-                <label>Staff Role ID</label>
-                <input type="text" name="staff_role_id" required pattern="[0-9]+">
+                <label>Staff Role</label>
+                <select name="staff_role_id" required>
+                    <option value="">Select a role</option>
+                    {{range $.Roles}}
+                    <option value="{{.ID}}">@{{.Name}}</option>
+                    {{end}}
+                </select>
             </div>
             <div class="form-group">
                 <label>Counter Offset</label>

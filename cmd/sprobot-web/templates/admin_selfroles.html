@@ -65,7 +65,7 @@
             color: #b5bac1;
             margin-bottom: 4px;
         }
-        .form-group input, .form-group textarea {
+        .form-group input, .form-group textarea, .form-group select {
             width: 100%;
             padding: 8px 10px;
             background-color: #1e1f22;
@@ -79,7 +79,7 @@
             min-height: 80px;
             resize: vertical;
         }
-        .form-group input:focus, .form-group textarea:focus {
+        .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
             outline: none;
             border-color: #5865F2;
         }
@@ -163,7 +163,6 @@
     <div class="note">
         Restart the bot after making changes for them to take effect.
         Each panel becomes a separate message with an embed and up to 5 buttons (Discord action row limit).
-        Channel IDs and Role IDs are Discord snowflake IDs (numeric).
     </div>
 
     <form method="POST" action="/admin/{{.GuildID}}/selfroles" id="selfroles-form">
@@ -172,8 +171,13 @@
             <div class="panel-card" data-index="{{$i}}">
                 <h3>Panel {{add $i 1}}</h3>
                 <div class="form-group">
-                    <label>Channel ID</label>
-                    <input type="text" name="panel_{{$i}}_channel_id" value="{{$panel.ChannelID}}" required pattern="[0-9]+">
+                    <label>Channel</label>
+                    <select name="panel_{{$i}}_channel_id" required>
+                        <option value="">Select a channel</option>
+                        {{range $.Channels}}
+                        <option value="{{.ID}}" {{if eq .ID (printf "%d" $panel.ChannelID)}}selected{{end}}>#{{.Name}}</option>
+                        {{end}}
+                    </select>
                 </div>
                 <div class="form-group">
                     <label>Message (embed description)</label>
@@ -193,8 +197,13 @@
                             <input type="text" name="panel_{{$i}}_btn_{{$j}}_emoji" value="{{$btn.Emoji}}">
                         </div>
                         <div class="form-group">
-                            <label>Role ID</label>
-                            <input type="text" name="panel_{{$i}}_btn_{{$j}}_role_id" value="{{$btn.RoleID}}" required pattern="[0-9]+">
+                            <label>Role</label>
+                            <select name="panel_{{$i}}_btn_{{$j}}_role_id" required>
+                                <option value="">Select a role</option>
+                                {{range $.Roles}}
+                                <option value="{{.ID}}" {{if eq .ID (printf "%d" $btn.RoleID)}}selected{{end}}>@{{.Name}}</option>
+                                {{end}}
+                            </select>
                         </div>
                         <button type="button" class="btn btn-danger btn-small" onclick="this.parentElement.remove()">X</button>
                     </div>
@@ -217,6 +226,26 @@
 
     <script>
     var panelCount = {{len .Panels}};
+    var guildChannels = {{toJSON .Channels}};
+    var guildRoles = {{toJSON .Roles}};
+    if (!guildChannels) guildChannels = [];
+    if (!guildRoles) guildRoles = [];
+
+    function channelOptions(name) {
+        var html = '<select name="' + name + '" required><option value="">Select a channel</option>';
+        for (var i = 0; i < guildChannels.length; i++) {
+            html += '<option value="' + guildChannels[i].id + '">#' + guildChannels[i].name + '</option>';
+        }
+        return html + '</select>';
+    }
+
+    function roleOptions(name) {
+        var html = '<select name="' + name + '" required><option value="">Select a role</option>';
+        for (var i = 0; i < guildRoles.length; i++) {
+            html += '<option value="' + guildRoles[i].id + '">@' + guildRoles[i].name + '</option>';
+        }
+        return html + '</select>';
+    }
 
     function addButton(panelIdx) {
         var container = document.querySelector('.buttons-container[data-panel="' + panelIdx + '"]');
@@ -228,7 +257,7 @@
         row.innerHTML =
             '<div class="form-group"><label>Label</label><input type="text" name="panel_' + panelIdx + '_btn_' + count + '_label" required></div>' +
             '<div class="form-group"><label>Emoji</label><input type="text" name="panel_' + panelIdx + '_btn_' + count + '_emoji"></div>' +
-            '<div class="form-group"><label>Role ID</label><input type="text" name="panel_' + panelIdx + '_btn_' + count + '_role_id" required pattern="[0-9]+"></div>' +
+            '<div class="form-group"><label>Role</label>' + roleOptions('panel_' + panelIdx + '_btn_' + count + '_role_id') + '</div>' +
             '<button type="button" class="btn btn-danger btn-small" onclick="this.parentElement.remove()">X</button>';
         container.appendChild(row);
     }
@@ -242,7 +271,7 @@
         card.setAttribute('data-index', idx);
         card.innerHTML =
             '<h3>Panel ' + (idx + 1) + '</h3>' +
-            '<div class="form-group"><label>Channel ID</label><input type="text" name="panel_' + idx + '_channel_id" required pattern="[0-9]+"></div>' +
+            '<div class="form-group"><label>Channel</label>' + channelOptions('panel_' + idx + '_channel_id') + '</div>' +
             '<div class="form-group"><label>Message (embed description)</label><textarea name="panel_' + idx + '_message" required></textarea></div>' +
             '<div class="buttons-label">Buttons (max 5)</div>' +
             '<div class="buttons-container" data-panel="' + idx + '"></div>' +

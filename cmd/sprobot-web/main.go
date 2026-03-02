@@ -169,6 +169,72 @@ func fetchDiscordUser(token string) (discordUser, error) {
 	return u, nil
 }
 
+type discordChannel struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     int    `json:"type"`
+	Position int    `json:"position"`
+}
+
+type discordRole struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Position int    `json:"position"`
+	Managed  bool   `json:"managed"`
+}
+
+func fetchDiscordChannels(botToken, guildID string) ([]discordChannel, error) {
+	req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
+	req.Header.Set("Authorization", "Bot "+botToken)
+	resp, err := oauthHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching channels: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("channels API returned %d", resp.StatusCode)
+	}
+	var all []discordChannel
+	if err := json.NewDecoder(resp.Body).Decode(&all); err != nil {
+		return nil, fmt.Errorf("decoding channels: %w", err)
+	}
+	// Filter to text channels (type 0) and sort by position.
+	var text []discordChannel
+	for _, ch := range all {
+		if ch.Type == 0 {
+			text = append(text, ch)
+		}
+	}
+	sort.Slice(text, func(i, j int) bool { return text[i].Position < text[j].Position })
+	return text, nil
+}
+
+func fetchDiscordRoles(botToken, guildID string) ([]discordRole, error) {
+	req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/roles", nil)
+	req.Header.Set("Authorization", "Bot "+botToken)
+	resp, err := oauthHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching roles: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("roles API returned %d", resp.StatusCode)
+	}
+	var all []discordRole
+	if err := json.NewDecoder(resp.Body).Decode(&all); err != nil {
+		return nil, fmt.Errorf("decoding roles: %w", err)
+	}
+	// Filter out @everyone (ID == guildID) and managed roles; sort by position descending.
+	var filtered []discordRole
+	for _, r := range all {
+		if r.ID != guildID && !r.Managed {
+			filtered = append(filtered, r)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Position > filtered[j].Position })
+	return filtered, nil
+}
+
 func fetchDiscordGuilds(authHeader string) ([]discordGuild, error) {
 	req, _ := http.NewRequest("GET", "https://discord.com/api/v10/users/@me/guilds", nil)
 	req.Header.Set("Authorization", authHeader)
@@ -380,6 +446,10 @@ func getHardcodedTickets(env string) map[string]ticketWebConfig {
 func main() {
 	funcMap := template.FuncMap{
 		"add": func(a, b int) int { return a + b },
+		"toJSON": func(v any) template.JS {
+			b, _ := json.Marshal(v)
+			return template.JS(b)
+		},
 	}
 
 	pageTemplates = make(map[string]*template.Template)
@@ -427,9 +497,9 @@ func main() {
 		mux.HandleFunc("GET /admin/{guildID}/{$}", adminAuth(sessions, handleGuildHub()))
 		mux.HandleFunc("GET /admin/{guildID}/profiles", adminAuth(sessions, handleAdminProfiles(s3)))
 		mux.HandleFunc("POST /admin/{guildID}/profiles", adminAuth(sessions, handleSaveProfiles(s3)))
-		mux.HandleFunc("GET /admin/{guildID}/selfroles", adminAuth(sessions, handleAdminSelfroles(s3)))
+		mux.HandleFunc("GET /admin/{guildID}/selfroles", adminAuth(sessions, handleAdminSelfroles(s3, botToken)))
 		mux.HandleFunc("POST /admin/{guildID}/selfroles", adminAuth(sessions, handleSaveSelfroles(s3)))
-		mux.HandleFunc("GET /admin/{guildID}/tickets", adminAuth(sessions, handleAdminTickets(s3)))
+		mux.HandleFunc("GET /admin/{guildID}/tickets", adminAuth(sessions, handleAdminTickets(s3, botToken)))
 		mux.HandleFunc("POST /admin/{guildID}/tickets", adminAuth(sessions, handleSaveTickets(s3)))
 	} else {
 		log.Println("DISCORD_CLIENT_ID/SECRET/REDIRECT_URI not set — admin routes disabled")
@@ -854,7 +924,7 @@ func handleGuildHub() http.HandlerFunc {
 
 // --- Selfrole handlers ---
 
-func handleAdminSelfroles(s3 *s3client.Client) http.HandlerFunc {
+func handleAdminSelfroles(s3 *s3client.Client, botToken string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		guildID := r.PathValue("guildID")
 
@@ -864,15 +934,31 @@ func handleAdminSelfroles(s3 *s3client.Client) http.HandlerFunc {
 			json.Unmarshal(data, &panels)
 		}
 
+		var channels []discordChannel
+		var roles []discordRole
+		if botToken != "" {
+			var chErr, rErr error
+			channels, chErr = fetchDiscordChannels(botToken, guildID)
+			if chErr != nil {
+				log.Printf("Failed to fetch channels for guild %s: %v", guildID, chErr)
+			}
+			roles, rErr = fetchDiscordRoles(botToken, guildID)
+			if rErr != nil {
+				log.Printf("Failed to fetch roles for guild %s: %v", guildID, rErr)
+			}
+		}
+
 		success := r.URL.Query().Get("saved") == "1"
 		errMsg := r.URL.Query().Get("error")
 
 		renderAdminPage(w, "admin_selfroles.html", struct {
-			GuildID string
-			Panels  []selfrolePanel
-			Success bool
-			Error   string
-		}{guildID, panels, success, errMsg})
+			GuildID  string
+			Panels   []selfrolePanel
+			Channels []discordChannel
+			Roles    []discordRole
+			Success  bool
+			Error    string
+		}{guildID, panels, channels, roles, success, errMsg})
 	}
 }
 
@@ -970,7 +1056,7 @@ func redirectSelfroleError(w http.ResponseWriter, r *http.Request, guildID, msg 
 
 // --- Ticket handlers ---
 
-func handleAdminTickets(s3 *s3client.Client) http.HandlerFunc {
+func handleAdminTickets(s3 *s3client.Client, botToken string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		guildID := r.PathValue("guildID")
 
@@ -983,6 +1069,20 @@ func handleAdminTickets(s3 *s3client.Client) http.HandlerFunc {
 			}
 		}
 
+		var channels []discordChannel
+		var roles []discordRole
+		if botToken != "" {
+			var chErr, rErr error
+			channels, chErr = fetchDiscordChannels(botToken, guildID)
+			if chErr != nil {
+				log.Printf("Failed to fetch channels for guild %s: %v", guildID, chErr)
+			}
+			roles, rErr = fetchDiscordRoles(botToken, guildID)
+			if rErr != nil {
+				log.Printf("Failed to fetch roles for guild %s: %v", guildID, rErr)
+			}
+		}
+
 		success := r.URL.Query().Get("saved") == "1"
 		errMsg := r.URL.Query().Get("error")
 
@@ -990,9 +1090,11 @@ func handleAdminTickets(s3 *s3client.Client) http.HandlerFunc {
 			GuildID   string
 			Config    ticketWebConfig
 			HasConfig bool
+			Channels  []discordChannel
+			Roles     []discordRole
 			Success   bool
 			Error     string
-		}{guildID, cfg, hasConfig, success, errMsg})
+		}{guildID, cfg, hasConfig, channels, roles, success, errMsg})
 	}
 }
 

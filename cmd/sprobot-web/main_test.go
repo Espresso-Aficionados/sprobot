@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"html/template"
 	"log"
 	"net/http"
@@ -14,6 +15,10 @@ import (
 func TestMain(m *testing.M) {
 	funcMap := template.FuncMap{
 		"add": func(a, b int) int { return a + b },
+		"toJSON": func(v any) template.JS {
+			b, _ := json.Marshal(v)
+			return template.JS(b)
+		},
 	}
 
 	pageTemplates = make(map[string]*template.Template)
@@ -769,10 +774,12 @@ func TestGuildHubTemplateRenders(t *testing.T) {
 func TestSelfroleTemplateRenders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	renderAdminPage(rec, "admin_selfroles.html", struct {
-		GuildID string
-		Panels  []selfrolePanel
-		Success bool
-		Error   string
+		GuildID  string
+		Panels   []selfrolePanel
+		Channels []discordChannel
+		Roles    []discordRole
+		Success  bool
+		Error    string
 	}{
 		GuildID: "123",
 		Panels: []selfrolePanel{
@@ -784,6 +791,8 @@ func TestSelfroleTemplateRenders(t *testing.T) {
 				},
 			},
 		},
+		Channels: []discordChannel{{ID: "999", Name: "general", Type: 0, Position: 0}},
+		Roles:    []discordRole{{ID: "111", Name: "TestRole", Position: 1}},
 	})
 
 	if rec.Code != http.StatusOK {
@@ -796,6 +805,9 @@ func TestSelfroleTemplateRenders(t *testing.T) {
 		"TestBtn",
 		"panel_0_channel_id",
 		"panel_0_btn_0_label",
+		"#general",
+		"@TestRole",
+		"selected",
 	}
 	for _, want := range checks {
 		if !strings.Contains(body, want) {
@@ -807,10 +819,12 @@ func TestSelfroleTemplateRenders(t *testing.T) {
 func TestSelfroleTemplateEmpty(t *testing.T) {
 	rec := httptest.NewRecorder()
 	renderAdminPage(rec, "admin_selfroles.html", struct {
-		GuildID string
-		Panels  []selfrolePanel
-		Success bool
-		Error   string
+		GuildID  string
+		Panels   []selfrolePanel
+		Channels []discordChannel
+		Roles    []discordRole
+		Success  bool
+		Error    string
 	}{GuildID: "123"})
 
 	if rec.Code != http.StatusOK {
@@ -824,6 +838,8 @@ func TestTicketTemplateRendersWithConfig(t *testing.T) {
 		GuildID   string
 		Config    ticketWebConfig
 		HasConfig bool
+		Channels  []discordChannel
+		Roles     []discordRole
 		Success   bool
 		Error     string
 	}{
@@ -838,6 +854,8 @@ func TestTicketTemplateRendersWithConfig(t *testing.T) {
 			CloseButtonLabel: "Close Ticket",
 		},
 		HasConfig: true,
+		Channels:  []discordChannel{{ID: "999", Name: "tickets", Type: 0, Position: 0}},
+		Roles:     []discordRole{{ID: "888", Name: "Staff", Position: 1}},
 	})
 
 	if rec.Code != http.StatusOK {
@@ -852,6 +870,9 @@ func TestTicketTemplateRendersWithConfig(t *testing.T) {
 		"channel_id",
 		"staff_role_id",
 		"Remove Configuration",
+		"#tickets",
+		"@Staff",
+		"selected",
 	}
 	for _, want := range checks {
 		if !strings.Contains(body, want) {
@@ -866,6 +887,8 @@ func TestTicketTemplateRendersWithoutConfig(t *testing.T) {
 		GuildID   string
 		Config    ticketWebConfig
 		HasConfig bool
+		Channels  []discordChannel
+		Roles     []discordRole
 		Success   bool
 		Error     string
 	}{GuildID: "123", HasConfig: false})
