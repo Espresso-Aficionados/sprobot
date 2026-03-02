@@ -616,10 +616,12 @@ func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 
 func handleLogin(cfg *oauthConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		returnTo := r.URL.Query().Get("return_to")
 		loginURL := fmt.Sprintf(
-			"https://discord.com/api/oauth2/authorize?client_id=%s&redirect_uri=%s&response_type=code&scope=identify+guilds",
+			"https://discord.com/api/oauth2/authorize?client_id=%s&redirect_uri=%s&response_type=code&scope=identify+guilds&state=%s",
 			cfg.ClientID,
 			url.QueryEscape(cfg.RedirectURI),
+			url.QueryEscape(returnTo),
 		)
 		renderPage(w, "login.html", struct{ LoginURL string }{loginURL})
 	}
@@ -672,7 +674,11 @@ func handleCallback(cfg *oauthConfig, sessions *sessionStore) http.HandlerFunc {
 			MaxAge:   86400,
 		})
 
-		http.Redirect(w, r, "/admin/", http.StatusSeeOther)
+		returnTo := r.URL.Query().Get("state")
+		if returnTo == "" || !strings.HasPrefix(returnTo, "/admin/") {
+			returnTo = "/admin/"
+		}
+		http.Redirect(w, r, returnTo, http.StatusSeeOther)
 	}
 }
 
@@ -701,15 +707,17 @@ const sessionKey contextKey = "session"
 
 func adminAuth(sessions *sessionStore, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		loginURL := "/admin/login?return_to=" + url.QueryEscape(r.RequestURI)
+
 		c, err := r.Cookie("session")
 		if err != nil {
-			http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+			http.Redirect(w, r, loginURL, http.StatusSeeOther)
 			return
 		}
 
 		sess, ok := sessions.Get(c.Value)
 		if !ok {
-			http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+			http.Redirect(w, r, loginURL, http.StatusSeeOther)
 			return
 		}
 

@@ -535,8 +535,9 @@ func TestAdminAuthRedirectsWithoutCookie(t *testing.T) {
 		t.Errorf("status = %d, want 303", rec.Code)
 	}
 	loc := rec.Header().Get("Location")
-	if loc != "/admin/login" {
-		t.Errorf("Location = %q, want /admin/login", loc)
+	want := "/admin/login?return_to=%2Fadmin%2F"
+	if loc != want {
+		t.Errorf("Location = %q, want %q", loc, want)
 	}
 }
 
