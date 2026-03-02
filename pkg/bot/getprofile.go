@@ -59,7 +59,7 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 		if errors.Is(err, s3client.ErrNotFound) {
 			var msg string
 			if isSelf {
-				msg = fmt.Sprintf("Whoops! Unable to find a profile for you. To set one up run /edit%s", tmpl.ShortName)
+				msg = "Whoops! Unable to find a profile for you. To set one up run /editprofile"
 			} else {
 				msg = fmt.Sprintf("Whoops! Unable to find a profile for %s.", targetName)
 			}
@@ -130,7 +130,7 @@ func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl 
 		if errors.Is(err, s3client.ErrNotFound) {
 			var msg string
 			if targetID == e.User().ID {
-				msg = fmt.Sprintf("Whoops! Unable to find a profile for you. To set one up run /edit%s", tmpl.ShortName)
+				msg = "Whoops! Unable to find a profile for you. To set one up run /editprofile"
 			} else {
 				msg = fmt.Sprintf("Whoops! Unable to find a %s profile for %s.", tmpl.Name, targetName)
 			}

@@ -205,9 +205,9 @@ func TestGuildPostCountsConcurrent(t *testing.T) {
 func TestTemplateCommandsCount(t *testing.T) {
 	cmds := templateCommands(sprobot.ProfileTemplate)
 
-	// 3 slash commands + 1 user menu + 1 message menu = 5
-	if len(cmds) != 5 {
-		t.Errorf("templateCommands returned %d commands, want 5", len(cmds))
+	// 1 user menu + 1 message menu = 2
+	if len(cmds) != 2 {
+		t.Errorf("templateCommands returned %d commands, want 2", len(cmds))
 	}
 }
 
@@ -217,8 +217,6 @@ func TestTemplateCommandsNames(t *testing.T) {
 	names := make(map[string]bool)
 	for _, cmd := range cmds {
 		switch c := cmd.(type) {
-		case discord.SlashCommandCreate:
-			names[c.Name] = true
 		case discord.UserCommandCreate:
 			names[c.Name] = true
 		case discord.MessageCommandCreate:
@@ -227,9 +225,6 @@ func TestTemplateCommandsNames(t *testing.T) {
 	}
 
 	expected := []string{
-		"editprofile",
-		"getprofile",
-		"deleteprofile",
 		"Get Coffee Setup Profile",
 	}
 	for _, name := range expected {
@@ -242,11 +237,9 @@ func TestTemplateCommandsNames(t *testing.T) {
 func TestTemplateCommandsTypes(t *testing.T) {
 	cmds := templateCommands(sprobot.ProfileTemplate)
 
-	var slashCount, userCount, msgCount int
+	var userCount, msgCount int
 	for _, cmd := range cmds {
 		switch cmd.(type) {
-		case discord.SlashCommandCreate:
-			slashCount++
 		case discord.UserCommandCreate:
 			userCount++
 		case discord.MessageCommandCreate:
@@ -254,9 +247,6 @@ func TestTemplateCommandsTypes(t *testing.T) {
 		}
 	}
 
-	if slashCount != 3 {
-		t.Errorf("slash commands = %d, want 3", slashCount)
-	}
 	if userCount != 1 {
 		t.Errorf("user commands = %d, want 1", userCount)
 	}
@@ -271,8 +261,6 @@ func TestTemplateCommandsRoaster(t *testing.T) {
 	names := make(map[string]bool)
 	for _, cmd := range cmds {
 		switch c := cmd.(type) {
-		case discord.SlashCommandCreate:
-			names[c.Name] = true
 		case discord.UserCommandCreate:
 			names[c.Name] = true
 		case discord.MessageCommandCreate:
@@ -281,9 +269,6 @@ func TestTemplateCommandsRoaster(t *testing.T) {
 	}
 
 	expected := []string{
-		"editroaster",
-		"getroaster",
-		"deleteroaster",
 		"Get Roasting Setup Profile",
 	}
 	for _, name := range expected {
@@ -293,23 +278,30 @@ func TestTemplateCommandsRoaster(t *testing.T) {
 	}
 }
 
-func TestTemplateCommandsGetHasUserOption(t *testing.T) {
-	cmds := templateCommands(sprobot.ProfileTemplate)
+func TestResolveTemplate(t *testing.T) {
+	tmpls := []sprobot.Template{sprobot.ProfileTemplate, sprobot.RoasterTemplate}
 
-	for _, cmd := range cmds {
-		if sc, ok := cmd.(discord.SlashCommandCreate); ok && sc.Name == "getprofile" {
-			if len(sc.Options) != 1 {
-				t.Fatalf("getprofile options = %d, want 1", len(sc.Options))
-			}
-			opt, ok := sc.Options[0].(discord.ApplicationCommandOptionUser)
-			if !ok {
-				t.Fatalf("getprofile option type = %T, want ApplicationCommandOptionUser", sc.Options[0])
-			}
-			if opt.Name != "name" {
-				t.Errorf("getprofile option name = %q, want %q", opt.Name, "name")
-			}
-			return
-		}
+	// Default to first template when no type given
+	tmpl, ok := resolveTemplate(tmpls, "")
+	if !ok || tmpl.ShortName != "profile" {
+		t.Errorf("resolveTemplate(\"\") = %q, %v; want \"profile\", true", tmpl.ShortName, ok)
 	}
-	t.Error("getprofile command not found")
+
+	// Explicit type
+	tmpl, ok = resolveTemplate(tmpls, "roaster")
+	if !ok || tmpl.ShortName != "roaster" {
+		t.Errorf("resolveTemplate(\"roaster\") = %q, %v; want \"roaster\", true", tmpl.ShortName, ok)
+	}
+
+	// Unknown type
+	_, ok = resolveTemplate(tmpls, "unknown")
+	if ok {
+		t.Error("resolveTemplate(\"unknown\") should return false")
+	}
+
+	// Empty slice
+	_, ok = resolveTemplate(nil, "")
+	if ok {
+		t.Error("resolveTemplate on nil slice should return false")
+	}
 }

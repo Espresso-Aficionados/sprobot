@@ -26,6 +26,58 @@ func (b *Bot) registerAllCommands() error {
 			commands = append(commands, templateCommands(tmpl)...)
 		}
 
+		// Build type choices from template ShortNames
+		var typeChoices []discord.ApplicationCommandOptionChoiceString
+		for _, tmpl := range tmpls {
+			typeChoices = append(typeChoices, discord.ApplicationCommandOptionChoiceString{
+				Name:  tmpl.Name,
+				Value: tmpl.ShortName,
+			})
+		}
+
+		// /editprofile
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:        "editprofile",
+			Description: "Edit or create your profile",
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionString{
+					Name:        "type",
+					Description: "Profile type",
+					Choices:     typeChoices,
+				},
+			},
+		})
+
+		// /getprofile
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:        "getprofile",
+			Description: "Get a user's profile",
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionString{
+					Name:        "type",
+					Description: "Profile type",
+					Choices:     typeChoices,
+				},
+				discord.ApplicationCommandOptionUser{
+					Name:        "name",
+					Description: "User to get profile for",
+				},
+			},
+		})
+
+		// /deleteprofile
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:        "deleteprofile",
+			Description: "Delete profile or profile image",
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionString{
+					Name:        "type",
+					Description: "Profile type",
+					Choices:     typeChoices,
+				},
+			},
+		})
+
 		// Mod log context menu
 		perm := discord.PermissionManageMessages
 		commands = append(commands, discord.MessageCommandCreate{
@@ -418,27 +470,6 @@ func (b *Bot) registerAllCommands() error {
 
 func templateCommands(tmpl sprobot.Template) []discord.ApplicationCommandCreate {
 	return []discord.ApplicationCommandCreate{
-		// /editprofile, /editroaster
-		discord.SlashCommandCreate{
-			Name:        "edit" + tmpl.ShortName,
-			Description: tmpl.Description,
-		},
-		// /getprofile, /getroaster
-		discord.SlashCommandCreate{
-			Name:        "get" + tmpl.ShortName,
-			Description: tmpl.Description,
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionUser{
-					Name:        "name",
-					Description: "User to get profile for",
-				},
-			},
-		},
-		// /deleteprofile, /deleteroaster
-		discord.SlashCommandCreate{
-			Name:        "delete" + tmpl.ShortName,
-			Description: "Delete profile or profile image",
-		},
 		// Context menus: "Get <Name> Profile" (user + message)
 		discord.UserCommandCreate{
 			Name: fmt.Sprintf("Get %s Profile", tmpl.Name),
@@ -447,6 +478,21 @@ func templateCommands(tmpl sprobot.Template) []discord.ApplicationCommandCreate 
 			Name: fmt.Sprintf("Get %s Profile", tmpl.Name),
 		},
 	}
+}
+
+func resolveTemplate(tmpls []sprobot.Template, typeName string) (sprobot.Template, bool) {
+	if typeName != "" {
+		for _, t := range tmpls {
+			if t.ShortName == typeName {
+				return t, true
+			}
+		}
+		return sprobot.Template{}, false
+	}
+	if len(tmpls) > 0 {
+		return tmpls[0], true
+	}
+	return sprobot.Template{}, false
 }
 
 func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
@@ -472,18 +518,30 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	for _, tmpl := range tmpls {
+	// Consolidated profile commands
+	if name == "editprofile" || name == "getprofile" || name == "deleteprofile" {
+		var typeName string
+		if data, ok := e.Data.(discord.SlashCommandInteractionData); ok {
+			typeName, _ = data.OptString("type")
+		}
+		tmpl, ok := resolveTemplate(tmpls, typeName)
+		if !ok {
+			return
+		}
 		switch name {
-		case "edit" + tmpl.ShortName:
+		case "editprofile":
 			b.handleEdit(e, tmpl)
-			return
-		case "get" + tmpl.ShortName:
+		case "getprofile":
 			b.handleGet(e, tmpl)
-			return
-		case "delete" + tmpl.ShortName:
+		case "deleteprofile":
 			b.handleDelete(e, tmpl)
-			return
-		case fmt.Sprintf("Get %s Profile", tmpl.Name):
+		}
+		return
+	}
+
+	// Context menus stay per-template
+	for _, tmpl := range tmpls {
+		if name == fmt.Sprintf("Get %s Profile", tmpl.Name) {
 			b.handleGetMenu(e, tmpl)
 			return
 		}
