@@ -734,6 +734,8 @@ func (b *Bot) onChannelCreate(e *events.GuildChannelCreate) {
 }
 
 func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
+	b.checkChannelRename(e)
+
 	var fields []discord.EmbedField
 	if e.OldChannel != nil {
 		if e.OldChannel.Name() != e.Channel.Name() {
@@ -796,6 +798,8 @@ func (b *Bot) onThreadCreate(e *events.ThreadCreate) {
 }
 
 func (b *Bot) onThreadUpdate(e *events.ThreadUpdate) {
+	b.checkThreadRename(e)
+
 	var fields []discord.EmbedField
 	if e.OldThread.Name() != e.Thread.Name() {
 		fields = append(fields,

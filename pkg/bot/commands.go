@@ -317,6 +317,56 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
+		// /renamelog
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "renamelog",
+			Description:              "Configure channel/thread rename logging",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "set",
+					Description: "Set the destination channel for rename logs",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionChannel{
+							Name:        "channel",
+							Description: "Channel to post rename logs in",
+							Required:    true,
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "add",
+					Description: "Add a channel to monitor for renames",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionChannel{
+							Name:        "channel",
+							Description: "Channel to monitor",
+							Required:    true,
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "remove",
+					Description: "Remove a channel from rename monitoring",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionChannel{
+							Name:        "channel",
+							Description: "Channel to stop monitoring",
+							Required:    true,
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "list",
+					Description: "Show rename log configuration",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "clear",
+					Description: "Remove all rename log configuration",
+				},
+			},
+		})
+
 		// /warn
 		reasonMaxLen := 1024
 		commands = append(commands, discord.SlashCommandCreate{
@@ -447,6 +497,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleStarboardConfig(e)
 	case "sbblacklist":
 		b.handleStarboardBlacklist(e)
+	case "renamelog":
+		b.handleRenameLog(e)
 	}
 }
 

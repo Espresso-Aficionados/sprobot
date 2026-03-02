@@ -33,6 +33,7 @@ type Bot struct {
 	memberCache      *cappedGroupedCache[discord.Member]
 	starboard        map[snowflake.ID]*starboardState
 	topPostersConfig map[snowflake.ID]topPostersConfig
+	renameLogs       map[snowflake.ID]*renameLogState
 	eventLogConfig   map[snowflake.ID]eventLogChannelConfig
 	starboardConfig  map[snowflake.ID]starboardStaticConfig
 	autoRoleID       snowflake.ID
@@ -59,6 +60,7 @@ func New(token string) (*Bot, error) {
 		welcome:          make(map[snowflake.ID]*welcomeState),
 		welcomeSent:      make(map[snowflake.ID]time.Time),
 		starboard:        make(map[snowflake.ID]*starboardState),
+		renameLogs:       make(map[snowflake.ID]*renameLogState),
 		msgCache:         msgCache,
 		memberCache:      memberCache,
 		topPostersConfig: getTopPostersConfig(base.Env),
@@ -135,6 +137,7 @@ func (b *Bot) Run() error {
 	b.loadShortcuts()
 	b.loadWelcome()
 	b.loadStarboard()
+	b.loadRenameLogs()
 	b.ensureTicketPanels()
 	b.ensureSelfrolePanels()
 	if err := b.registerAllCommands(); err != nil {
@@ -150,6 +153,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMessageCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveStarboard)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveRenameLogs)
 
 	botutil.WaitForShutdown(b.Log, "Bot")
 	close(b.stop)
@@ -159,6 +163,7 @@ func (b *Bot) Run() error {
 	b.saveShortcuts()
 	b.saveWelcome()
 	b.saveStarboard()
+	b.saveRenameLogs()
 	b.saveMessageCache()
 	b.saveMemberCache()
 	return nil
