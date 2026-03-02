@@ -69,12 +69,13 @@ func isNotFound(err error) bool {
 }
 
 type Client struct {
-	s3        *s3.Client
-	presigner *s3.PresignClient
-	bucket    string
-	endpoint  string
-	cache     *lru.Cache[string, map[string]string]
-	log       *slog.Logger
+	s3          *s3.Client
+	presigner   *s3.PresignClient
+	bucket      string
+	endpoint    string
+	webEndpoint string
+	cache       *lru.Cache[string, map[string]string]
+	log         *slog.Logger
 }
 
 func New() (*Client, error) {
@@ -109,24 +110,26 @@ func New() (*Client, error) {
 	})
 
 	return &Client{
-		s3:        client,
-		presigner: s3.NewPresignClient(client),
-		bucket:    bucket,
-		endpoint:  endpoint,
-		cache:     cache,
-		log:       slog.Default(),
+		s3:          client,
+		presigner:   s3.NewPresignClient(client),
+		bucket:      bucket,
+		endpoint:    endpoint,
+		webEndpoint: sprobot.WebEndpointForEnv(os.Getenv("SPROBOT_ENV")),
+		cache:       cache,
+		log:         slog.Default(),
 	}, nil
 }
 
 // NewDirect creates a Client with explicitly provided dependencies.
 func NewDirect(s3Client *s3.Client, bucket, endpoint string, cache *lru.Cache[string, map[string]string], log *slog.Logger) *Client {
 	return &Client{
-		s3:        s3Client,
-		presigner: s3.NewPresignClient(s3Client),
-		bucket:    bucket,
-		endpoint:  endpoint,
-		cache:     cache,
-		log:       log,
+		s3:          s3Client,
+		presigner:   s3.NewPresignClient(s3Client),
+		bucket:      bucket,
+		endpoint:    endpoint,
+		webEndpoint: sprobot.WebEndpoint,
+		cache:       cache,
+		log:         log,
 	}
 }
 
@@ -309,7 +312,7 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 	key := cacheKey(tmpl.Name, guildID, userID)
 	c.cache.Add(key, profile)
 
-	webURL = sprobot.WebEndpoint + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
+	webURL = c.webEndpoint + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
 	c.log.Info("Profile saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "profile_url", webURL)
 
 	return webURL, userErr, nil

@@ -112,12 +112,13 @@ func newTestClient(t *testing.T, server *httptest.Server) *Client {
 	})
 
 	return &Client{
-		s3:        client,
-		presigner: s3.NewPresignClient(client),
-		bucket:    bucket,
-		endpoint:  endpoint,
-		cache:     cache,
-		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		s3:          client,
+		presigner:   s3.NewPresignClient(client),
+		bucket:      bucket,
+		endpoint:    endpoint,
+		webEndpoint: sprobot.WebEndpoint,
+		cache:       cache,
+		log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 

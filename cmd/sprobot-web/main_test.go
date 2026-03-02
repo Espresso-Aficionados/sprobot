@@ -14,7 +14,6 @@ import (
 func TestMain(m *testing.M) {
 	funcMap := template.FuncMap{
 		"add": func(a, b int) int { return a + b },
-		"eq":  func(a, b int) bool { return a == b },
 	}
 
 	pageTemplates = make(map[string]*template.Template)
@@ -662,7 +661,7 @@ func TestHandleLogout(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	})
 
-	handler := handleLogout(store)
+	handler := handleLogout(&oauthConfig{SecureCookie: true}, store)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/admin/logout", nil)
 	req.AddCookie(&http.Cookie{Name: "session", Value: "mysess"})
@@ -706,6 +705,7 @@ func TestGetOAuthConfigPresent(t *testing.T) {
 	t.Setenv("DISCORD_CLIENT_ID", "123")
 	t.Setenv("DISCORD_CLIENT_SECRET", "secret")
 	t.Setenv("DISCORD_REDIRECT_URI", "https://example.com/callback")
+	t.Setenv("SPROBOT_ENV", "prod")
 
 	cfg := getOAuthConfig()
 	if cfg == nil {
@@ -719,5 +719,23 @@ func TestGetOAuthConfigPresent(t *testing.T) {
 	}
 	if cfg.RedirectURI != "https://example.com/callback" {
 		t.Errorf("RedirectURI = %q", cfg.RedirectURI)
+	}
+	if !cfg.SecureCookie {
+		t.Error("SecureCookie should be true for prod")
+	}
+}
+
+func TestGetOAuthConfigDevInsecureCookie(t *testing.T) {
+	t.Setenv("DISCORD_CLIENT_ID", "123")
+	t.Setenv("DISCORD_CLIENT_SECRET", "secret")
+	t.Setenv("DISCORD_REDIRECT_URI", "http://localhost:8080/auth/callback")
+	t.Setenv("SPROBOT_ENV", "dev")
+
+	cfg := getOAuthConfig()
+	if cfg == nil {
+		t.Fatal("expected non-nil config")
+	}
+	if cfg.SecureCookie {
+		t.Error("SecureCookie should be false for dev")
 	}
 }

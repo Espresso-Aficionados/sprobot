@@ -100,6 +100,7 @@ type oauthConfig struct {
 	ClientID     string
 	ClientSecret string
 	RedirectURI  string
+	SecureCookie bool // false only in dev
 }
 
 func getOAuthConfig() *oauthConfig {
@@ -113,6 +114,7 @@ func getOAuthConfig() *oauthConfig {
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURI:  redirectURI,
+		SecureCookie: os.Getenv("SPROBOT_ENV") != "dev",
 	}
 }
 
@@ -167,9 +169,9 @@ func fetchDiscordUser(token string) (discordUser, error) {
 	return u, nil
 }
 
-func fetchDiscordGuilds(token string) ([]discordGuild, error) {
+func fetchDiscordGuilds(authHeader string) ([]discordGuild, error) {
 	req, _ := http.NewRequest("GET", "https://discord.com/api/v10/users/@me/guilds", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", authHeader)
 	resp, err := oauthHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching guilds: %w", err)
@@ -229,7 +231,6 @@ func seedTemplates(ctx context.Context, s3 *s3client.Client, env string) {
 func main() {
 	funcMap := template.FuncMap{
 		"add": func(a, b int) int { return a + b },
-		"eq":  func(a, b int) bool { return a == b },
 	}
 
 	pageTemplates = make(map[string]*template.Template)
@@ -269,8 +270,9 @@ func main() {
 	if oauth != nil {
 		mux.HandleFunc("GET /admin/login", handleLogin(oauth))
 		mux.HandleFunc("GET /auth/callback", handleCallback(oauth, sessions))
-		mux.HandleFunc("GET /admin/logout", handleLogout(sessions))
-		mux.HandleFunc("GET /admin/{$}", adminAuth(sessions, handleDashboard(s3)))
+		mux.HandleFunc("GET /admin/logout", handleLogout(oauth, sessions))
+		botToken := os.Getenv("SPROBOT_DISCORD_TOKEN")
+		mux.HandleFunc("GET /admin/{$}", adminAuth(sessions, handleDashboard(botToken)))
 		mux.HandleFunc("GET /admin/{guildID}/profiles", adminAuth(sessions, handleAdminProfiles(s3)))
 		mux.HandleFunc("POST /admin/{guildID}/profiles", adminAuth(sessions, handleSaveProfiles(s3)))
 	} else {
@@ -413,7 +415,7 @@ func handleCallback(cfg *oauthConfig, sessions *sessionStore) http.HandlerFunc {
 			return
 		}
 
-		guilds, err := fetchDiscordGuilds(token)
+		guilds, err := fetchDiscordGuilds("Bearer " + token)
 		if err != nil {
 			log.Printf("Failed to fetch Discord guilds: %v", err)
 			http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
@@ -433,7 +435,7 @@ func handleCallback(cfg *oauthConfig, sessions *sessionStore) http.HandlerFunc {
 			Value:    sessionID,
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   true,
+			Secure:   cfg.SecureCookie,
 			SameSite: http.SameSiteLaxMode,
 			MaxAge:   86400,
 		})
@@ -442,7 +444,7 @@ func handleCallback(cfg *oauthConfig, sessions *sessionStore) http.HandlerFunc {
 	}
 }
 
-func handleLogout(sessions *sessionStore) http.HandlerFunc {
+func handleLogout(cfg *oauthConfig, sessions *sessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie("session"); err == nil {
 			sessions.Delete(c.Value)
@@ -452,7 +454,7 @@ func handleLogout(sessions *sessionStore) http.HandlerFunc {
 			Value:    "",
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   true,
+			Secure:   cfg.SecureCookie,
 			MaxAge:   -1,
 		})
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -507,7 +509,7 @@ func getSession(r *http.Request) *session {
 
 // --- Admin handlers ---
 
-func handleDashboard(s3 *s3client.Client) http.HandlerFunc {
+func handleDashboard(botToken string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sess := getSession(r)
 		if sess == nil {
@@ -515,11 +517,17 @@ func handleDashboard(s3 *s3client.Client) http.HandlerFunc {
 			return
 		}
 
-		// Find guilds with template configs where user is admin
-		configuredGuilds, _ := s3.ListGuildJSONKeys(r.Context(), "config_templates")
-		configuredSet := make(map[string]bool, len(configuredGuilds))
-		for _, g := range configuredGuilds {
-			configuredSet[g] = true
+		// Fetch guilds the bot is in via Discord API.
+		botGuilds := make(map[string]bool)
+		if botToken != "" {
+			guilds, err := fetchDiscordGuilds("Bot " + botToken)
+			if err != nil {
+				log.Printf("Failed to fetch bot guilds: %v", err)
+			} else {
+				for _, g := range guilds {
+					botGuilds[g.ID] = true
+				}
+			}
 		}
 
 		type guildInfo struct {
@@ -528,7 +536,7 @@ func handleDashboard(s3 *s3client.Client) http.HandlerFunc {
 		}
 		var guilds []guildInfo
 		for _, g := range sess.Guilds {
-			if isGuildAdmin(g.Permissions) && configuredSet[g.ID] {
+			if isGuildAdmin(g.Permissions) && botGuilds[g.ID] {
 				guilds = append(guilds, guildInfo{ID: g.ID, Name: g.Name})
 			}
 		}

@@ -86,6 +86,6 @@ func (b *Bot) handleConfigProfiles(e *events.ApplicationCommandInteractionCreate
 
 	b.Log.Info("Config profiles", "user_id", e.User().ID, "guild_id", *guildID)
 
-	url := fmt.Sprintf("%sadmin/%d/profiles", sprobot.WebEndpoint, *guildID)
+	url := fmt.Sprintf("%sadmin/%d/profiles", sprobot.WebEndpointForEnv(b.Env), *guildID)
 	botutil.RespondEphemeral(e, fmt.Sprintf("Configure profile templates for this server:\n%s", url))
 }

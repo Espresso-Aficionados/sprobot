@@ -11,8 +11,8 @@ import (
 
 const footerIconURL = "https://profile-bot.us-southeast-1.linodeobjects.com/76916743.gif"
 
-func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[string]string, guildID, userID string, s3 *s3client.Client) discord.Embed {
-	profileURL := buildProfileURL(tmpl, guildID, userID)
+func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[string]string, guildID, userID, env string, s3 *s3client.Client) discord.Embed {
+	profileURL := buildProfileURL(tmpl, guildID, userID, env)
 
 	embed := discord.Embed{
 		Title: tmpl.Name + " for " + username,
@@ -51,8 +51,8 @@ func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[strin
 	return embed
 }
 
-func buildProfileURL(tmpl sprobot.Template, guildID, userID string) string {
-	return sprobot.WebEndpoint + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
+func buildProfileURL(tmpl sprobot.Template, guildID, userID, env string) string {
+	return sprobot.WebEndpointForEnv(env) + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
 }
 
 func rgbToInt(r, g, b int) int {
