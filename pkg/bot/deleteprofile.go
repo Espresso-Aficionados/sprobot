@@ -77,8 +77,7 @@ func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
 		return
 	}
 
-	templates := sprobot.AllTemplates(b.Env)
-	for _, tmpls := range templates {
+	for _, tmpls := range b.templates {
 		for _, tmpl := range tmpls {
 			switch customID {
 			case fmt.Sprintf("del_profile_%s", tmpl.ShortName):

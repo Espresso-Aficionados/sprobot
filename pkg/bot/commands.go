@@ -14,13 +14,12 @@ import (
 )
 
 func (b *Bot) registerAllCommands() error {
-	templates := sprobot.AllTemplates(b.Env)
-	if templates == nil {
-		b.Log.Info("No templates configured for env", "env", b.Env)
+	if len(b.templates) == 0 {
+		b.Log.Info("No templates configured")
 		return nil
 	}
 
-	for guildID, tmpls := range templates {
+	for guildID, tmpls := range b.templates {
 		var commands []discord.ApplicationCommandCreate
 
 		for _, tmpl := range tmpls {
@@ -367,6 +366,19 @@ func (b *Bot) registerAllCommands() error {
 			},
 		})
 
+		// /config
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "config",
+			Description:              "Configure bot settings",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "profiles",
+					Description: "Open the profile template configuration page",
+				},
+			},
+		})
+
 		// /warn
 		reasonMaxLen := 1024
 		commands = append(commands, discord.SlashCommandCreate{
@@ -447,8 +459,7 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	templates := sprobot.AllTemplates(b.Env)
-	tmpls, ok := templates[guildID]
+	tmpls, ok := b.templates[guildID]
 	if !ok {
 		return
 	}
@@ -499,18 +510,19 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleStarboardBlacklist(e)
 	case "renamelog":
 		b.handleRenameLog(e)
+	case "config":
+		b.handleConfig(e)
 	}
 }
 
 func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
 	customID := e.Data.CustomID
 
-	templates := sprobot.AllTemplates(b.Env)
 	if e.GuildID() == nil {
 		return
 	}
 	guildID := *e.GuildID()
-	tmpls := templates[guildID]
+	tmpls := b.templates[guildID]
 
 	for _, tmpl := range tmpls {
 		if customID == fmt.Sprintf("edit_%s", tmpl.ShortName) {

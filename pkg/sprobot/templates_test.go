@@ -1,6 +1,9 @@
 package sprobot
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestProfileTemplate(t *testing.T) {
 	if ProfileTemplate.Name != "Coffee Setup" {
@@ -111,4 +114,77 @@ func TestDevAndProdGuildsDiffer(t *testing.T) {
 			t.Errorf("guild ID %d appears in both dev and prod", guildID)
 		}
 	}
+}
+
+func TestTemplateJSONRoundTrip(t *testing.T) {
+	original := []Template{ProfileTemplate, RoasterTemplate}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded []Template
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if len(decoded) != len(original) {
+		t.Fatalf("decoded %d templates, want %d", len(decoded), len(original))
+	}
+
+	for i, tmpl := range decoded {
+		orig := original[i]
+		if tmpl.Name != orig.Name {
+			t.Errorf("[%d] Name = %q, want %q", i, tmpl.Name, orig.Name)
+		}
+		if tmpl.ShortName != orig.ShortName {
+			t.Errorf("[%d] ShortName = %q, want %q", i, tmpl.ShortName, orig.ShortName)
+		}
+		if tmpl.Description != orig.Description {
+			t.Errorf("[%d] Description = %q, want %q", i, tmpl.Description, orig.Description)
+		}
+		if len(tmpl.Fields) != len(orig.Fields) {
+			t.Errorf("[%d] Fields count = %d, want %d", i, len(tmpl.Fields), len(orig.Fields))
+			continue
+		}
+		for j, f := range tmpl.Fields {
+			if f.Name != orig.Fields[j].Name {
+				t.Errorf("[%d] Fields[%d].Name = %q, want %q", i, j, f.Name, orig.Fields[j].Name)
+			}
+			if f.Placeholder != orig.Fields[j].Placeholder {
+				t.Errorf("[%d] Fields[%d].Placeholder = %q, want %q", i, j, f.Placeholder, orig.Fields[j].Placeholder)
+			}
+			if f.Style != orig.Fields[j].Style {
+				t.Errorf("[%d] Fields[%d].Style = %d, want %d", i, j, f.Style, orig.Fields[j].Style)
+			}
+		}
+		if tmpl.Image.Name != orig.Image.Name {
+			t.Errorf("[%d] Image.Name = %q, want %q", i, tmpl.Image.Name, orig.Image.Name)
+		}
+	}
+}
+
+func TestFieldJSONTags(t *testing.T) {
+	f := Field{Name: "Machine", Placeholder: "Describe your machine", Style: TextStyleLong}
+	data, err := json.Marshal(f)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	s := string(data)
+	for _, want := range []string{`"name"`, `"placeholder"`, `"style"`} {
+		if !containsString(s, want) {
+			t.Errorf("JSON %q missing key %s", s, want)
+		}
+	}
+}
+
+func containsString(haystack, needle string) bool {
+	for i := 0; i <= len(haystack)-len(needle); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
 }

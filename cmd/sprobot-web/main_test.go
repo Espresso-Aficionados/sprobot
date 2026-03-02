@@ -8,14 +8,27 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
-	pageTemplates = make(map[string]*template.Template, 3)
+	funcMap := template.FuncMap{
+		"add": func(a, b int) int { return a + b },
+		"eq":  func(a, b int) bool { return a == b },
+	}
+
+	pageTemplates = make(map[string]*template.Template)
 	for _, name := range []string{"index.html", "profile.html", "404.html"} {
-		t, err := template.ParseFS(templateFS, "templates/base.html", "templates/"+name)
+		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/"+name)
 		if err != nil {
 			log.Fatalf("Failed to parse template %s: %v", name, err)
+		}
+		pageTemplates[name] = t
+	}
+	for _, name := range []string{"login.html", "admin_dashboard.html", "admin_profiles.html"} {
+		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/"+name)
+		if err != nil {
+			log.Fatalf("Failed to parse admin template %s: %v", name, err)
 		}
 		pageTemplates[name] = t
 	}
@@ -353,6 +366,25 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersAdminCSP(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := securityHeaders(inner)
+	req := httptest.NewRequest(http.MethodGet, "/admin/123/profiles", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "script-src 'unsafe-inline'") {
+		t.Errorf("admin CSP %q should contain script-src 'unsafe-inline'", csp)
+	}
+	if !strings.Contains(csp, "form-action 'self'") {
+		t.Errorf("admin CSP %q should contain form-action 'self'", csp)
+	}
+}
+
 func TestSanitizeLog(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -402,5 +434,290 @@ func TestProfileTemplateHTMLEscaping(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;script&gt;") {
 		t.Error("expected escaped script tag")
+	}
+}
+
+// --- Session store tests ---
+
+func TestSessionStore(t *testing.T) {
+	store := newSessionStore()
+
+	sess := &session{
+		User:      discordUser{ID: "123", Username: "testuser"},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	store.Set("abc", sess)
+
+	got, ok := store.Get("abc")
+	if !ok {
+		t.Fatal("session not found")
+	}
+	if got.User.ID != "123" {
+		t.Errorf("user ID = %q, want %q", got.User.ID, "123")
+	}
+
+	// Non-existent session
+	_, ok = store.Get("xyz")
+	if ok {
+		t.Error("expected no session for key xyz")
+	}
+
+	// Delete
+	store.Delete("abc")
+	_, ok = store.Get("abc")
+	if ok {
+		t.Error("session should be deleted")
+	}
+}
+
+func TestSessionStoreExpired(t *testing.T) {
+	store := newSessionStore()
+
+	sess := &session{
+		User:      discordUser{ID: "456"},
+		ExpiresAt: time.Now().Add(-time.Hour), // already expired
+	}
+
+	store.Set("expired", sess)
+
+	_, ok := store.Get("expired")
+	if ok {
+		t.Error("expired session should not be returned")
+	}
+}
+
+func TestIsGuildAdmin(t *testing.T) {
+	tests := []struct {
+		name  string
+		perms int64
+		want  bool
+	}{
+		{"no permissions", 0, false},
+		{"administrator", 0x8, true},
+		{"manage guild", 0x20, true},
+		{"both", 0x28, true},
+		{"only send messages", 0x800, false},
+		{"admin with other perms", 0x8 | 0x400, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isGuildAdmin(tt.perms)
+			if got != tt.want {
+				t.Errorf("isGuildAdmin(0x%x) = %v, want %v", tt.perms, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAdminAuthRedirectsWithoutCookie(t *testing.T) {
+	store := newSessionStore()
+	handler := adminAuth(store, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	handler(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("status = %d, want 303", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if loc != "/admin/login" {
+		t.Errorf("Location = %q, want /admin/login", loc)
+	}
+}
+
+func TestAdminAuthRedirectsWithInvalidSession(t *testing.T) {
+	store := newSessionStore()
+	handler := adminAuth(store, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: "invalid"})
+	handler(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("status = %d, want 303", rec.Code)
+	}
+}
+
+func TestAdminAuthPassesWithValidSession(t *testing.T) {
+	store := newSessionStore()
+	store.Set("valid", &session{
+		User:      discordUser{ID: "123"},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	called := false
+	handler := adminAuth(store, func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		sess := getSession(r)
+		if sess == nil {
+			t.Error("session not in context")
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: "valid"})
+	handler(rec, req)
+
+	if !called {
+		t.Error("handler not called")
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestLoginTemplateRenders(t *testing.T) {
+	rec := httptest.NewRecorder()
+	renderPage(rec, "login.html", struct{ LoginURL string }{"https://discord.com/auth"})
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Login with Discord") {
+		t.Error("login page missing 'Login with Discord'")
+	}
+	if !strings.Contains(body, "https://discord.com/auth") {
+		t.Error("login page missing login URL")
+	}
+}
+
+func TestAdminDashboardTemplateRenders(t *testing.T) {
+	type guildInfo struct {
+		ID   string
+		Name string
+	}
+	rec := httptest.NewRecorder()
+	renderPage(rec, "admin_dashboard.html", struct {
+		Guilds []guildInfo
+	}{
+		Guilds: []guildInfo{
+			{ID: "123", Name: "Test Server"},
+		},
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Test Server") {
+		t.Error("dashboard missing guild name")
+	}
+	if !strings.Contains(body, "/admin/123/profiles") {
+		t.Error("dashboard missing guild link")
+	}
+}
+
+func TestShortNameRegex(t *testing.T) {
+	tests := []struct {
+		input string
+		valid bool
+	}{
+		{"profile", true},
+		{"roaster", true},
+		{"my-template", true},
+		{"a", true},
+		{"a1", true},
+		{"Profile", false},  // uppercase
+		{"1profile", false}, // starts with number
+		{"-profile", false}, // starts with hyphen
+		{"", false},         // empty
+		{"a b", false},      // space
+		{"profile!", false}, // special char
+		{"a234567890123456789012345678901x", true}, // 32 chars (max)
+	}
+	for _, tt := range tests {
+		got := shortNameRegex.MatchString(tt.input)
+		if got != tt.valid {
+			t.Errorf("shortNameRegex.MatchString(%q) = %v, want %v", tt.input, got, tt.valid)
+		}
+	}
+}
+
+func TestRandomSessionID(t *testing.T) {
+	id1 := randomSessionID()
+	id2 := randomSessionID()
+
+	if len(id1) != 64 { // 32 bytes → 64 hex chars
+		t.Errorf("session ID length = %d, want 64", len(id1))
+	}
+	if id1 == id2 {
+		t.Error("two random session IDs should not be equal")
+	}
+}
+
+func TestHandleLogout(t *testing.T) {
+	store := newSessionStore()
+	store.Set("mysess", &session{
+		User:      discordUser{ID: "123"},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	handler := handleLogout(store)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/logout", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: "mysess"})
+	handler(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("status = %d, want 303", rec.Code)
+	}
+
+	// Session should be deleted
+	_, ok := store.Get("mysess")
+	if ok {
+		t.Error("session should be deleted after logout")
+	}
+
+	// Check cookie is cleared
+	cookies := rec.Result().Cookies()
+	found := false
+	for _, c := range cookies {
+		if c.Name == "session" && c.MaxAge < 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("session cookie should be cleared")
+	}
+}
+
+func TestGetOAuthConfigMissing(t *testing.T) {
+	t.Setenv("DISCORD_CLIENT_ID", "")
+	t.Setenv("DISCORD_CLIENT_SECRET", "")
+	t.Setenv("DISCORD_REDIRECT_URI", "")
+
+	cfg := getOAuthConfig()
+	if cfg != nil {
+		t.Error("expected nil when env vars are missing")
+	}
+}
+
+func TestGetOAuthConfigPresent(t *testing.T) {
+	t.Setenv("DISCORD_CLIENT_ID", "123")
+	t.Setenv("DISCORD_CLIENT_SECRET", "secret")
+	t.Setenv("DISCORD_REDIRECT_URI", "https://example.com/callback")
+
+	cfg := getOAuthConfig()
+	if cfg == nil {
+		t.Fatal("expected non-nil config")
+	}
+	if cfg.ClientID != "123" {
+		t.Errorf("ClientID = %q", cfg.ClientID)
+	}
+	if cfg.ClientSecret != "secret" {
+		t.Errorf("ClientSecret = %q", cfg.ClientSecret)
+	}
+	if cfg.RedirectURI != "https://example.com/callback" {
+		t.Errorf("RedirectURI = %q", cfg.RedirectURI)
 	}
 }

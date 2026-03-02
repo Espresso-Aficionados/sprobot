@@ -17,7 +17,6 @@ import (
 
 	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/s3client"
-	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
 type posterRoleSettings struct {
@@ -208,13 +207,12 @@ func (b *Bot) clearPosterRoleTracking(guildID snowflake.ID, userIDStr string) {
 }
 
 func (b *Bot) loadPosterRole() {
-	templates := sprobot.AllTemplates(b.Env)
-	if templates == nil {
+	if len(b.templates) == 0 {
 		return
 	}
 
 	ctx := context.Background()
-	for guildID := range templates {
+	for guildID := range b.templates {
 		st := &posterRoleState{
 			Counts:  make(map[string]int),
 			Fetched: make(map[string]bool),

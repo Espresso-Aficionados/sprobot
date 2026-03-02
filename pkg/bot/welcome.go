@@ -15,7 +15,6 @@ import (
 
 	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/s3client"
-	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
 type welcomeState struct {
@@ -25,13 +24,12 @@ type welcomeState struct {
 }
 
 func (b *Bot) loadWelcome() {
-	templates := sprobot.AllTemplates(b.Env)
-	if templates == nil {
+	if len(b.templates) == 0 {
 		return
 	}
 
 	ctx := context.Background()
-	for guildID := range templates {
+	for guildID := range b.templates {
 		st := &welcomeState{}
 
 		data, err := b.S3.FetchGuildJSON(ctx, "welcome", fmt.Sprintf("%d", guildID))

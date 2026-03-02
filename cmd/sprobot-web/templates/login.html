@@ -1,0 +1,30 @@
+{{define "title"}}Login - sprobot{{end}}
+{{define "extra_css"}}
+        .login-box {
+            text-align: center;
+            padding: 40px 20px;
+        }
+        .login-box p {
+            margin-bottom: 24px;
+            color: #b5bac1;
+        }
+        .discord-btn {
+            display: inline-block;
+            background-color: #5865F2;
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 4px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 1em;
+        }
+        .discord-btn:hover {
+            background-color: #4752C4;
+        }
+{{end}}
+{{define "content"}}
+    <div class="login-box">
+        <p>Sign in with Discord to manage bot settings for your server.</p>
+        <a class="discord-btn" href="{{.LoginURL}}">Login with Discord</a>
+    </div>
+{{end}}

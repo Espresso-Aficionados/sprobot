@@ -46,6 +46,28 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	key := r.URL.Path
 
+	// Handle ListObjectsV2
+	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
+		prefix := r.URL.Query().Get("prefix")
+		// The prefix includes the bucket from the path
+		bucket := strings.TrimPrefix(key, "/")
+		bucket = strings.TrimSuffix(bucket, "/")
+		fullPrefix := "/" + bucket + "/" + prefix
+
+		var contents strings.Builder
+		for objKey := range f.objects {
+			if strings.HasPrefix(objKey, fullPrefix) {
+				bareKey := strings.TrimPrefix(objKey, "/"+bucket+"/")
+				contents.WriteString(fmt.Sprintf("<Contents><Key>%s</Key></Contents>", bareKey))
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>%s</ListBucketResult>`, contents.String())
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		data, ok := f.objects[key]
@@ -932,5 +954,89 @@ func TestPresignExistingOldFullURL(t *testing.T) {
 	got := c.PresignExisting(context.Background(), oldURL)
 	if !strings.Contains(got, "X-Amz-") {
 		t.Errorf("PresignExisting(old URL) = %q, should contain presign params", got)
+	}
+}
+
+func TestListGuildJSONKeys(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	// Seed some config_templates files
+	fake.mu.Lock()
+	fake.objects["/test-bucket/config_templates/111.json"] = []byte(`[]`)
+	fake.objects["/test-bucket/config_templates/222.json"] = []byte(`[]`)
+	fake.objects["/test-bucket/config_templates/333.json"] = []byte(`[]`)
+	fake.mu.Unlock()
+
+	got, err := c.ListGuildJSONKeys(context.Background(), "config_templates")
+	if err != nil {
+		t.Fatalf("ListGuildJSONKeys: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("expected 3 keys, got %d: %v", len(got), got)
+	}
+
+	// Check all IDs are present
+	ids := make(map[string]bool)
+	for _, id := range got {
+		ids[id] = true
+	}
+	for _, want := range []string{"111", "222", "333"} {
+		if !ids[want] {
+			t.Errorf("missing guild ID %q in results %v", want, got)
+		}
+	}
+}
+
+func TestListGuildJSONKeysEmpty(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	got, err := c.ListGuildJSONKeys(context.Background(), "config_templates")
+	if err != nil {
+		t.Fatalf("ListGuildJSONKeys: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 keys, got %d: %v", len(got), got)
+	}
+}
+
+func TestFetchAndSaveTemplates(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	data := []byte(`[{"name":"Coffee Setup","short_name":"profile"}]`)
+	if err := c.SaveTemplates(context.Background(), "123", data); err != nil {
+		t.Fatalf("SaveTemplates: %v", err)
+	}
+
+	got, err := c.FetchTemplates(context.Background(), "123")
+	if err != nil {
+		t.Fatalf("FetchTemplates: %v", err)
+	}
+	if string(got) != string(data) {
+		t.Errorf("round trip mismatch: got %q, want %q", string(got), string(data))
+	}
+}
+
+func TestFetchTemplatesNotFound(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	_, err := c.FetchTemplates(context.Background(), "missing")
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }

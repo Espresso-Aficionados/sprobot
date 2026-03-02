@@ -560,6 +560,40 @@ func (c *Client) SaveGuildJSON(ctx context.Context, prefix, guildID string, data
 	return nil
 }
 
+// ListGuildJSONKeys lists guild IDs that have a {prefix}/{guildID}.json file in S3.
+func (c *Client) ListGuildJSONKeys(ctx context.Context, prefix string) ([]string, error) {
+	listPrefix := prefix + "/"
+	out, err := c.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket: &c.bucket,
+		Prefix: &listPrefix,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing %s keys: %w", prefix, err)
+	}
+
+	var guildIDs []string
+	for _, obj := range out.Contents {
+		if obj.Key == nil {
+			continue
+		}
+		k := *obj.Key
+		k = strings.TrimPrefix(k, listPrefix)
+		k = strings.TrimSuffix(k, ".json")
+		if k != "" && !strings.Contains(k, "/") {
+			guildIDs = append(guildIDs, k)
+		}
+	}
+	return guildIDs, nil
+}
+
+func (c *Client) FetchTemplates(ctx context.Context, guildID string) ([]byte, error) {
+	return c.FetchGuildJSON(ctx, "config_templates", guildID)
+}
+
+func (c *Client) SaveTemplates(ctx context.Context, guildID string, data []byte) error {
+	return c.SaveGuildJSON(ctx, "config_templates", guildID, data)
+}
+
 func (c *Client) FetchStickies(ctx context.Context, guildID string) ([]byte, error) {
 	return c.FetchGuildJSON(ctx, "stickies", guildID)
 }

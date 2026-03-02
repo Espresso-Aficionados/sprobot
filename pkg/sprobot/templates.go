@@ -10,17 +10,17 @@ const (
 )
 
 type Field struct {
-	Name        string
-	Placeholder string
-	Style       TextStyle
+	Name        string    `json:"name"`
+	Placeholder string    `json:"placeholder"`
+	Style       TextStyle `json:"style"`
 }
 
 type Template struct {
-	Name        string
-	ShortName   string
-	Description string
-	Fields      []Field
-	Image       Field
+	Name        string  `json:"name"`
+	ShortName   string  `json:"short_name"`
+	Description string  `json:"description"`
+	Fields      []Field `json:"fields"`
+	Image       Field   `json:"image"`
 }
 
 var ProfileTemplate = Template{

@@ -15,6 +15,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
+	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
 type Bot struct {
@@ -34,6 +35,7 @@ type Bot struct {
 	starboard        map[snowflake.ID]*starboardState
 	topPostersConfig map[snowflake.ID]topPostersConfig
 	renameLogs       map[snowflake.ID]*renameLogState
+	templates        map[snowflake.ID][]sprobot.Template
 	eventLogConfig   map[snowflake.ID]eventLogChannelConfig
 	starboardConfig  map[snowflake.ID]starboardStaticConfig
 	autoRoleID       snowflake.ID
@@ -61,6 +63,7 @@ func New(token string) (*Bot, error) {
 		welcomeSent:      make(map[snowflake.ID]time.Time),
 		starboard:        make(map[snowflake.ID]*starboardState),
 		renameLogs:       make(map[snowflake.ID]*renameLogState),
+		templates:        make(map[snowflake.ID][]sprobot.Template),
 		msgCache:         msgCache,
 		memberCache:      memberCache,
 		topPostersConfig: getTopPostersConfig(base.Env),
@@ -131,6 +134,7 @@ func (b *Bot) Run() error {
 	}
 	defer b.Client.Close(ctx)
 
+	b.loadTemplates()
 	b.loadTopPosters()
 	b.loadPosterRole()
 	b.loadTickets()
