@@ -342,6 +342,24 @@ func (b *Bot) handleTicketOpen(e *events.ComponentInteractionCreate) {
 	})
 
 	b.Log.Info("Opened ticket", "guild_id", *guildID, "thread_id", thread.ID(), "user_id", userID, "ticket_num", ticketNum)
+
+	// Log non-staff ticket opens to the user's mod log thread.
+	isStaff := false
+	if member := e.Member(); member != nil {
+		for _, roleID := range member.RoleIDs {
+			if roleID == cfg.StaffRoleID {
+				isStaff = true
+				break
+			}
+		}
+	}
+	if !isStaff {
+		user := e.User()
+		b.crossPostToModLog(*guildID, user, discord.Embed{
+			Title:       "Ticket Opened",
+			Description: fmt.Sprintf("<@%d> opened **%s**: <#%d>", userID, threadName, thread.ID()),
+		})
+	}
 }
 
 func (b *Bot) handleTicketCloseConfirm(e *events.ComponentInteractionCreate) {
