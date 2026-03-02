@@ -263,18 +263,24 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handleIndex)
-	mux.HandleFunc("GET /{bucket}/profiles/{guildID}/{templateName}/{userID}", handleProfile(s3))
+	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}", handleProfile(s3))
 
 	// Admin routes
 	if oauth != nil {
 		mux.HandleFunc("GET /admin/login", handleLogin(oauth))
 		mux.HandleFunc("GET /auth/callback", handleCallback(oauth, sessions))
 		mux.HandleFunc("GET /admin/logout", handleLogout(sessions))
-		mux.HandleFunc("GET /admin/", adminAuth(sessions, handleDashboard(s3)))
+		mux.HandleFunc("GET /admin/{$}", adminAuth(sessions, handleDashboard(s3)))
 		mux.HandleFunc("GET /admin/{guildID}/profiles", adminAuth(sessions, handleAdminProfiles(s3)))
 		mux.HandleFunc("POST /admin/{guildID}/profiles", adminAuth(sessions, handleSaveProfiles(s3)))
 	} else {
 		log.Println("DISCORD_CLIENT_ID/SECRET/REDIRECT_URI not set — admin routes disabled")
+		adminDisabled := func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "Admin dashboard is not configured. Set DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, and DISCORD_REDIRECT_URI.", http.StatusServiceUnavailable)
+		}
+		mux.HandleFunc("GET /admin/{$}", adminDisabled)
+		mux.HandleFunc("GET /admin/login", adminDisabled)
+		mux.HandleFunc("GET /admin/{guildID}/profiles", adminDisabled)
 	}
 
 	port := os.Getenv("PORT")

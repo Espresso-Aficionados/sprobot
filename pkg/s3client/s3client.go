@@ -309,7 +309,7 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 	key := cacheKey(tmpl.Name, guildID, userID)
 	c.cache.Add(key, profile)
 
-	webURL = sprobot.WebEndpoint + url.PathEscape(c.bucket+"/"+s3Path)
+	webURL = sprobot.WebEndpoint + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
 	c.log.Info("Profile saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "profile_url", webURL)
 
 	return webURL, userErr, nil

@@ -19,6 +19,22 @@ func TestProfileS3Path(t *testing.T) {
 	}
 }
 
+func TestProfileWebPath(t *testing.T) {
+	tests := []struct {
+		guildID, templateName, userID, want string
+	}{
+		{"123", "Coffee Setup", "456", "profiles/123/Coffee%20Setup/456"},
+		{"999", "Roasting Setup", "111", "profiles/999/Roasting%20Setup/111"},
+	}
+	for _, tt := range tests {
+		got := ProfileWebPath(tt.guildID, tt.templateName, tt.userID)
+		if got != tt.want {
+			t.Errorf("ProfileWebPath(%q, %q, %q) = %q, want %q",
+				tt.guildID, tt.templateName, tt.userID, got, tt.want)
+		}
+	}
+}
+
 func TestConstants(t *testing.T) {
 	if ImageField != "Gear Picture" {
 		t.Errorf("ImageField = %q, want %q", ImageField, "Gear Picture")
