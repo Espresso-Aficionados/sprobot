@@ -116,7 +116,7 @@ func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 		for _, key := range keys {
 			value := profile[key]
 			if key == sprobot.ImageField && value != "" {
-				imageURL = value
+				imageURL = s3.PresignExisting(r.Context(), value)
 			} else {
 				fields = append(fields, profileField{Name: key, Value: value})
 			}

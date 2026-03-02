@@ -1,13 +1,35 @@
 package bot
 
 import (
+	"io"
+	"log/slog"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/disgoorg/disgo/discord"
+	lru "github.com/hashicorp/golang-lru/v2"
 
+	"github.com/sadbox/sprobot/pkg/s3client"
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
+
+func newTestS3(t *testing.T) *s3client.Client {
+	t.Helper()
+	server := httptest.NewServer(nil)
+	t.Cleanup(server.Close)
+	endpoint := server.URL
+	cache, _ := lru.New[string, map[string]string](10)
+	client := s3.New(s3.Options{
+		Region:       "us-east-1",
+		BaseEndpoint: &endpoint,
+		Credentials:  credentials.NewStaticCredentialsProvider("key", "secret", ""),
+		UsePathStyle: true,
+	})
+	return s3client.NewDirect(client, "test-bucket", endpoint, cache, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
 
 func TestBuildProfileEmbedBasic(t *testing.T) {
 	profile := map[string]string{
@@ -16,7 +38,7 @@ func TestBuildProfileEmbedBasic(t *testing.T) {
 		"Gear Picture": "https://example.com/image.png",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "testuser", profile, "123", "456", "test-bucket")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "testuser", profile, "123", "456", "test-bucket", newTestS3(t))
 
 	if embed.Title != "Coffee Setup for testuser" {
 		t.Errorf("Title = %q, want %q", embed.Title, "Coffee Setup for testuser")
@@ -42,7 +64,7 @@ func TestBuildProfileEmbedFields(t *testing.T) {
 		"Favorite Beans": "Ethiopian Yirgacheffe",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket", newTestS3(t))
 
 	fieldNames := make(map[string]string)
 	for _, f := range embed.Fields {
@@ -66,7 +88,7 @@ func TestBuildProfileEmbedSkipsEmptyFields(t *testing.T) {
 		"Grinder": "",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket", newTestS3(t))
 
 	for _, f := range embed.Fields {
 		if f.Name == "Grinder" {
@@ -80,13 +102,13 @@ func TestBuildProfileEmbedWithImage(t *testing.T) {
 		"Gear Picture": "https://example.com/photo.jpg",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket", newTestS3(t))
 
 	if embed.Image == nil {
 		t.Fatal("Image is nil when profile has image")
 	}
-	if !strings.HasPrefix(embed.Image.URL, "https://example.com/photo.jpg?") {
-		t.Errorf("Image URL = %q, should start with the image URL + cache buster", embed.Image.URL)
+	if embed.Image.URL != "https://example.com/photo.jpg" {
+		t.Errorf("Image URL = %q, want external URL unchanged", embed.Image.URL)
 	}
 }
 
@@ -95,7 +117,7 @@ func TestBuildProfileEmbedWithoutImage(t *testing.T) {
 		"Machine": "Rocket",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket", newTestS3(t))
 
 	if embed.Image != nil {
 		t.Error("Image should be nil when no image in profile")
@@ -118,27 +140,13 @@ func TestBuildProfileEmbedWithoutImage(t *testing.T) {
 
 func TestBuildProfileEmbedURL(t *testing.T) {
 	profile := map[string]string{}
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "my-bucket")
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "my-bucket", newTestS3(t))
 
 	if !strings.HasPrefix(embed.URL, sprobot.WebEndpoint) {
 		t.Errorf("embed URL %q should start with %q", embed.URL, sprobot.WebEndpoint)
 	}
 	if !strings.Contains(embed.URL, "my-bucket") {
 		t.Errorf("embed URL %q should contain bucket name", embed.URL)
-	}
-}
-
-func TestBuildProfileEmbedImageCacheBuster(t *testing.T) {
-	profile := map[string]string{
-		"Gear Picture": "https://example.com/photo.jpg",
-	}
-
-	embed1 := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
-	embed2 := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "test-bucket")
-
-	// The cache buster query param should differ between calls (probabilistically)
-	if embed1.Image.URL == embed2.Image.URL {
-		t.Error("image URLs should have different cache-busting params")
 	}
 }
 
@@ -158,18 +166,6 @@ func TestRgbToInt(t *testing.T) {
 		got := rgbToInt(tt.r, tt.g, tt.b)
 		if got != tt.want {
 			t.Errorf("rgbToInt(%d, %d, %d) = 0x%06X, want 0x%06X", tt.r, tt.g, tt.b, got, tt.want)
-		}
-	}
-}
-
-func TestRandomLetters(t *testing.T) {
-	s := randomLetters(10)
-	if len(s) != 10 {
-		t.Errorf("randomLetters(10) length = %d, want 10", len(s))
-	}
-	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
-			t.Errorf("randomLetters contains non-letter: %c", c)
 		}
 	}
 }

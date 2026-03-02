@@ -1,17 +1,18 @@
 package bot
 
 import (
-	"math/rand/v2"
+	"context"
 	"net/url"
 
 	"github.com/disgoorg/disgo/discord"
 
+	"github.com/sadbox/sprobot/pkg/s3client"
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
 const footerIconURL = "https://profile-bot.us-southeast-1.linodeobjects.com/76916743.gif"
 
-func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[string]string, guildID, userID, bucket string) discord.Embed {
+func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[string]string, guildID, userID, bucket string, s3 *s3client.Client) discord.Embed {
 	profileURL := buildProfileURL(tmpl, guildID, userID, bucket)
 
 	embed := discord.Embed{
@@ -32,8 +33,9 @@ func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[strin
 	}
 
 	if img, ok := profile[tmpl.Image.Name]; ok && img != "" {
+		img = s3.PresignExisting(context.Background(), img)
 		embed.Image = &discord.EmbedResource{
-			URL: img + "?" + randomLetters(10),
+			URL: img,
 		}
 	} else {
 		embed.Fields = append(embed.Fields, discord.EmbedField{
@@ -57,13 +59,4 @@ func buildProfileURL(tmpl sprobot.Template, guildID, userID, bucket string) stri
 
 func rgbToInt(r, g, b int) int {
 	return (r << 16) | (g << 8) | b
-}
-
-func randomLetters(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	buf := make([]byte, n)
-	for i := range buf {
-		buf[i] = letters[rand.IntN(len(letters))]
-	}
-	return string(buf)
 }

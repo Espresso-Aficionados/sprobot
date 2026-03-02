@@ -132,6 +132,7 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 				b.Log.Error("Failed to save mod image", "error", err)
 				permLinks = append(permLinks, att.ProxyURL)
 			} else {
+				permLink = b.S3.PresignExisting(ctx, permLink)
 				permLinks = append(permLinks, permLink)
 			}
 		}

@@ -109,7 +109,7 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	}
 
 	username := getNickOrName(e.Member())
-	embed := buildProfileEmbed(tmpl, username, profile, guildStr, userStr, b.S3.Bucket())
+	embed := buildProfileEmbed(tmpl, username, profile, guildStr, userStr, b.S3.Bucket(), b.S3)
 	err = e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 		Flags:  discord.MessageFlagEphemeral,

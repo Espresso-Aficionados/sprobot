@@ -90,11 +90,12 @@ func newTestClient(t *testing.T, server *httptest.Server) *Client {
 	})
 
 	return &Client{
-		s3:       client,
-		bucket:   bucket,
-		endpoint: endpoint,
-		cache:    cache,
-		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		s3:        client,
+		presigner: s3.NewPresignClient(client),
+		bucket:    bucket,
+		endpoint:  endpoint,
+		cache:     cache,
+		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -350,7 +351,7 @@ func TestSaveProfileWithImageDownload(t *testing.T) {
 		t.Errorf("unexpected userErr: %q", userErr)
 	}
 
-	// The image should have been re-hosted — the profile's Gear Picture should now point at our endpoint
+	// The image should have been re-hosted — the profile's Gear Picture should now be a bare S3 key
 	key := "/test-bucket/profiles/123/Coffee Setup/456.json"
 	fake.mu.Lock()
 	data := fake.objects[key]
@@ -359,8 +360,8 @@ func TestSaveProfileWithImageDownload(t *testing.T) {
 	var saved map[string]string
 	json.Unmarshal(data, &saved)
 	if savedImg := saved["Gear Picture"]; savedImg != "" {
-		if !strings.HasPrefix(savedImg, server.URL) {
-			t.Errorf("re-hosted image URL %q doesn't start with endpoint %q", savedImg, server.URL)
+		if !strings.HasPrefix(savedImg, "images/") {
+			t.Errorf("re-hosted image key %q doesn't start with images/", savedImg)
 		}
 	}
 }
@@ -495,11 +496,11 @@ func TestSaveModImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveModImage: %v", err)
 	}
-	if !strings.HasPrefix(got, server.URL) {
-		t.Errorf("result URL %q should start with endpoint %q", got, server.URL)
+	if !strings.HasPrefix(got, "mod_files/") {
+		t.Errorf("result key %q should start with mod_files/", got)
 	}
-	if !strings.Contains(got, "mod_files") {
-		t.Errorf("result URL %q should contain mod_files", got)
+	if !strings.HasSuffix(got, ".jpg") {
+		t.Errorf("result key %q should end with .jpg", got)
 	}
 }
 
@@ -544,22 +545,6 @@ func TestCacheKey(t *testing.T) {
 	k := cacheKey("Coffee Setup", "123", "456")
 	if k != "Coffee Setup/123/456" {
 		t.Errorf("cacheKey = %q, want %q", k, "Coffee Setup/123/456")
-	}
-}
-
-func TestBuildS3URL(t *testing.T) {
-	fake := newFakeS3()
-	server := httptest.NewServer(fake)
-	defer server.Close()
-
-	c := newTestClient(t, server)
-
-	got := c.buildS3URL("images/123/Coffee Setup/456.png")
-	if !strings.HasPrefix(got, server.URL) {
-		t.Errorf("buildS3URL result %q should start with endpoint", got)
-	}
-	if !strings.Contains(got, "test-bucket") {
-		t.Errorf("buildS3URL result %q should contain bucket name", got)
 	}
 }
 
@@ -679,11 +664,11 @@ func TestSaveStickyFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveStickyFile: %v", err)
 	}
-	if !strings.HasPrefix(got, server.URL) {
-		t.Errorf("result URL %q should start with endpoint %q", got, server.URL)
+	if !strings.HasPrefix(got, "sticky_files/") {
+		t.Errorf("result key %q should start with sticky_files/", got)
 	}
-	if !strings.Contains(got, "sticky_files") {
-		t.Errorf("result URL %q should contain sticky_files", got)
+	if !strings.HasSuffix(got, ".png") {
+		t.Errorf("result key %q should end with .png", got)
 	}
 }
 
@@ -890,5 +875,62 @@ func TestFetchGuildJSONNotFound(t *testing.T) {
 	_, err := c.FetchGuildJSON(context.Background(), "testprefix", "missing")
 	if err != ErrNotFound {
 		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestPresignExistingEmpty(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	got := c.PresignExisting(context.Background(), "")
+	if got != "" {
+		t.Errorf("PresignExisting('') = %q, want empty", got)
+	}
+}
+
+func TestPresignExistingExternalURL(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	ext := "https://cdn.discord.com/attachments/123/456/photo.png"
+	got := c.PresignExisting(context.Background(), ext)
+	if got != ext {
+		t.Errorf("PresignExisting(external) = %q, want %q", got, ext)
+	}
+}
+
+func TestPresignExistingBareKey(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	got := c.PresignExisting(context.Background(), "images/123/Coffee Setup/456.png")
+	if !strings.HasPrefix(got, "http") {
+		t.Errorf("PresignExisting(bare key) = %q, should be a full URL", got)
+	}
+	if !strings.Contains(got, "X-Amz-") {
+		t.Errorf("PresignExisting(bare key) = %q, should contain presign params", got)
+	}
+}
+
+func TestPresignExistingOldFullURL(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	oldURL := server.URL + "/test-bucket/images%2F123%2FCoffee+Setup%2F456.png"
+	got := c.PresignExisting(context.Background(), oldURL)
+	if !strings.Contains(got, "X-Amz-") {
+		t.Errorf("PresignExisting(old URL) = %q, should contain presign params", got)
 	}
 }

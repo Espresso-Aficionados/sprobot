@@ -69,11 +69,12 @@ func isNotFound(err error) bool {
 }
 
 type Client struct {
-	s3       *s3.Client
-	bucket   string
-	endpoint string
-	cache    *lru.Cache[string, map[string]string]
-	log      *slog.Logger
+	s3        *s3.Client
+	presigner *s3.PresignClient
+	bucket    string
+	endpoint  string
+	cache     *lru.Cache[string, map[string]string]
+	log       *slog.Logger
 }
 
 func New() (*Client, error) {
@@ -108,28 +109,88 @@ func New() (*Client, error) {
 	})
 
 	return &Client{
-		s3:       client,
-		bucket:   bucket,
-		endpoint: endpoint,
-		cache:    cache,
-		log:      slog.Default(),
+		s3:        client,
+		presigner: s3.NewPresignClient(client),
+		bucket:    bucket,
+		endpoint:  endpoint,
+		cache:     cache,
+		log:       slog.Default(),
 	}, nil
 }
 
 // NewDirect creates a Client with explicitly provided dependencies.
 func NewDirect(s3Client *s3.Client, bucket, endpoint string, cache *lru.Cache[string, map[string]string], log *slog.Logger) *Client {
 	return &Client{
-		s3:       s3Client,
-		bucket:   bucket,
-		endpoint: endpoint,
-		cache:    cache,
-		log:      log,
+		s3:        s3Client,
+		presigner: s3.NewPresignClient(s3Client),
+		bucket:    bucket,
+		endpoint:  endpoint,
+		cache:     cache,
+		log:       log,
 	}
 }
 
 // Bucket returns the configured S3 bucket name.
 func (c *Client) Bucket() string {
 	return c.bucket
+}
+
+// PresignedURL returns a presigned GET URL for the given S3 key with a 5-minute expiry.
+func (c *Client) PresignedURL(ctx context.Context, s3Key string) (string, error) {
+	out, err := c.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: &c.bucket,
+		Key:    &s3Key,
+	}, func(opts *s3.PresignOptions) {
+		opts.Expires = 5 * time.Minute
+	})
+	if err != nil {
+		return "", fmt.Errorf("presigning %q: %w", s3Key, err)
+	}
+	return out.URL, nil
+}
+
+// PresignExisting generates a presigned URL for a value that may be a bare S3
+// key, a full S3 URL from the old public-read scheme, or an external URL.
+//   - Empty string → returns ""
+//   - Starts with "{endpoint}/{bucket}/" → extracts key, presigns
+//   - Does NOT start with "http" → treated as bare S3 key, presigns
+//   - Otherwise (external URL) → returned unchanged
+//
+// Best-effort: logs errors and returns the input on failure.
+func (c *Client) PresignExisting(ctx context.Context, urlOrKey string) string {
+	if urlOrKey == "" {
+		return ""
+	}
+
+	// Old-style full S3 URL: extract the key portion.
+	prefix := strings.TrimRight(c.endpoint, "/") + "/" + c.bucket + "/"
+	if strings.HasPrefix(urlOrKey, prefix) {
+		raw := strings.TrimPrefix(urlOrKey, prefix)
+		key, err := url.PathUnescape(raw)
+		if err != nil {
+			c.log.Error("PresignExisting: failed to unescape key", "raw", raw, "error", err)
+			return urlOrKey
+		}
+		presigned, err := c.PresignedURL(ctx, key)
+		if err != nil {
+			c.log.Error("PresignExisting: presign failed", "key", key, "error", err)
+			return urlOrKey
+		}
+		return presigned
+	}
+
+	// Bare S3 key (not an HTTP URL).
+	if !strings.HasPrefix(urlOrKey, "http") {
+		presigned, err := c.PresignedURL(ctx, urlOrKey)
+		if err != nil {
+			c.log.Error("PresignExisting: presign failed", "key", urlOrKey, "error", err)
+			return urlOrKey
+		}
+		return presigned
+	}
+
+	// External URL — return unchanged.
+	return urlOrKey
 }
 
 func cacheKey(templateName, guildID, userID string) string {
@@ -310,22 +371,20 @@ func (c *Client) SaveModImage(ctx context.Context, guildID string, fileURL strin
 		Bucket: &c.bucket,
 		Key:    &s3Path,
 		Body:   bytes.NewReader(data),
-		ACL:    s3types.ObjectCannedACLPublicRead,
 	})
 	if err != nil {
 		c.log.Info("Unable to upload to s3", "error", err)
 		return fileURL, nil
 	}
 
-	s3FinalURL := c.buildS3URL(s3Path)
-	c.log.Info("Mod image saved", "guild_id", guildID, "s3_url", s3FinalURL)
-	return s3FinalURL, nil
+	c.log.Info("Mod image saved", "guild_id", guildID, "s3_key", s3Path)
+	return s3Path, nil
 }
 
 func (c *Client) SaveShortcutImage(ctx context.Context, guildID string, fileURL string) (string, error) {
 	c.log.Info("Saving shortcut image", "guild_id", guildID)
 
-	if strings.HasPrefix(fileURL, c.endpoint) {
+	if strings.HasPrefix(fileURL, c.endpoint) || !strings.HasPrefix(fileURL, "http") {
 		return fileURL, nil
 	}
 
@@ -360,16 +419,14 @@ func (c *Client) SaveShortcutImage(ctx context.Context, guildID string, fileURL 
 		Bucket: &c.bucket,
 		Key:    &s3Path,
 		Body:   bytes.NewReader(data),
-		ACL:    s3types.ObjectCannedACLPublicRead,
 	})
 	if err != nil {
 		c.log.Info("Unable to upload to s3", "error", err)
 		return fileURL, nil
 	}
 
-	s3FinalURL := c.buildS3URL(s3Path)
-	c.log.Info("Shortcut image saved", "guild_id", guildID, "s3_url", s3FinalURL)
-	return s3FinalURL, nil
+	c.log.Info("Shortcut image saved", "guild_id", guildID, "s3_key", s3Path)
+	return s3Path, nil
 }
 
 func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guildID, userID string, profile map[string]string) (userErr string, s3URL string) {
@@ -378,7 +435,7 @@ func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guild
 		return "", ""
 	}
 
-	if strings.HasPrefix(maybeURL, c.endpoint) {
+	if strings.HasPrefix(maybeURL, c.endpoint) || !strings.HasPrefix(maybeURL, "http") {
 		return "", maybeURL
 	}
 
@@ -422,20 +479,13 @@ func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guild
 		Bucket: &c.bucket,
 		Key:    &s3Path,
 		Body:   bytes.NewReader(data),
-		ACL:    s3types.ObjectCannedACLPublicRead,
 	})
 	if err != nil {
 		return "Unable to save image. The rest of your profile has been saved.", ""
 	}
 
-	s3FinalURL := c.buildS3URL(s3Path)
-	c.log.Info("Profile image saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "s3_url", s3FinalURL)
-	return "", s3FinalURL
-}
-
-func (c *Client) buildS3URL(s3Path string) string {
-	base := strings.TrimRight(c.endpoint, "/")
-	return base + "/" + c.bucket + "/" + url.PathEscape(s3Path)
+	c.log.Info("Profile image saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "s3_key", s3Path)
+	return "", s3Path
 }
 
 func (c *Client) FetchTopPosters(ctx context.Context, guildID string) (map[string]map[string]int, error) {
@@ -562,13 +612,12 @@ func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (s
 		Bucket: &c.bucket,
 		Key:    &s3Path,
 		Body:   bytes.NewReader(data),
-		ACL:    s3types.ObjectCannedACLPublicRead,
 	})
 	if err != nil {
 		return "", fmt.Errorf("uploading to s3: %w", err)
 	}
 
-	return c.buildS3URL(s3Path), nil
+	return s3Path, nil
 }
 
 func randomString(n int) string {

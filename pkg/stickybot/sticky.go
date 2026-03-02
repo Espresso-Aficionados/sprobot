@@ -177,9 +177,19 @@ func (b *Bot) repostSticky(s *stickyMessage) bool {
 		_ = b.Client.Rest.DeleteMessage(s.ChannelID, s.LastMessageID)
 	}
 
+	embeds := make([]discord.Embed, len(s.Embeds))
+	copy(embeds, s.Embeds)
+	for i := range embeds {
+		if embeds[i].Image != nil {
+			embeds[i].Image = &discord.EmbedResource{
+				URL: b.S3.PresignExisting(context.Background(), embeds[i].Image.URL),
+			}
+		}
+	}
+
 	msg := discord.MessageCreate{
 		Content: s.Content,
-		Embeds:  s.Embeds,
+		Embeds:  embeds,
 	}
 
 	sent, err := botutil.PostWithRetry(b.Client.Rest, s.ChannelID, msg, b.Log)
