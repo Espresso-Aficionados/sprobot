@@ -110,78 +110,6 @@ func (b *Bot) registerAllCommands() error {
 			},
 		})
 
-		// /sconfig
-		commands = append(commands, discord.SlashCommandCreate{
-			Name:                     "sconfig",
-			Description:              "Configure shortcuts",
-			DefaultMemberPermissions: omit.NewPtr(perm),
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "set",
-					Description: "Set a shortcut with one or more responses",
-					Options: []discord.ApplicationCommandOption{
-						discord.ApplicationCommandOptionString{
-							Name:         "shortcut",
-							Description:  "Shortcut name",
-							Required:     true,
-							Autocomplete: true,
-							MaxLength:    &shortcutMaxLen,
-						},
-					},
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "remove",
-					Description: "Remove a shortcut",
-					Options: []discord.ApplicationCommandOption{
-						discord.ApplicationCommandOptionString{
-							Name:         "shortcut",
-							Description:  "Shortcut name",
-							Required:     true,
-							Autocomplete: true,
-							MaxLength:    &shortcutMaxLen,
-						},
-					},
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "list",
-					Description: "List all shortcuts",
-				},
-			},
-		})
-
-		// /welcome
-		commands = append(commands, discord.SlashCommandCreate{
-			Name:                     "welcome",
-			Description:              "Configure welcome DM for new members",
-			DefaultMemberPermissions: omit.NewPtr(perm),
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "set",
-					Description: "Set the welcome message",
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "clear",
-					Description: "Clear the welcome message",
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "show",
-					Description: "Show the current welcome message",
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "test",
-					Description: "Send yourself the welcome DM",
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "enable",
-					Description: "Enable welcome DM for new members",
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "disable",
-					Description: "Disable welcome DM without clearing the message",
-				},
-			},
-		})
-
 		// /topposters
 		if _, ok := b.topPostersConfig[guildID]; ok {
 			commands = append(commands, discord.SlashCommandCreate{
@@ -219,117 +147,166 @@ func (b *Bot) registerAllCommands() error {
 				},
 			},
 		})
-		commands = append(commands, discord.SlashCommandCreate{
-			Name:                     "marketconfig",
-			Description:              "Configure marketplace poster role",
-			DefaultMemberPermissions: omit.NewPtr(perm),
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "set",
-					Description: "Update marketplace settings",
-					Options: []discord.ApplicationCommandOption{
-						discord.ApplicationCommandOptionRole{
-							Name:        "role",
-							Description: "Role to grant when threshold is reached",
-						},
-						discord.ApplicationCommandOptionInt{
-							Name:        "threshold",
-							Description: "Number of posts required (1-10000)",
-							MinValue:    intPtr(1),
-							MaxValue:    intPtr(10000),
-						},
-					},
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "show",
-					Description: "Show current marketplace configuration",
-				},
-			},
-		})
-		commands = append(commands, discord.SlashCommandCreate{
-			Name:                     "marketblacklist",
-			Description:              "Manage marketplace channel blacklist",
-			DefaultMemberPermissions: omit.NewPtr(perm),
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "add",
-					Description: "Add a channel to the blacklist",
-					Options: []discord.ApplicationCommandOption{
-						discord.ApplicationCommandOptionChannel{
-							Name:        "channel",
-							Description: "Channel to blacklist",
-							Required:    true,
-						},
-					},
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "remove",
-					Description: "Remove a channel from the blacklist",
-					Options: []discord.ApplicationCommandOption{
-						discord.ApplicationCommandOptionChannel{
-							Name:        "channel",
-							Description: "Channel to remove from blacklist",
-							Required:    true,
-						},
-					},
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "list",
-					Description: "List all blacklisted channels",
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "clear",
-					Description: "Remove all channels from the blacklist",
-				},
-			},
-		})
 
-		// /sbconfig and /sbblacklist
+		// /config — consolidated configuration command
 		emojiMaxLen := 50
-		if _, ok := b.starboardConfig[guildID]; ok {
-			commands = append(commands, discord.SlashCommandCreate{
-				Name:                     "sbconfig",
-				Description:              "Configure starboard",
-				DefaultMemberPermissions: omit.NewPtr(perm),
-				Options: []discord.ApplicationCommandOption{
-					discord.ApplicationCommandOptionSubCommand{
+		configOpts := []discord.ApplicationCommandOption{
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "profiles",
+				Description: "Open the profile template configuration page",
+			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "selfroles",
+				Description: "Open the self-assign roles configuration page",
+			},
+			discord.ApplicationCommandOptionSubCommand{
+				Name:        "tickets",
+				Description: "Open the ticket system configuration page",
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "shortcuts",
+				Description: "Configure shortcuts",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
 						Name:        "set",
-						Description: "Update starboard settings",
+						Description: "Set a shortcut with one or more responses",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionString{
+								Name:         "shortcut",
+								Description:  "Shortcut name",
+								Required:     true,
+								Autocomplete: true,
+								MaxLength:    &shortcutMaxLen,
+							},
+						},
+					},
+					{
+						Name:        "remove",
+						Description: "Remove a shortcut",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionString{
+								Name:         "shortcut",
+								Description:  "Shortcut name",
+								Required:     true,
+								Autocomplete: true,
+								MaxLength:    &shortcutMaxLen,
+							},
+						},
+					},
+					{
+						Name:        "list",
+						Description: "List all shortcuts",
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "welcome",
+				Description: "Configure welcome DM for new members",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "set",
+						Description: "Set the welcome message",
+					},
+					{
+						Name:        "clear",
+						Description: "Clear the welcome message",
+					},
+					{
+						Name:        "show",
+						Description: "Show the current welcome message",
+					},
+					{
+						Name:        "test",
+						Description: "Send yourself the welcome DM",
+					},
+					{
+						Name:        "enable",
+						Description: "Enable welcome DM for new members",
+					},
+					{
+						Name:        "disable",
+						Description: "Disable welcome DM without clearing the message",
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "renamelog",
+				Description: "Configure channel/thread rename logging",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "set",
+						Description: "Set the destination channel for rename logs",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
 								Name:        "channel",
-								Description: "Channel to post starboard entries in",
-							},
-							discord.ApplicationCommandOptionString{
-								Name:        "emoji",
-								Description: "Reaction emoji (e.g. ⭐ or paste a custom emoji)",
-								MaxLength:   &emojiMaxLen,
-							},
-							discord.ApplicationCommandOptionInt{
-								Name:        "threshold",
-								Description: "Number of reactions to trigger starboard (1-100)",
-								MinValue:    intPtr(1),
-								MaxValue:    intPtr(100),
+								Description: "Channel to post rename logs in",
+								Required:    true,
 							},
 						},
 					},
-					discord.ApplicationCommandOptionSubCommand{
-						Name:        "show",
-						Description: "Show current starboard configuration",
+					{
+						Name:        "add",
+						Description: "Add a channel to monitor for renames",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to monitor",
+								Required:    true,
+							},
+						},
 					},
-					discord.ApplicationCommandOptionSubCommand{
-						Name:        "disable",
-						Description: "Disable starboard posting",
+					{
+						Name:        "remove",
+						Description: "Remove a channel from rename monitoring",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to stop monitoring",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "list",
+						Description: "Show rename log configuration",
+					},
+					{
+						Name:        "clear",
+						Description: "Remove all rename log configuration",
 					},
 				},
-			})
-
-			commands = append(commands, discord.SlashCommandCreate{
-				Name:                     "sbblacklist",
-				Description:              "Manage starboard channel blacklist",
-				DefaultMemberPermissions: omit.NewPtr(perm),
-				Options: []discord.ApplicationCommandOption{
-					discord.ApplicationCommandOptionSubCommand{
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "market",
+				Description: "Configure marketplace poster role",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "set",
+						Description: "Update marketplace settings",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionRole{
+								Name:        "role",
+								Description: "Role to grant when threshold is reached",
+							},
+							discord.ApplicationCommandOptionInt{
+								Name:        "threshold",
+								Description: "Number of posts required (1-10000)",
+								MinValue:    intPtr(1),
+								MaxValue:    intPtr(10000),
+							},
+						},
+					},
+					{
+						Name:        "show",
+						Description: "Show current marketplace configuration",
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "market-blacklist",
+				Description: "Manage marketplace channel blacklist",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
 						Name:        "add",
 						Description: "Add a channel to the blacklist",
 						Options: []discord.ApplicationCommandOption{
@@ -340,7 +317,7 @@ func (b *Bot) registerAllCommands() error {
 							},
 						},
 					},
-					discord.ApplicationCommandOptionSubCommand{
+					{
 						Name:        "remove",
 						Description: "Remove a channel from the blacklist",
 						Options: []discord.ApplicationCommandOption{
@@ -351,87 +328,99 @@ func (b *Bot) registerAllCommands() error {
 							},
 						},
 					},
-					discord.ApplicationCommandOptionSubCommand{
+					{
 						Name:        "list",
 						Description: "List all blacklisted channels",
 					},
-					discord.ApplicationCommandOptionSubCommand{
+					{
 						Name:        "clear",
 						Description: "Remove all channels from the blacklist",
 					},
 				},
-			})
+			},
 		}
 
-		// /renamelog
-		commands = append(commands, discord.SlashCommandCreate{
-			Name:                     "renamelog",
-			Description:              "Configure channel/thread rename logging",
-			DefaultMemberPermissions: omit.NewPtr(perm),
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "set",
-					Description: "Set the destination channel for rename logs",
-					Options: []discord.ApplicationCommandOption{
-						discord.ApplicationCommandOptionChannel{
-							Name:        "channel",
-							Description: "Channel to post rename logs in",
-							Required:    true,
+		if _, ok := b.starboardConfig[guildID]; ok {
+			configOpts = append(configOpts,
+				discord.ApplicationCommandOptionSubCommandGroup{
+					Name:        "starboard",
+					Description: "Configure starboard",
+					Options: []discord.ApplicationCommandOptionSubCommand{
+						{
+							Name:        "set",
+							Description: "Update starboard settings",
+							Options: []discord.ApplicationCommandOption{
+								discord.ApplicationCommandOptionChannel{
+									Name:        "channel",
+									Description: "Channel to post starboard entries in",
+								},
+								discord.ApplicationCommandOptionString{
+									Name:        "emoji",
+									Description: "Reaction emoji (e.g. ⭐ or paste a custom emoji)",
+									MaxLength:   &emojiMaxLen,
+								},
+								discord.ApplicationCommandOptionInt{
+									Name:        "threshold",
+									Description: "Number of reactions to trigger starboard (1-100)",
+									MinValue:    intPtr(1),
+									MaxValue:    intPtr(100),
+								},
+							},
+						},
+						{
+							Name:        "show",
+							Description: "Show current starboard configuration",
+						},
+						{
+							Name:        "disable",
+							Description: "Disable starboard posting",
 						},
 					},
 				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "add",
-					Description: "Add a channel to monitor for renames",
-					Options: []discord.ApplicationCommandOption{
-						discord.ApplicationCommandOptionChannel{
-							Name:        "channel",
-							Description: "Channel to monitor",
-							Required:    true,
+				discord.ApplicationCommandOptionSubCommandGroup{
+					Name:        "starboard-blacklist",
+					Description: "Manage starboard channel blacklist",
+					Options: []discord.ApplicationCommandOptionSubCommand{
+						{
+							Name:        "add",
+							Description: "Add a channel to the blacklist",
+							Options: []discord.ApplicationCommandOption{
+								discord.ApplicationCommandOptionChannel{
+									Name:        "channel",
+									Description: "Channel to blacklist",
+									Required:    true,
+								},
+							},
+						},
+						{
+							Name:        "remove",
+							Description: "Remove a channel from the blacklist",
+							Options: []discord.ApplicationCommandOption{
+								discord.ApplicationCommandOptionChannel{
+									Name:        "channel",
+									Description: "Channel to remove from blacklist",
+									Required:    true,
+								},
+							},
+						},
+						{
+							Name:        "list",
+							Description: "List all blacklisted channels",
+						},
+						{
+							Name:        "clear",
+							Description: "Remove all channels from the blacklist",
 						},
 					},
 				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "remove",
-					Description: "Remove a channel from rename monitoring",
-					Options: []discord.ApplicationCommandOption{
-						discord.ApplicationCommandOptionChannel{
-							Name:        "channel",
-							Description: "Channel to stop monitoring",
-							Required:    true,
-						},
-					},
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "list",
-					Description: "Show rename log configuration",
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "clear",
-					Description: "Remove all rename log configuration",
-				},
-			},
-		})
+			)
+		}
 
-		// /config
 		commands = append(commands, discord.SlashCommandCreate{
 			Name:                     "config",
 			Description:              "Configure bot settings",
 			DefaultMemberPermissions: omit.NewPtr(perm),
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "profiles",
-					Description: "Open the profile template configuration page",
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "selfroles",
-					Description: "Open the self-assign roles configuration page",
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "tickets",
-					Description: "Open the ticket system configuration page",
-				},
-			},
+			Options:                  configOpts,
 		})
 
 		// /warn
@@ -556,24 +545,33 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleMarketLeaderboard(e)
 	case "s":
 		b.handleShortcut(e)
-	case "sconfig":
-		b.handleShortcutConfig(e)
-	case "welcome":
-		b.handleWelcome(e)
 	case "warn":
 		b.handleWarn(e)
-	case "marketconfig":
-		b.handleMarketConfig(e)
-	case "marketblacklist":
-		b.handleMarketBlacklist(e)
-	case "sbconfig":
-		b.handleStarboardConfig(e)
-	case "sbblacklist":
-		b.handleStarboardBlacklist(e)
-	case "renamelog":
-		b.handleRenameLog(e)
 	case "config":
-		b.handleConfig(e)
+		data, ok := e.Data.(discord.SlashCommandInteractionData)
+		if !ok {
+			return
+		}
+		if data.SubCommandGroupName == nil {
+			b.handleConfig(e)
+		} else {
+			switch *data.SubCommandGroupName {
+			case "shortcuts":
+				b.handleShortcutConfig(e)
+			case "welcome":
+				b.handleWelcome(e)
+			case "starboard":
+				b.handleStarboardConfig(e)
+			case "starboard-blacklist":
+				b.handleStarboardBlacklist(e)
+			case "renamelog":
+				b.handleRenameLog(e)
+			case "market":
+				b.handleMarketConfig(e)
+			case "market-blacklist":
+				b.handleMarketBlacklist(e)
+			}
+		}
 	}
 }
 

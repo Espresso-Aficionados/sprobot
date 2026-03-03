@@ -39,8 +39,13 @@ func (b *Bot) handleWiki(e *events.ApplicationCommandInteractionCreate) {
 
 func (b *Bot) handleAutocomplete(e *events.AutocompleteInteractionCreate) {
 	switch e.Data.CommandName {
-	case "s", "sconfig":
+	case "s":
 		b.handleShortcutAutocomplete(e)
+		return
+	case "config":
+		if e.Data.SubCommandGroupName != nil && *e.Data.SubCommandGroupName == "shortcuts" {
+			b.handleShortcutAutocomplete(e)
+		}
 		return
 	}
 
