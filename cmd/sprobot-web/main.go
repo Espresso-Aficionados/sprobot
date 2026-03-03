@@ -209,6 +209,32 @@ func fetchDiscordChannels(botToken, guildID string) ([]discordChannel, error) {
 	return text, nil
 }
 
+func fetchForumChannels(botToken, guildID string) ([]discordChannel, error) {
+	req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
+	req.Header.Set("Authorization", "Bot "+botToken)
+	resp, err := oauthHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching channels: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("channels API returned %d", resp.StatusCode)
+	}
+	var all []discordChannel
+	if err := json.NewDecoder(resp.Body).Decode(&all); err != nil {
+		return nil, fmt.Errorf("decoding channels: %w", err)
+	}
+	// Filter to forum channels (type 15) and media channels (type 16), sort by position.
+	var forum []discordChannel
+	for _, ch := range all {
+		if ch.Type == 15 || ch.Type == 16 {
+			forum = append(forum, ch)
+		}
+	}
+	sort.Slice(forum, func(i, j int) bool { return forum[i].Position < forum[j].Position })
+	return forum, nil
+}
+
 func fetchDiscordRoles(botToken, guildID string) ([]discordRole, error) {
 	req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/roles", nil)
 	req.Header.Set("Authorization", "Bot "+botToken)
@@ -314,6 +340,20 @@ type ticketWebConfig struct {
 	PanelMessage     string `json:"panel_message"`
 	TicketIntro      string `json:"ticket_intro"`
 	CloseButtonLabel string `json:"close_button_label"`
+}
+
+type reminderWebEntry struct {
+	ChannelID         uint64    `json:"channel_id"`
+	GuildID           uint64    `json:"guild_id"`
+	EnabledBy         uint64    `json:"enabled_by"`
+	Enabled           bool      `json:"enabled"`
+	LastMessageID     uint64    `json:"last_message_id"`
+	LastPostTime      time.Time `json:"last_post_time"`
+	MinIdleMins       int       `json:"min_idle_mins"`
+	MaxIdleMins       int       `json:"max_idle_mins"`
+	MsgThreshold      int       `json:"msg_threshold"`
+	TimeThresholdMins int       `json:"time_threshold_mins"`
+	Buffer            int       `json:"buffer"`
 }
 
 func seedSelfroles(ctx context.Context, s3 *s3client.Client, env string) {
@@ -468,7 +508,7 @@ func main() {
 		}
 		pageTemplates[name] = t
 	}
-	for _, name := range []string{"admin_profiles.html", "admin_selfroles.html", "admin_tickets.html"} {
+	for _, name := range []string{"admin_profiles.html", "admin_selfroles.html", "admin_tickets.html", "admin_reminders.html"} {
 		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/admin_sidebar.html", "templates/"+name)
 		if err != nil {
 			log.Fatalf("Failed to parse admin template %s: %v", name, err)
@@ -507,6 +547,8 @@ func main() {
 		mux.HandleFunc("POST /admin/{guildID}/selfroles", adminAuth(sessions, handleSaveSelfroles(s3)))
 		mux.HandleFunc("GET /admin/{guildID}/tickets", adminAuth(sessions, handleAdminTickets(s3, botToken)))
 		mux.HandleFunc("POST /admin/{guildID}/tickets", adminAuth(sessions, handleSaveTickets(s3)))
+		mux.HandleFunc("GET /admin/{guildID}/reminders", adminAuth(sessions, handleAdminReminders(s3, botToken)))
+		mux.HandleFunc("POST /admin/{guildID}/reminders", adminAuth(sessions, handleSaveReminders(s3)))
 	} else {
 		log.Println("DISCORD_CLIENT_ID/SECRET/REDIRECT_URI not set — admin routes disabled")
 		adminDisabled := func(w http.ResponseWriter, r *http.Request) {
@@ -1208,6 +1250,170 @@ func handleSaveTickets(s3 *s3client.Client) http.HandlerFunc {
 
 func redirectTicketError(w http.ResponseWriter, r *http.Request, guildID, msg string) {
 	http.Redirect(w, r, fmt.Sprintf("/admin/%s/tickets?error=%s", guildID, url.QueryEscape(msg)), http.StatusSeeOther)
+}
+
+// --- Reminder handlers ---
+
+func handleAdminReminders(s3 *s3client.Client, botToken string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildID := r.PathValue("guildID")
+
+		var reminders []reminderWebEntry
+		data, err := s3.FetchThreadReminders(r.Context(), guildID)
+		if err == nil {
+			var loaded map[string]*reminderWebEntry
+			if json.Unmarshal(data, &loaded) == nil {
+				for _, rem := range loaded {
+					reminders = append(reminders, *rem)
+				}
+				sort.Slice(reminders, func(i, j int) bool {
+					return reminders[i].ChannelID < reminders[j].ChannelID
+				})
+			}
+		}
+
+		var channels []discordChannel
+		if botToken != "" {
+			var chErr error
+			channels, chErr = fetchForumChannels(botToken, guildID)
+			if chErr != nil {
+				log.Printf("Failed to fetch forum channels for guild %s: %v", guildID, chErr)
+			}
+		}
+
+		success := r.URL.Query().Get("saved") == "1"
+		errMsg := r.URL.Query().Get("error")
+
+		renderAdminPage(w, "admin_reminders.html", struct {
+			GuildID   string
+			ActiveTab string
+			Reminders []reminderWebEntry
+			Channels  []discordChannel
+			Success   bool
+			Error     string
+		}{guildID, "reminders", reminders, channels, success, errMsg})
+	}
+}
+
+func handleSaveReminders(s3 *s3client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildID := r.PathValue("guildID")
+
+		if err := r.ParseForm(); err != nil {
+			redirectReminderError(w, r, guildID, "Invalid form data.")
+			return
+		}
+
+		// Load existing reminders to preserve runtime fields.
+		existing := make(map[uint64]*reminderWebEntry)
+		data, err := s3.FetchThreadReminders(r.Context(), guildID)
+		if err == nil {
+			var loaded map[string]*reminderWebEntry
+			if json.Unmarshal(data, &loaded) == nil {
+				for _, rem := range loaded {
+					existing[rem.ChannelID] = rem
+				}
+			}
+		}
+
+		// Get admin user ID from session for EnabledBy on new reminders.
+		var adminUserID uint64
+		sess := getSession(r)
+		if sess != nil {
+			adminUserID, _ = strconv.ParseUint(sess.User.ID, 10, 64)
+		}
+
+		guildIDUint, _ := strconv.ParseUint(guildID, 10, 64)
+
+		result := make(map[string]*reminderWebEntry)
+		for i := 0; ; i++ {
+			prefix := fmt.Sprintf("rem_%d_", i)
+			channelIDStr := strings.TrimSpace(r.FormValue(prefix + "channel_id"))
+			if channelIDStr == "" {
+				break
+			}
+
+			channelID, err := strconv.ParseUint(channelIDStr, 10, 64)
+			if err != nil || channelID == 0 {
+				redirectReminderError(w, r, guildID, fmt.Sprintf("Invalid Channel ID for reminder %d.", i+1))
+				return
+			}
+
+			enabled := r.FormValue(prefix+"enabled") == "1"
+			minIdle := intFromForm(r.FormValue(prefix + "min_idle"))
+			maxIdle := intFromForm(r.FormValue(prefix + "max_idle"))
+			msgThreshold := intFromForm(r.FormValue(prefix + "msg_threshold"))
+			timeThreshold := intFromForm(r.FormValue(prefix + "time_threshold"))
+			buffer := intFromForm(r.FormValue(prefix + "buffer"))
+
+			if minIdle < 1 {
+				minIdle = 1
+			}
+			if maxIdle < 2 {
+				maxIdle = 2
+			}
+
+			// Validation: max_idle > min_idle
+			if maxIdle <= minIdle {
+				redirectReminderError(w, r, guildID, fmt.Sprintf("Reminder %d: max idle (%d) must be greater than min idle (%d).", i+1, maxIdle, minIdle))
+				return
+			}
+			// Validation: if msg_threshold > 0, msg_threshold > buffer
+			if msgThreshold > 0 && msgThreshold <= buffer {
+				redirectReminderError(w, r, guildID, fmt.Sprintf("Reminder %d: msg threshold (%d) must be greater than buffer (%d).", i+1, msgThreshold, buffer))
+				return
+			}
+			// Validation: at least one threshold > 0
+			if msgThreshold == 0 && timeThreshold == 0 {
+				redirectReminderError(w, r, guildID, fmt.Sprintf("Reminder %d: at least one of msg threshold or time threshold must be > 0.", i+1))
+				return
+			}
+
+			entry := &reminderWebEntry{
+				ChannelID:         channelID,
+				GuildID:           guildIDUint,
+				Enabled:           enabled,
+				MinIdleMins:       minIdle,
+				MaxIdleMins:       maxIdle,
+				MsgThreshold:      msgThreshold,
+				TimeThresholdMins: timeThreshold,
+				Buffer:            buffer,
+			}
+
+			// Preserve runtime fields from existing config.
+			if prev, ok := existing[channelID]; ok {
+				entry.LastMessageID = prev.LastMessageID
+				entry.LastPostTime = prev.LastPostTime
+				entry.EnabledBy = prev.EnabledBy
+			}
+
+			// Set EnabledBy for newly enabled reminders that don't have one.
+			if entry.Enabled && entry.EnabledBy == 0 && adminUserID != 0 {
+				entry.EnabledBy = adminUserID
+			}
+
+			result[channelIDStr] = entry
+		}
+
+		saveData, err := json.Marshal(result)
+		if err != nil {
+			redirectReminderError(w, r, guildID, "Failed to encode reminders.")
+			return
+		}
+
+		if err := s3.SaveThreadReminders(r.Context(), guildID, saveData); err != nil {
+			log.Printf("Failed to save reminders for guild %s: %v", guildID, err)
+			redirectReminderError(w, r, guildID, "Failed to save reminders.")
+			return
+		}
+
+		log.Printf("Forum reminders saved for guild %s by admin", guildID)
+		http.Redirect(w, r, fmt.Sprintf("/admin/%s/reminders?saved=1", guildID), http.StatusSeeOther)
+	}
+}
+
+func redirectReminderError(w http.ResponseWriter, r *http.Request, guildID, msg string) {
+	http.Redirect(w, r, fmt.Sprintf("/admin/%s/reminders?error=%s", guildID, url.QueryEscape(msg)), http.StatusSeeOther)
 }
 
 // --- Rendering ---

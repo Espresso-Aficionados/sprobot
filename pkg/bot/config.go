@@ -169,6 +169,8 @@ func (b *Bot) handleConfig(e *events.ApplicationCommandInteractionCreate) {
 		b.handleConfigSelfroles(e)
 	case "tickets":
 		b.handleConfigTickets(e)
+	case "reminders":
+		b.handleConfigReminders(e)
 	}
 }
 
@@ -206,4 +208,16 @@ func (b *Bot) handleConfigTickets(e *events.ApplicationCommandInteractionCreate)
 
 	url := fmt.Sprintf("%sadmin/%d/tickets", sprobot.WebEndpointForEnv(b.Env), *guildID)
 	botutil.RespondEphemeral(e, fmt.Sprintf("Configure ticket system for this server:\n%s", url))
+}
+
+func (b *Bot) handleConfigReminders(e *events.ApplicationCommandInteractionCreate) {
+	guildID := e.GuildID()
+	if guildID == nil {
+		return
+	}
+
+	b.Log.Info("Config reminders", "user_id", e.User().ID, "guild_id", *guildID)
+
+	url := fmt.Sprintf("%sadmin/%d/reminders", sprobot.WebEndpointForEnv(b.Env), *guildID)
+	botutil.RespondEphemeral(e, fmt.Sprintf("Configure forum reminders for this server:\n%s", url))
 }
