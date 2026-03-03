@@ -119,31 +119,36 @@ func (b *Bot) registerAllCommands() error {
 			})
 		}
 
-		// /marketprogress, /marketleaderboard, /marketconfig, /marketblacklist
+		// /market progress|leaderboard
 		commands = append(commands, discord.SlashCommandCreate{
-			Name:                     "marketprogress",
-			Description:              "Check a user's progress toward marketplace access",
+			Name:                     "market",
+			Description:              "Marketplace poster role commands",
 			DefaultMemberPermissions: omit.NewPtr(perm),
 			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionUser{
-					Name:        "user",
-					Description: "User to check progress for",
-					Required:    true,
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "progress",
+					Description: "Check a user's progress toward marketplace access",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionUser{
+							Name:        "user",
+							Description: "User to check progress for",
+							Required:    true,
+						},
+						discord.ApplicationCommandOptionBool{
+							Name:        "public",
+							Description: "Post the result publicly in the channel (default: hidden)",
+						},
+					},
 				},
-				discord.ApplicationCommandOptionBool{
-					Name:        "public",
-					Description: "Post the result publicly in the channel (default: hidden)",
-				},
-			},
-		})
-		commands = append(commands, discord.SlashCommandCreate{
-			Name:                     "marketleaderboard",
-			Description:              "Show top users by progress toward marketplace access",
-			DefaultMemberPermissions: omit.NewPtr(perm),
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionBool{
-					Name:        "public",
-					Description: "Post the result publicly in the channel (default: hidden)",
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "leaderboard",
+					Description: "Show top users by progress toward marketplace access",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionBool{
+							Name:        "public",
+							Description: "Post the result publicly in the channel (default: hidden)",
+						},
+					},
 				},
 			},
 		})
@@ -539,10 +544,17 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleModLogMenu(e)
 	case "topposters":
 		b.handleTopPosters(e)
-	case "marketprogress":
-		b.handleMarketProgress(e)
-	case "marketleaderboard":
-		b.handleMarketLeaderboard(e)
+	case "market":
+		data, ok := e.Data.(discord.SlashCommandInteractionData)
+		if !ok || data.SubCommandName == nil {
+			return
+		}
+		switch *data.SubCommandName {
+		case "progress":
+			b.handleMarketProgress(e)
+		case "leaderboard":
+			b.handleMarketLeaderboard(e)
+		}
 	case "s":
 		b.handleShortcut(e)
 	case "warn":
