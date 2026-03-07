@@ -168,10 +168,6 @@ func (b *Bot) registerAllCommands() error {
 				Name:        "tickets",
 				Description: "Open the ticket system configuration page",
 			},
-			discord.ApplicationCommandOptionSubCommand{
-				Name:        "reminders",
-				Description: "Open the forum reminders configuration page",
-			},
 			discord.ApplicationCommandOptionSubCommandGroup{
 				Name:        "shortcuts",
 				Description: "Configure shortcuts",
