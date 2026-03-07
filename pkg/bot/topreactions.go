@@ -94,6 +94,7 @@ type starboardEntry struct {
 	AuthorID       snowflake.ID `json:"author_id"`
 	Count          int          `json:"count"`
 	StarboardMsgID snowflake.ID `json:"starboard_msg_id"`
+	ChannelName    string       `json:"channel_name,omitempty"`
 }
 
 type channelParents struct {
@@ -348,6 +349,22 @@ func (b *Bot) onReactionRemoveEmoji(e *events.GuildMessageReactionRemoveEmoji) {
 	}
 }
 
+func starboardFooter(emoji string, count int, channelName string) string {
+	return fmt.Sprintf("%s %d | #%s", emoji, count, channelName)
+}
+
+// resolveChannelName fetches the channel name, returning "unknown" on failure.
+func (b *Bot) resolveChannelName(channelID snowflake.ID) string {
+	ch, err := b.Client.Rest.GetChannel(channelID)
+	if err != nil {
+		return "unknown"
+	}
+	if gc, ok := ch.(discord.GuildChannel); ok {
+		return gc.Name()
+	}
+	return "unknown"
+}
+
 // --- Starboard Posting ---
 
 func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState) {
@@ -362,9 +379,8 @@ func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState
 		return
 	}
 
+	channelName := b.resolveChannelName(entry.ChannelID)
 	link := messageLink(guildID, entry.ChannelID, msgID)
-
-	content := fmt.Sprintf("%s **%d** | <#%d>", emojiDisplay(settings.Emoji), entry.Count, entry.ChannelID)
 
 	description := msg.Content
 	if len(description) > 2000 {
@@ -380,6 +396,9 @@ func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState
 		Description: description,
 		Color:       colorTeal,
 		Timestamp:   &msg.CreatedAt,
+		Footer: &discord.EmbedFooter{
+			Text: starboardFooter(emojiDisplay(settings.Emoji), entry.Count, channelName),
+		},
 	}
 
 	// Attach the first image if present
@@ -391,8 +410,7 @@ func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState
 	}
 
 	sent, err := b.Client.Rest.CreateMessage(settings.OutputChannelID, discord.MessageCreate{
-		Content: content,
-		Embeds:  []discord.Embed{embed},
+		Embeds: []discord.Embed{embed},
 	})
 	if err != nil {
 		b.Log.Error("Failed to post starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
@@ -402,6 +420,7 @@ func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState
 	st.mu.Lock()
 	entry = st.Entries[msgID]
 	entry.StarboardMsgID = sent.ID
+	entry.ChannelName = channelName
 	st.Entries[msgID] = entry
 	st.mu.Unlock()
 
@@ -416,10 +435,37 @@ func (b *Bot) updateStarboardEntry(guildID, msgID snowflake.ID, st *starboardSta
 	settings := st.Settings
 	st.mu.Unlock()
 
-	content := fmt.Sprintf("%s **%d** | <#%d>", emojiDisplay(settings.Emoji), entry.Count, entry.ChannelID)
+	// Resolve channel name for old entries that don't have it cached.
+	channelName := entry.ChannelName
+	if channelName == "" {
+		channelName = b.resolveChannelName(entry.ChannelID)
+		st.mu.Lock()
+		entry = st.Entries[msgID]
+		entry.ChannelName = channelName
+		st.Entries[msgID] = entry
+		st.mu.Unlock()
+	}
 
-	_, err := b.Client.Rest.UpdateMessage(settings.OutputChannelID, entry.StarboardMsgID, discord.MessageUpdate{
-		Content: &content,
+	existing, err := b.Client.Rest.GetMessage(settings.OutputChannelID, entry.StarboardMsgID)
+	if err != nil {
+		b.Log.Error("Failed to fetch starboard message for update", "guild_id", guildID, "message_id", msgID, "error", err)
+		return
+	}
+
+	if len(existing.Embeds) == 0 {
+		return
+	}
+
+	embed := existing.Embeds[0]
+	embed.Footer = &discord.EmbedFooter{
+		Text: starboardFooter(emojiDisplay(settings.Emoji), entry.Count, channelName),
+	}
+
+	emptyContent := ""
+	embeds := []discord.Embed{embed}
+	_, err = b.Client.Rest.UpdateMessage(settings.OutputChannelID, entry.StarboardMsgID, discord.MessageUpdate{
+		Content: &emptyContent,
+		Embeds:  &embeds,
 	})
 	if err != nil {
 		b.Log.Error("Failed to update starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
