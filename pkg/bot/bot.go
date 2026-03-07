@@ -84,7 +84,7 @@ func New(token string) (*Bot, error) {
 	client, err := disgo.New(token,
 		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
 		bot.WithCacheConfigOpts(
-			cache.WithCaches(cache.FlagGuilds|cache.FlagMessages|cache.FlagMembers),
+			cache.WithCaches(cache.FlagGuilds|cache.FlagMessages|cache.FlagMembers|cache.FlagChannels),
 			cache.WithMessageCache(cache.NewMessageCache(msgCache)),
 			cache.WithMemberCache(cache.NewMemberCache(memberCache)),
 		),

@@ -862,6 +862,9 @@ func (b *Bot) onThreadCreate(e *events.ThreadCreate) {
 }
 
 func (b *Bot) onThreadUpdate(e *events.ThreadUpdate) {
+	if e.OldThread.ID() == 0 {
+		return
+	}
 	b.checkThreadRename(e)
 
 	var fields []discord.EmbedField
