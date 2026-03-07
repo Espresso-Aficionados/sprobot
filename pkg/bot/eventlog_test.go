@@ -355,9 +355,69 @@ func TestAuditLogChangeName(t *testing.T) {
 			t.Errorf("auditLogChangeName = %q, want empty", got)
 		}
 	})
+
+	t.Run("update reads new value when both old and new exist", func(t *testing.T) {
+		entry := discord.AuditLogEntry{
+			Changes: []discord.AuditLogChange{
+				makeNameChangeBoth("old-name", "new-name"),
+			},
+		}
+		got := auditLogChangeName(entry, false)
+		if got != "new-name" {
+			t.Errorf("auditLogChangeName (isDelete=false) = %q, want new-name", got)
+		}
+	})
+
+	t.Run("delete reads old value when both old and new exist", func(t *testing.T) {
+		entry := discord.AuditLogEntry{
+			Changes: []discord.AuditLogChange{
+				makeNameChangeBoth("old-name", "new-name"),
+			},
+		}
+		got := auditLogChangeName(entry, true)
+		if got != "old-name" {
+			t.Errorf("auditLogChangeName (isDelete=true) = %q, want old-name", got)
+		}
+	})
+
+	t.Run("name key present but targeted value is nil returns empty", func(t *testing.T) {
+		// Change has the "name" key but no NewValue set — UnmarshalNewValue will error.
+		change := discord.AuditLogChange{Key: discord.AuditLogChangeKeyName}
+		entry := discord.AuditLogEntry{Changes: []discord.AuditLogChange{change}}
+		got := auditLogChangeName(entry, false)
+		if got != "" {
+			t.Errorf("auditLogChangeName with nil NewValue = %q, want empty", got)
+		}
+	})
+
+	t.Run("name key after non-name keys is found", func(t *testing.T) {
+		otherChange := discord.AuditLogChange{Key: discord.AuditLogChangeKeyTopic}
+		nameChange := makeNameChange("", "found-after-other")
+		entry := discord.AuditLogEntry{
+			Changes: []discord.AuditLogChange{otherChange, nameChange},
+		}
+		got := auditLogChangeName(entry, false)
+		if got != "found-after-other" {
+			t.Errorf("auditLogChangeName = %q, want found-after-other", got)
+		}
+	})
+
+	t.Run("only non-name changes returns empty", func(t *testing.T) {
+		entry := discord.AuditLogEntry{
+			Changes: []discord.AuditLogChange{
+				{Key: discord.AuditLogChangeKeyTopic},
+				{Key: discord.AuditLogChangeKeyPosition},
+			},
+		}
+		got := auditLogChangeName(entry, false)
+		if got != "" {
+			t.Errorf("auditLogChangeName with no name key = %q, want empty", got)
+		}
+	})
 }
 
 // makeNameChange builds an AuditLogChange with key "name" and the given old/new values.
+// Empty string arguments are treated as absent (nil raw JSON), not as JSON "".
 func makeNameChange(oldVal, newVal string) discord.AuditLogChange {
 	change := discord.AuditLogChange{Key: discord.AuditLogChangeKeyName}
 	if oldVal != "" {
@@ -369,6 +429,16 @@ func makeNameChange(oldVal, newVal string) discord.AuditLogChange {
 		change.NewValue = raw
 	}
 	return change
+}
+
+// makeNameChangeBoth builds an AuditLogChange with key "name" and both old and new values set.
+// This represents an update where the name changed from oldVal to newVal.
+func makeNameChangeBoth(oldVal, newVal string) discord.AuditLogChange {
+	return discord.AuditLogChange{
+		Key:      discord.AuditLogChangeKeyName,
+		OldValue: []byte(`"` + oldVal + `"`),
+		NewValue: []byte(`"` + newVal + `"`),
+	}
 }
 
 func TestTimePtrNotNil(t *testing.T) {

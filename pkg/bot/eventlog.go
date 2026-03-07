@@ -720,6 +720,10 @@ func (b *Bot) handleScheduledEventAuditEntry(guildID snowflake.ID, entry discord
 		embed.Fields = append(embed.Fields, discord.EmbedField{
 			Name: "Event", Value: name, Inline: boolPtr(true),
 		})
+	} else if entry.TargetID != nil {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Event ID", Value: fmt.Sprintf("`%d`", *entry.TargetID), Inline: boolPtr(true),
+		})
 	}
 	appendAuditFields(&embed, entry)
 	b.postEventLog(guildID, embed)
