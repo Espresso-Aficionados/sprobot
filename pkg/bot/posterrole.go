@@ -139,6 +139,37 @@ func topChannels(resp *discordSearchResponse, n int) []channelCount {
 	return result
 }
 
+// filteredSearchCount estimates the total number of search results after
+// excluding messages in channels matched by the skip predicate. It filters the
+// sampled Messages array and extrapolates to TotalResults.
+func filteredSearchCount(resp *discordSearchResponse, skip func(snowflake.ID) bool) int {
+	if len(resp.Messages) == 0 {
+		return 0
+	}
+	eligible := 0
+	for _, hits := range resp.Messages {
+		if len(hits) > 0 && !skip(hits[0].ChannelID) {
+			eligible++
+		}
+	}
+	n := len(resp.Messages)
+	if resp.TotalResults <= n {
+		return eligible
+	}
+	return eligible * resp.TotalResults / n
+}
+
+// filterMessages returns a copy of resp.Messages with blacklisted channels removed.
+func filterMessages(resp *discordSearchResponse, skip func(snowflake.ID) bool) [][]searchHitMessage {
+	out := make([][]searchHitMessage, 0, len(resp.Messages))
+	for _, hits := range resp.Messages {
+		if len(hits) > 0 && !skip(hits[0].ChannelID) {
+			out = append(out, hits)
+		}
+	}
+	return out
+}
+
 var errSearchIndexing = errors.New("search index not ready")
 
 func (b *Bot) searchUserMessages(guildID, userID snowflake.ID) (*discordSearchResponse, error) {
@@ -188,11 +219,20 @@ func (b *Bot) fetchPosterRoleHistory(guildID snowflake.ID, userID snowflake.ID, 
 	}
 
 	st.mu.Lock()
-	st.Counts[userIDStr] += result.TotalResults
+	cfg := st.Settings
+	st.mu.Unlock()
+
+	skip := func(chID snowflake.ID) bool {
+		return cfg.isSkipped(b.resolveChannelParents(chID, &st.parentCache)...)
+	}
+	count := filteredSearchCount(result, skip)
+
+	st.mu.Lock()
+	st.Counts[userIDStr] += count
 	st.Fetched[userIDStr] = true
 	st.mu.Unlock()
 
-	b.Log.Info("Cached historical post count", "user_id", userID, "guild_id", guildID, "count", result.TotalResults)
+	b.Log.Info("Cached historical post count", "user_id", userID, "guild_id", guildID, "count", count)
 }
 
 func (b *Bot) clearPosterRoleTracking(guildID snowflake.ID, userIDStr string) {
@@ -328,9 +368,13 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 		return
 	}
 
+	skip := func(chID snowflake.ID) bool {
+		return cfg.isSkipped(b.resolveChannelParents(chID, &st.parentCache)...)
+	}
+
 	count := 0
 	if searchResult != nil {
-		count = searchResult.TotalResults
+		count = filteredSearchCount(searchResult, skip)
 	}
 
 	// Build embed fields
@@ -376,7 +420,8 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	}
 
 	if searchResult != nil {
-		top := topChannels(searchResult, 5)
+		filtered := &discordSearchResponse{Messages: filterMessages(searchResult, skip)}
+		top := topChannels(filtered, 5)
 		if len(top) > 0 {
 			var lines []string
 			for _, tc := range top {

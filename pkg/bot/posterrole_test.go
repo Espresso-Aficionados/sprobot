@@ -190,6 +190,110 @@ func TestDiscordSearchResponseWithMessages(t *testing.T) {
 	}
 }
 
+func TestFilteredSearchCount(t *testing.T) {
+	skipSet := func(ids ...snowflake.ID) func(snowflake.ID) bool {
+		m := make(map[snowflake.ID]bool, len(ids))
+		for _, id := range ids {
+			m[id] = true
+		}
+		return func(id snowflake.ID) bool { return m[id] }
+	}
+	noSkip := func(snowflake.ID) bool { return false }
+
+	t.Run("no blacklist returns TotalResults", func(t *testing.T) {
+		resp := &discordSearchResponse{
+			TotalResults: 100,
+			Messages: [][]searchHitMessage{
+				{{ChannelID: 1}},
+				{{ChannelID: 2}},
+				{{ChannelID: 3}},
+			},
+		}
+		got := filteredSearchCount(resp, noSkip)
+		if got != 100 {
+			t.Errorf("got %d, want 100", got)
+		}
+	})
+
+	t.Run("all blacklisted returns 0", func(t *testing.T) {
+		resp := &discordSearchResponse{
+			TotalResults: 50,
+			Messages: [][]searchHitMessage{
+				{{ChannelID: 10}},
+				{{ChannelID: 20}},
+			},
+		}
+		got := filteredSearchCount(resp, skipSet(10, 20))
+		if got != 0 {
+			t.Errorf("got %d, want 0", got)
+		}
+	})
+
+	t.Run("partial blacklist with extrapolation", func(t *testing.T) {
+		resp := &discordSearchResponse{
+			TotalResults: 100,
+			Messages: [][]searchHitMessage{
+				{{ChannelID: 1}},
+				{{ChannelID: 2}},
+				{{ChannelID: 3}},
+				{{ChannelID: 4}},
+			},
+		}
+		// 1 of 4 blacklisted → 3/4 eligible → 3*100/4 = 75
+		got := filteredSearchCount(resp, skipSet(2))
+		if got != 75 {
+			t.Errorf("got %d, want 75", got)
+		}
+	})
+
+	t.Run("partial blacklist no extrapolation", func(t *testing.T) {
+		resp := &discordSearchResponse{
+			TotalResults: 4,
+			Messages: [][]searchHitMessage{
+				{{ChannelID: 1}},
+				{{ChannelID: 2}},
+				{{ChannelID: 3}},
+				{{ChannelID: 4}},
+			},
+		}
+		// TotalResults == len(Messages), so no extrapolation — just count eligible
+		got := filteredSearchCount(resp, skipSet(2))
+		if got != 3 {
+			t.Errorf("got %d, want 3", got)
+		}
+	})
+
+	t.Run("empty messages returns 0", func(t *testing.T) {
+		resp := &discordSearchResponse{TotalResults: 50}
+		got := filteredSearchCount(resp, noSkip)
+		if got != 0 {
+			t.Errorf("got %d, want 0", got)
+		}
+	})
+}
+
+func TestFilterMessages(t *testing.T) {
+	skip := func(id snowflake.ID) bool { return id == 20 }
+
+	resp := &discordSearchResponse{
+		Messages: [][]searchHitMessage{
+			{{ChannelID: 10}},
+			{{ChannelID: 20}},
+			{{ChannelID: 30}},
+		},
+	}
+	got := filterMessages(resp, skip)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0][0].ChannelID != 10 {
+		t.Errorf("got[0] channel = %d, want 10", got[0][0].ChannelID)
+	}
+	if got[1][0].ChannelID != 30 {
+		t.Errorf("got[1] channel = %d, want 30", got[1][0].ChannelID)
+	}
+}
+
 func TestTopChannels(t *testing.T) {
 	t.Run("multiple channels", func(t *testing.T) {
 		resp := &discordSearchResponse{
