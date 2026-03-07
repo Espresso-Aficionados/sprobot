@@ -156,18 +156,6 @@ func (b *Bot) registerAllCommands() error {
 		// /config — consolidated configuration command
 		emojiMaxLen := 50
 		configOpts := []discord.ApplicationCommandOption{
-			discord.ApplicationCommandOptionSubCommand{
-				Name:        "profiles",
-				Description: "Open the profile template configuration page",
-			},
-			discord.ApplicationCommandOptionSubCommand{
-				Name:        "selfroles",
-				Description: "Open the self-assign roles configuration page",
-			},
-			discord.ApplicationCommandOptionSubCommand{
-				Name:        "tickets",
-				Description: "Open the ticket system configuration page",
-			},
 			discord.ApplicationCommandOptionSubCommandGroup{
 				Name:        "shortcuts",
 				Description: "Configure shortcuts",
@@ -561,28 +549,24 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleWarn(e)
 	case "config":
 		data, ok := e.Data.(discord.SlashCommandInteractionData)
-		if !ok {
+		if !ok || data.SubCommandGroupName == nil {
 			return
 		}
-		if data.SubCommandGroupName == nil {
-			b.handleConfig(e)
-		} else {
-			switch *data.SubCommandGroupName {
-			case "shortcuts":
-				b.handleShortcutConfig(e)
-			case "welcome":
-				b.handleWelcome(e)
-			case "starboard":
-				b.handleStarboardConfig(e)
-			case "starboard-blacklist":
-				b.handleStarboardBlacklist(e)
-			case "renamelog":
-				b.handleRenameLog(e)
-			case "market":
-				b.handleMarketConfig(e)
-			case "market-blacklist":
-				b.handleMarketBlacklist(e)
-			}
+		switch *data.SubCommandGroupName {
+		case "shortcuts":
+			b.handleShortcutConfig(e)
+		case "welcome":
+			b.handleWelcome(e)
+		case "starboard":
+			b.handleStarboardConfig(e)
+		case "starboard-blacklist":
+			b.handleStarboardBlacklist(e)
+		case "renamelog":
+			b.handleRenameLog(e)
+		case "market":
+			b.handleMarketConfig(e)
+		case "market-blacklist":
+			b.handleMarketBlacklist(e)
 		}
 	}
 }
