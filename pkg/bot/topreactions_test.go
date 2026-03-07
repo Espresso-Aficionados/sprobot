@@ -235,6 +235,40 @@ func TestBlacklistAddRemove(t *testing.T) {
 	}
 }
 
+func TestEmojiCDNURLUnicode(t *testing.T) {
+	if got := emojiCDNURL("⭐"); got != "" {
+		t.Errorf("expected empty string, got %s", got)
+	}
+}
+
+func TestEmojiCDNURLCustom(t *testing.T) {
+	got := emojiCDNURL("ehhhh:786302563178774560")
+	want := "https://cdn.discordapp.com/emojis/786302563178774560.png"
+	if got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
+func TestStarboardFooterCustomEmoji(t *testing.T) {
+	got := starboardFooter("ehhhh:786302563178774560", 7, "general")
+	if got.Text != "7 | #general" {
+		t.Errorf("Text = %q, want %q", got.Text, "7 | #general")
+	}
+	if got.IconURL == "" {
+		t.Error("expected IconURL to be set for custom emoji")
+	}
+}
+
+func TestStarboardFooterUnicodeEmoji(t *testing.T) {
+	got := starboardFooter("⭐", 3, "art")
+	if got.Text != "⭐ 3 | #art" {
+		t.Errorf("Text = %q, want %q", got.Text, "⭐ 3 | #art")
+	}
+	if got.IconURL != "" {
+		t.Errorf("expected empty IconURL for unicode emoji, got %s", got.IconURL)
+	}
+}
+
 func TestEmojiDisplayEdgeCases(t *testing.T) {
 	// Colon but no ID part — should be treated as unicode
 	if got := emojiDisplay("foo:"); got != "foo:" {

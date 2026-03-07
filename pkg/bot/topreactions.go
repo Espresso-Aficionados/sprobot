@@ -349,8 +349,25 @@ func (b *Bot) onReactionRemoveEmoji(e *events.GuildMessageReactionRemoveEmoji) {
 	}
 }
 
-func starboardFooter(emoji string, count int, channelName string) string {
-	return fmt.Sprintf("%s %d | #%s", emoji, count, channelName)
+// emojiCDNURL returns a CDN URL for a custom emoji stored as "name:id",
+// or empty string for unicode emoji.
+func emojiCDNURL(emoji string) string {
+	if parts := strings.SplitN(emoji, ":", 2); len(parts) == 2 && parts[1] != "" {
+		return "https://cdn.discordapp.com/emojis/" + parts[1] + ".png"
+	}
+	return ""
+}
+
+func starboardFooter(emoji string, count int, channelName string) discord.EmbedFooter {
+	if url := emojiCDNURL(emoji); url != "" {
+		return discord.EmbedFooter{
+			Text:    fmt.Sprintf("%d | #%s", count, channelName),
+			IconURL: url,
+		}
+	}
+	return discord.EmbedFooter{
+		Text: fmt.Sprintf("%s %d | #%s", emoji, count, channelName),
+	}
 }
 
 // resolveChannelName fetches the channel name, returning "unknown" on failure.
@@ -388,6 +405,7 @@ func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState
 	}
 	description += fmt.Sprintf("\n\n[Jump to message](%s)", link)
 
+	footer := starboardFooter(settings.Emoji, entry.Count, channelName)
 	embed := discord.Embed{
 		Author: &discord.EmbedAuthor{
 			Name:    msg.Author.EffectiveName(),
@@ -396,9 +414,7 @@ func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState
 		Description: description,
 		Color:       colorTeal,
 		Timestamp:   &msg.CreatedAt,
-		Footer: &discord.EmbedFooter{
-			Text: starboardFooter(emojiDisplay(settings.Emoji), entry.Count, channelName),
-		},
+		Footer:      &footer,
 	}
 
 	// Attach the first image if present
@@ -457,9 +473,8 @@ func (b *Bot) updateStarboardEntry(guildID, msgID snowflake.ID, st *starboardSta
 	}
 
 	embed := existing.Embeds[0]
-	embed.Footer = &discord.EmbedFooter{
-		Text: starboardFooter(emojiDisplay(settings.Emoji), entry.Count, channelName),
-	}
+	footer := starboardFooter(settings.Emoji, entry.Count, channelName)
+	embed.Footer = &footer
 
 	emptyContent := ""
 	embeds := []discord.Embed{embed}
