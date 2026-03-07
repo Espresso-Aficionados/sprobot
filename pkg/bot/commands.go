@@ -18,57 +18,8 @@ func (b *Bot) registerAllCommands() error {
 		tmpls := b.templates[guildID]
 		var commands []discord.ApplicationCommandCreate
 
-		if len(tmpls) > 0 {
-			for _, tmpl := range tmpls {
-				commands = append(commands, templateCommands(tmpl)...)
-			}
-
-			// Build type choices from template ShortNames
-			var typeChoices []discord.ApplicationCommandOptionChoiceString
-			for _, tmpl := range tmpls {
-				typeChoices = append(typeChoices, discord.ApplicationCommandOptionChoiceString{
-					Name:  tmpl.Name,
-					Value: tmpl.ShortName,
-				})
-			}
-			typeOpt := discord.ApplicationCommandOptionString{
-				Name:        "type",
-				Description: "Profile type",
-				Choices:     typeChoices,
-			}
-
-			// /profile edit|view|delete
-			commands = append(commands, discord.SlashCommandCreate{
-				Name:        "profile",
-				Description: "Manage your profile",
-				Options: []discord.ApplicationCommandOption{
-					discord.ApplicationCommandOptionSubCommand{
-						Name:        "edit",
-						Description: "Edit or create your profile",
-						Options: []discord.ApplicationCommandOption{
-							typeOpt,
-						},
-					},
-					discord.ApplicationCommandOptionSubCommand{
-						Name:        "view",
-						Description: "View a user's profile",
-						Options: []discord.ApplicationCommandOption{
-							typeOpt,
-							discord.ApplicationCommandOptionUser{
-								Name:        "name",
-								Description: "User to get profile for",
-							},
-						},
-					},
-					discord.ApplicationCommandOptionSubCommand{
-						Name:        "delete",
-						Description: "Delete profile or profile image",
-						Options: []discord.ApplicationCommandOption{
-							typeOpt,
-						},
-					},
-				},
-			})
+		for _, tmpl := range tmpls {
+			commands = append(commands, templateCommands(tmpl)...)
 		}
 
 		// Mod log context menu
@@ -548,22 +499,26 @@ func templateCommands(tmpl sprobot.Template) []discord.ApplicationCommandCreate 
 		discord.MessageCommandCreate{
 			Name: fmt.Sprintf("Get %s Profile", tmpl.Name),
 		},
+		// Per-template slash commands
+		discord.SlashCommandCreate{
+			Name:        "edit" + tmpl.ShortName,
+			Description: fmt.Sprintf("Edit or create your %s profile", tmpl.Name),
+		},
+		discord.SlashCommandCreate{
+			Name:        "get" + tmpl.ShortName,
+			Description: fmt.Sprintf("View a user's %s profile", tmpl.Name),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionUser{
+					Name:        "name",
+					Description: "User to get profile for",
+				},
+			},
+		},
+		discord.SlashCommandCreate{
+			Name:        "delete" + tmpl.ShortName,
+			Description: fmt.Sprintf("Delete your %s profile or profile image", tmpl.Name),
+		},
 	}
-}
-
-func resolveTemplate(tmpls []sprobot.Template, typeName string) (sprobot.Template, bool) {
-	if typeName != "" {
-		for _, t := range tmpls {
-			if t.ShortName == typeName {
-				return t, true
-			}
-		}
-		return sprobot.Template{}, false
-	}
-	if len(tmpls) > 0 {
-		return tmpls[0], true
-	}
-	return sprobot.Template{}, false
 }
 
 func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
@@ -586,35 +541,20 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 
 	tmpls := b.templates[guildID]
 
-	// /profile edit|view|delete
-	if name == "profile" {
-		if len(tmpls) == 0 {
-			return
-		}
-		data, ok := e.Data.(discord.SlashCommandInteractionData)
-		if !ok || data.SubCommandName == nil {
-			return
-		}
-		typeName, _ := data.OptString("type")
-		tmpl, ok := resolveTemplate(tmpls, typeName)
-		if !ok {
-			return
-		}
-		switch *data.SubCommandName {
-		case "edit":
-			b.handleEdit(e, tmpl)
-		case "view":
-			b.handleGet(e, tmpl)
-		case "delete":
-			b.handleDelete(e, tmpl)
-		}
-		return
-	}
-
-	// Context menus stay per-template
+	// Per-template commands (context menus + slash commands)
 	for _, tmpl := range tmpls {
-		if name == fmt.Sprintf("Get %s Profile", tmpl.Name) {
+		switch name {
+		case fmt.Sprintf("Get %s Profile", tmpl.Name):
 			b.handleGetMenu(e, tmpl)
+			return
+		case "edit" + tmpl.ShortName:
+			b.handleEdit(e, tmpl)
+			return
+		case "get" + tmpl.ShortName:
+			b.handleGet(e, tmpl)
+			return
+		case "delete" + tmpl.ShortName:
+			b.handleDelete(e, tmpl)
 			return
 		}
 	}

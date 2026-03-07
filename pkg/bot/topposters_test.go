@@ -192,9 +192,9 @@ func TestGuildPostCountsConcurrent(t *testing.T) {
 func TestTemplateCommandsCount(t *testing.T) {
 	cmds := templateCommands(sprobot.ProfileTemplate)
 
-	// 1 user menu + 1 message menu = 2
-	if len(cmds) != 2 {
-		t.Errorf("templateCommands returned %d commands, want 2", len(cmds))
+	// 1 user menu + 1 message menu + 3 slash commands = 5
+	if len(cmds) != 5 {
+		t.Errorf("templateCommands returned %d commands, want 5", len(cmds))
 	}
 }
 
@@ -224,13 +224,15 @@ func TestTemplateCommandsNames(t *testing.T) {
 func TestTemplateCommandsTypes(t *testing.T) {
 	cmds := templateCommands(sprobot.ProfileTemplate)
 
-	var userCount, msgCount int
+	var userCount, msgCount, slashCount int
 	for _, cmd := range cmds {
 		switch cmd.(type) {
 		case discord.UserCommandCreate:
 			userCount++
 		case discord.MessageCommandCreate:
 			msgCount++
+		case discord.SlashCommandCreate:
+			slashCount++
 		}
 	}
 
@@ -239,6 +241,9 @@ func TestTemplateCommandsTypes(t *testing.T) {
 	}
 	if msgCount != 1 {
 		t.Errorf("message commands = %d, want 1", msgCount)
+	}
+	if slashCount != 3 {
+		t.Errorf("slash commands = %d, want 3", slashCount)
 	}
 }
 
@@ -262,33 +267,5 @@ func TestTemplateCommandsRoaster(t *testing.T) {
 		if !names[name] {
 			t.Errorf("missing command %q", name)
 		}
-	}
-}
-
-func TestResolveTemplate(t *testing.T) {
-	tmpls := []sprobot.Template{sprobot.ProfileTemplate, sprobot.RoasterTemplate}
-
-	// Default to first template when no type given
-	tmpl, ok := resolveTemplate(tmpls, "")
-	if !ok || tmpl.ShortName != "profile" {
-		t.Errorf("resolveTemplate(\"\") = %q, %v; want \"profile\", true", tmpl.ShortName, ok)
-	}
-
-	// Explicit type
-	tmpl, ok = resolveTemplate(tmpls, "roaster")
-	if !ok || tmpl.ShortName != "roaster" {
-		t.Errorf("resolveTemplate(\"roaster\") = %q, %v; want \"roaster\", true", tmpl.ShortName, ok)
-	}
-
-	// Unknown type
-	_, ok = resolveTemplate(tmpls, "unknown")
-	if ok {
-		t.Error("resolveTemplate(\"unknown\") should return false")
-	}
-
-	// Empty slice
-	_, ok = resolveTemplate(nil, "")
-	if ok {
-		t.Error("resolveTemplate on nil slice should return false")
 	}
 }
