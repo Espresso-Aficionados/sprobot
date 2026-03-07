@@ -304,6 +304,73 @@ func TestAppendAuditFields(t *testing.T) {
 	})
 }
 
+func TestScheduledEventStatusName(t *testing.T) {
+	tests := []struct {
+		status discord.ScheduledEventStatus
+		want   string
+	}{
+		{discord.ScheduledEventStatusScheduled, "Scheduled"},
+		{discord.ScheduledEventStatusActive, "Active"},
+		{discord.ScheduledEventStatusCompleted, "Completed"},
+		{discord.ScheduledEventStatusCancelled, "Cancelled"},
+		{discord.ScheduledEventStatus(99), "Status 99"},
+	}
+	for _, tt := range tests {
+		got := scheduledEventStatusName(tt.status)
+		if got != tt.want {
+			t.Errorf("scheduledEventStatusName(%d) = %q, want %q", tt.status, got, tt.want)
+		}
+	}
+}
+
+func TestAuditLogChangeName(t *testing.T) {
+	t.Run("new value for create", func(t *testing.T) {
+		entry := discord.AuditLogEntry{
+			Changes: []discord.AuditLogChange{
+				makeNameChange("", "test-emoji"),
+			},
+		}
+		got := auditLogChangeName(entry, false)
+		if got != "test-emoji" {
+			t.Errorf("auditLogChangeName = %q, want test-emoji", got)
+		}
+	})
+
+	t.Run("old value for delete", func(t *testing.T) {
+		entry := discord.AuditLogEntry{
+			Changes: []discord.AuditLogChange{
+				makeNameChange("deleted-thing", ""),
+			},
+		}
+		got := auditLogChangeName(entry, true)
+		if got != "deleted-thing" {
+			t.Errorf("auditLogChangeName = %q, want deleted-thing", got)
+		}
+	})
+
+	t.Run("no name change", func(t *testing.T) {
+		entry := discord.AuditLogEntry{}
+		got := auditLogChangeName(entry, false)
+		if got != "" {
+			t.Errorf("auditLogChangeName = %q, want empty", got)
+		}
+	})
+}
+
+// makeNameChange builds an AuditLogChange with key "name" and the given old/new values.
+func makeNameChange(oldVal, newVal string) discord.AuditLogChange {
+	change := discord.AuditLogChange{Key: discord.AuditLogChangeKeyName}
+	if oldVal != "" {
+		raw := []byte(`"` + oldVal + `"`)
+		change.OldValue = raw
+	}
+	if newVal != "" {
+		raw := []byte(`"` + newVal + `"`)
+		change.NewValue = raw
+	}
+	return change
+}
+
 func TestTimePtrNotNil(t *testing.T) {
 	now := time.Now()
 	p := timePtr(now)

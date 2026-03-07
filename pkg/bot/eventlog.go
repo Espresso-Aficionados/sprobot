@@ -328,6 +328,16 @@ func (b *Bot) onAuditLogEntry(e *events.GuildAuditLogEntryCreate) {
 		b.handleGuildUpdateEntry(e.GuildID, entry)
 	case discord.AuditLogThreadUpdate:
 		b.handleThreadAuditEntry(e.GuildID, entry)
+	case discord.AuditLogEventEmojiCreate, discord.AuditLogEventEmojiUpdate, discord.AuditLogEventEmojiDelete:
+		b.handleEmojiAuditEntry(e.GuildID, entry)
+	case discord.AuditLogEventStickerCreate, discord.AuditLogEventStickerUpdate, discord.AuditLogEventStickerDelete:
+		b.handleStickerAuditEntry(e.GuildID, entry)
+	case discord.AuditLogEventStageInstanceCreate, discord.AuditLogEventStageInstanceUpdate, discord.AuditLogEventStageInstanceDelete:
+		b.handleStageInstanceAuditEntry(e.GuildID, entry)
+	case discord.AuditLogGuildScheduledEventCreate, discord.AuditLogGuildScheduledEventUpdate, discord.AuditLogGuildScheduledEventDelete:
+		b.handleScheduledEventAuditEntry(e.GuildID, entry)
+	case discord.AuditLogSoundboardSoundCreate, discord.AuditLogSoundboardSoundUpdate, discord.AuditLogSoundboardSoundDelete:
+		b.handleSoundboardSoundAuditEntry(e.GuildID, entry)
 	}
 }
 
@@ -592,6 +602,174 @@ func (b *Bot) handleThreadAuditEntry(guildID snowflake.ID, entry discord.AuditLo
 	}
 	appendAuditFields(&embed, entry)
 	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) handleEmojiAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	var title string
+	var color int
+	switch entry.ActionType {
+	case discord.AuditLogEventEmojiCreate:
+		title = "Emoji Created"
+		color = colorGreen
+	case discord.AuditLogEventEmojiUpdate:
+		title = "Emoji Updated"
+		color = colorYellow
+	case discord.AuditLogEventEmojiDelete:
+		title = "Emoji Deleted"
+		color = colorRed
+	}
+	embed := discord.Embed{Title: title, Color: color}
+	name := auditLogChangeName(entry, entry.ActionType == discord.AuditLogEventEmojiDelete)
+	if name != "" {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Emoji", Value: name, Inline: boolPtr(true),
+		})
+	} else if entry.TargetID != nil {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Emoji ID", Value: fmt.Sprintf("`%d`", *entry.TargetID), Inline: boolPtr(true),
+		})
+	}
+	appendAuditFields(&embed, entry)
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) handleStickerAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	var title string
+	var color int
+	switch entry.ActionType {
+	case discord.AuditLogEventStickerCreate:
+		title = "Sticker Created"
+		color = colorGreen
+	case discord.AuditLogEventStickerUpdate:
+		title = "Sticker Updated"
+		color = colorYellow
+	case discord.AuditLogEventStickerDelete:
+		title = "Sticker Deleted"
+		color = colorRed
+	}
+	embed := discord.Embed{Title: title, Color: color}
+	name := auditLogChangeName(entry, entry.ActionType == discord.AuditLogEventStickerDelete)
+	if name != "" {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Sticker", Value: name, Inline: boolPtr(true),
+		})
+	} else if entry.TargetID != nil {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Sticker ID", Value: fmt.Sprintf("`%d`", *entry.TargetID), Inline: boolPtr(true),
+		})
+	}
+	appendAuditFields(&embed, entry)
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) handleStageInstanceAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	var title string
+	var color int
+	switch entry.ActionType {
+	case discord.AuditLogEventStageInstanceCreate:
+		title = "Stage Started"
+		color = colorGreen
+	case discord.AuditLogEventStageInstanceUpdate:
+		title = "Stage Updated"
+		color = colorYellow
+	case discord.AuditLogEventStageInstanceDelete:
+		title = "Stage Ended"
+		color = colorRed
+	}
+	embed := discord.Embed{Title: title, Color: color}
+	// Extract topic from changes
+	isDelete := entry.ActionType == discord.AuditLogEventStageInstanceDelete
+	for _, change := range entry.Changes {
+		if change.Key == discord.AuditLogChangeKeyTopic {
+			var topic string
+			if isDelete {
+				_ = change.UnmarshalOldValue(&topic)
+			} else {
+				_ = change.UnmarshalNewValue(&topic)
+			}
+			if topic != "" {
+				embed.Fields = append(embed.Fields, discord.EmbedField{
+					Name: "Topic", Value: topic, Inline: boolPtr(true),
+				})
+			}
+			break
+		}
+	}
+	appendAuditFields(&embed, entry)
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) handleScheduledEventAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	var title string
+	var color int
+	switch entry.ActionType {
+	case discord.AuditLogGuildScheduledEventCreate:
+		title = "Scheduled Event Created"
+		color = colorGreen
+	case discord.AuditLogGuildScheduledEventUpdate:
+		title = "Scheduled Event Updated"
+		color = colorYellow
+	case discord.AuditLogGuildScheduledEventDelete:
+		title = "Scheduled Event Deleted"
+		color = colorRed
+	}
+	embed := discord.Embed{Title: title, Color: color}
+	isDelete := entry.ActionType == discord.AuditLogGuildScheduledEventDelete
+	name := auditLogChangeName(entry, isDelete)
+	if name != "" {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Event", Value: name, Inline: boolPtr(true),
+		})
+	}
+	appendAuditFields(&embed, entry)
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) handleSoundboardSoundAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+	var title string
+	var color int
+	switch entry.ActionType {
+	case discord.AuditLogSoundboardSoundCreate:
+		title = "Soundboard Sound Created"
+		color = colorGreen
+	case discord.AuditLogSoundboardSoundUpdate:
+		title = "Soundboard Sound Updated"
+		color = colorYellow
+	case discord.AuditLogSoundboardSoundDelete:
+		title = "Soundboard Sound Deleted"
+		color = colorRed
+	}
+	embed := discord.Embed{Title: title, Color: color}
+	isDelete := entry.ActionType == discord.AuditLogSoundboardSoundDelete
+	name := auditLogChangeName(entry, isDelete)
+	if name != "" {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Sound", Value: name, Inline: boolPtr(true),
+		})
+	} else if entry.TargetID != nil {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Sound ID", Value: fmt.Sprintf("`%d`", *entry.TargetID), Inline: boolPtr(true),
+		})
+	}
+	appendAuditFields(&embed, entry)
+	b.postEventLog(guildID, embed)
+}
+
+// auditLogChangeName extracts the "name" field from audit log changes.
+// For deletes, it reads old_value; otherwise new_value.
+func auditLogChangeName(entry discord.AuditLogEntry, isDelete bool) string {
+	for _, change := range entry.Changes {
+		if change.Key == discord.AuditLogChangeKeyName {
+			var name string
+			if isDelete {
+				_ = change.UnmarshalOldValue(&name)
+			} else {
+				_ = change.UnmarshalNewValue(&name)
+			}
+			return name
+		}
+	}
+	return ""
 }
 
 // appendAuditFields appends "Responsible Moderator" and "Reason" fields from an audit log entry.
@@ -917,6 +1095,301 @@ func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
 		Fields: []discord.EmbedField{
 			{Name: "Name", Value: e.Thread.Name(), Inline: boolPtr(true)},
 			{Name: "Parent", Value: channelMention(e.ParentID), Inline: boolPtr(true)},
+		},
+	}
+	b.postEventLog(e.GuildID, embed)
+}
+
+// --- Emoji events ---
+
+func (b *Bot) onEmojiCreate(e *events.EmojiCreate) {
+	embed := discord.Embed{
+		Title: "Emoji Created",
+		Color: colorGreen,
+		Fields: []discord.EmbedField{
+			{Name: "Name", Value: e.Emoji.Name, Inline: boolPtr(true)},
+			{Name: "ID", Value: fmt.Sprintf("`%d`", e.Emoji.ID), Inline: boolPtr(true)},
+		},
+	}
+	if e.Emoji.Animated {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Animated", Value: "Yes", Inline: boolPtr(true),
+		})
+	}
+	b.postEventLog(e.GuildID, embed)
+}
+
+func (b *Bot) onEmojiUpdate(e *events.EmojiUpdate) {
+	if e.OldEmoji.ID == 0 {
+		return
+	}
+	var fields []discord.EmbedField
+	if e.OldEmoji.Name != e.Emoji.Name {
+		fields = append(fields,
+			discord.EmbedField{Name: "Old Name", Value: e.OldEmoji.Name, Inline: boolPtr(true)},
+			discord.EmbedField{Name: "New Name", Value: e.Emoji.Name, Inline: boolPtr(true)},
+		)
+	}
+	if len(fields) == 0 {
+		return
+	}
+	fields = append(fields, discord.EmbedField{
+		Name: "ID", Value: fmt.Sprintf("`%d`", e.Emoji.ID), Inline: boolPtr(true),
+	})
+	embed := discord.Embed{
+		Title:  "Emoji Updated",
+		Color:  colorYellow,
+		Fields: fields,
+	}
+	b.postEventLog(e.GuildID, embed)
+}
+
+func (b *Bot) onEmojiDelete(e *events.EmojiDelete) {
+	embed := discord.Embed{
+		Title: "Emoji Deleted",
+		Color: colorRed,
+		Fields: []discord.EmbedField{
+			{Name: "Name", Value: e.Emoji.Name, Inline: boolPtr(true)},
+			{Name: "ID", Value: fmt.Sprintf("`%d`", e.Emoji.ID), Inline: boolPtr(true)},
+		},
+	}
+	b.postEventLog(e.GuildID, embed)
+}
+
+// --- Sticker events ---
+
+func (b *Bot) onStickerCreate(e *events.StickerCreate) {
+	embed := discord.Embed{
+		Title: "Sticker Created",
+		Color: colorGreen,
+		Fields: []discord.EmbedField{
+			{Name: "Name", Value: e.Sticker.Name, Inline: boolPtr(true)},
+			{Name: "ID", Value: fmt.Sprintf("`%d`", e.Sticker.ID), Inline: boolPtr(true)},
+		},
+	}
+	b.postEventLog(e.GuildID, embed)
+}
+
+func (b *Bot) onStickerUpdate(e *events.StickerUpdate) {
+	if e.OldSticker.ID == 0 {
+		return
+	}
+	var fields []discord.EmbedField
+	if e.OldSticker.Name != e.Sticker.Name {
+		fields = append(fields,
+			discord.EmbedField{Name: "Old Name", Value: e.OldSticker.Name, Inline: boolPtr(true)},
+			discord.EmbedField{Name: "New Name", Value: e.Sticker.Name, Inline: boolPtr(true)},
+		)
+	}
+	if e.OldSticker.Description != e.Sticker.Description {
+		fields = append(fields,
+			discord.EmbedField{Name: "Old Description", Value: orDash(e.OldSticker.Description), Inline: boolPtr(true)},
+			discord.EmbedField{Name: "New Description", Value: orDash(e.Sticker.Description), Inline: boolPtr(true)},
+		)
+	}
+	if len(fields) == 0 {
+		return
+	}
+	fields = append(fields, discord.EmbedField{
+		Name: "ID", Value: fmt.Sprintf("`%d`", e.Sticker.ID), Inline: boolPtr(true),
+	})
+	embed := discord.Embed{
+		Title:  "Sticker Updated",
+		Color:  colorYellow,
+		Fields: fields,
+	}
+	b.postEventLog(e.GuildID, embed)
+}
+
+func (b *Bot) onStickerDelete(e *events.StickerDelete) {
+	embed := discord.Embed{
+		Title: "Sticker Deleted",
+		Color: colorRed,
+		Fields: []discord.EmbedField{
+			{Name: "Name", Value: e.Sticker.Name, Inline: boolPtr(true)},
+			{Name: "ID", Value: fmt.Sprintf("`%d`", e.Sticker.ID), Inline: boolPtr(true)},
+		},
+	}
+	b.postEventLog(e.GuildID, embed)
+}
+
+// --- Stage Instance events ---
+
+func (b *Bot) onStageInstanceCreate(e *events.StageInstanceCreate) {
+	embed := discord.Embed{
+		Title: "Stage Started",
+		Color: colorGreen,
+		Fields: []discord.EmbedField{
+			{Name: "Topic", Value: e.StageInstance.Topic, Inline: boolPtr(true)},
+			{Name: "Channel", Value: channelMention(e.StageInstance.ChannelID), Inline: boolPtr(true)},
+		},
+	}
+	b.postEventLog(e.StageInstance.GuildID, embed)
+}
+
+func (b *Bot) onStageInstanceUpdate(e *events.StageInstanceUpdate) {
+	if e.OldStageInstance.ID == 0 {
+		return
+	}
+	var fields []discord.EmbedField
+	if e.OldStageInstance.Topic != e.StageInstance.Topic {
+		fields = append(fields,
+			discord.EmbedField{Name: "Old Topic", Value: e.OldStageInstance.Topic, Inline: boolPtr(true)},
+			discord.EmbedField{Name: "New Topic", Value: e.StageInstance.Topic, Inline: boolPtr(true)},
+		)
+	}
+	if len(fields) == 0 {
+		return
+	}
+	fields = append(fields, discord.EmbedField{
+		Name: "Channel", Value: channelMention(e.StageInstance.ChannelID), Inline: boolPtr(true),
+	})
+	embed := discord.Embed{
+		Title:  "Stage Updated",
+		Color:  colorYellow,
+		Fields: fields,
+	}
+	b.postEventLog(e.StageInstance.GuildID, embed)
+}
+
+func (b *Bot) onStageInstanceDelete(e *events.StageInstanceDelete) {
+	embed := discord.Embed{
+		Title: "Stage Ended",
+		Color: colorRed,
+		Fields: []discord.EmbedField{
+			{Name: "Topic", Value: e.StageInstance.Topic, Inline: boolPtr(true)},
+			{Name: "Channel", Value: channelMention(e.StageInstance.ChannelID), Inline: boolPtr(true)},
+		},
+	}
+	b.postEventLog(e.StageInstance.GuildID, embed)
+}
+
+// --- Scheduled Event events ---
+
+func (b *Bot) onScheduledEventCreate(e *events.GuildScheduledEventCreate) {
+	fields := []discord.EmbedField{
+		{Name: "Name", Value: e.GuildScheduled.Name, Inline: boolPtr(true)},
+		{Name: "Start", Value: fmt.Sprintf("<t:%d:F>", e.GuildScheduled.ScheduledStartTime.Unix()), Inline: boolPtr(true)},
+	}
+	embed := discord.Embed{
+		Title:  "Scheduled Event Created",
+		Color:  colorGreen,
+		Fields: fields,
+	}
+	b.postEventLog(e.GuildScheduled.GuildID, embed)
+}
+
+func (b *Bot) onScheduledEventUpdate(e *events.GuildScheduledEventUpdate) {
+	if e.OldGuildScheduled.ID == 0 {
+		return
+	}
+	var fields []discord.EmbedField
+	if e.OldGuildScheduled.Name != e.GuildScheduled.Name {
+		fields = append(fields,
+			discord.EmbedField{Name: "Old Name", Value: e.OldGuildScheduled.Name, Inline: boolPtr(true)},
+			discord.EmbedField{Name: "New Name", Value: e.GuildScheduled.Name, Inline: boolPtr(true)},
+		)
+	}
+	if e.OldGuildScheduled.Status != e.GuildScheduled.Status {
+		fields = append(fields, discord.EmbedField{
+			Name: "Status", Value: fmt.Sprintf("%s → %s", scheduledEventStatusName(e.OldGuildScheduled.Status), scheduledEventStatusName(e.GuildScheduled.Status)),
+		})
+	}
+	if !e.OldGuildScheduled.ScheduledStartTime.Equal(e.GuildScheduled.ScheduledStartTime) {
+		fields = append(fields, discord.EmbedField{
+			Name: "Start", Value: fmt.Sprintf("<t:%d:F> → <t:%d:F>", e.OldGuildScheduled.ScheduledStartTime.Unix(), e.GuildScheduled.ScheduledStartTime.Unix()),
+		})
+	}
+	if len(fields) == 0 {
+		return
+	}
+	embed := discord.Embed{
+		Title:  "Scheduled Event Updated",
+		Color:  colorYellow,
+		Fields: fields,
+	}
+	b.postEventLog(e.GuildScheduled.GuildID, embed)
+}
+
+func (b *Bot) onScheduledEventDelete(e *events.GuildScheduledEventDelete) {
+	embed := discord.Embed{
+		Title: "Scheduled Event Deleted",
+		Color: colorRed,
+		Fields: []discord.EmbedField{
+			{Name: "Name", Value: e.GuildScheduled.Name, Inline: boolPtr(true)},
+		},
+	}
+	b.postEventLog(e.GuildScheduled.GuildID, embed)
+}
+
+func scheduledEventStatusName(s discord.ScheduledEventStatus) string {
+	switch s {
+	case discord.ScheduledEventStatusScheduled:
+		return "Scheduled"
+	case discord.ScheduledEventStatusActive:
+		return "Active"
+	case discord.ScheduledEventStatusCompleted:
+		return "Completed"
+	case discord.ScheduledEventStatusCancelled:
+		return "Cancelled"
+	default:
+		return fmt.Sprintf("Status %d", s)
+	}
+}
+
+// --- Soundboard Sound events ---
+
+func (b *Bot) onSoundboardSoundCreate(e *events.GuildSoundboardSoundCreate) {
+	guildID := snowflake.ID(0)
+	if e.SoundboardSound.GuildID != nil {
+		guildID = *e.SoundboardSound.GuildID
+	}
+	embed := discord.Embed{
+		Title: "Soundboard Sound Created",
+		Color: colorGreen,
+		Fields: []discord.EmbedField{
+			{Name: "Name", Value: e.SoundboardSound.Name, Inline: boolPtr(true)},
+			{Name: "ID", Value: fmt.Sprintf("`%d`", e.SoundboardSound.SoundID), Inline: boolPtr(true)},
+		},
+	}
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) onSoundboardSoundUpdate(e *events.GuildSoundboardSoundUpdate) {
+	if e.OldGuildSoundboardSound.SoundID == 0 {
+		return
+	}
+	guildID := snowflake.ID(0)
+	if e.SoundboardSound.GuildID != nil {
+		guildID = *e.SoundboardSound.GuildID
+	}
+	var fields []discord.EmbedField
+	if e.OldGuildSoundboardSound.Name != e.SoundboardSound.Name {
+		fields = append(fields,
+			discord.EmbedField{Name: "Old Name", Value: e.OldGuildSoundboardSound.Name, Inline: boolPtr(true)},
+			discord.EmbedField{Name: "New Name", Value: e.SoundboardSound.Name, Inline: boolPtr(true)},
+		)
+	}
+	if len(fields) == 0 {
+		return
+	}
+	fields = append(fields, discord.EmbedField{
+		Name: "ID", Value: fmt.Sprintf("`%d`", e.SoundboardSound.SoundID), Inline: boolPtr(true),
+	})
+	embed := discord.Embed{
+		Title:  "Soundboard Sound Updated",
+		Color:  colorYellow,
+		Fields: fields,
+	}
+	b.postEventLog(guildID, embed)
+}
+
+func (b *Bot) onSoundboardSoundDelete(e *events.GuildSoundboardSoundDelete) {
+	embed := discord.Embed{
+		Title: "Soundboard Sound Deleted",
+		Color: colorRed,
+		Fields: []discord.EmbedField{
+			{Name: "Sound ID", Value: fmt.Sprintf("`%d`", e.SoundID), Inline: boolPtr(true)},
 		},
 	}
 	b.postEventLog(e.GuildID, embed)
