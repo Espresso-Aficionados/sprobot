@@ -9,27 +9,27 @@ import (
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
-func TestGetTopPostersConfig(t *testing.T) {
-	configs := getTopPostersConfig()
+func TestDefaultTopPostersConfig(t *testing.T) {
+	configs := defaultTopPostersConfig()
 	if configs == nil {
 		t.Fatal("config is nil")
 	}
 	if len(configs) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(configs))
 	}
-	cfg, ok := configs[1013566342345019512]
+	roleID, ok := configs[1013566342345019512]
 	if !ok {
 		t.Fatal("dev guild ID not found")
 	}
-	if cfg.TargetRoleID != 0 {
-		t.Errorf("dev TargetRoleID = %d, want 0", cfg.TargetRoleID)
+	if roleID != 0 {
+		t.Errorf("dev TargetRoleID = %d, want 0", roleID)
 	}
-	cfg, ok = configs[726985544038612993]
+	roleID, ok = configs[726985544038612993]
 	if !ok {
 		t.Fatal("prod guild ID not found")
 	}
-	if cfg.TargetRoleID != 791104833117225000 {
-		t.Errorf("prod TargetRoleID = %d, want 791104833117225000", cfg.TargetRoleID)
+	if roleID != 791104833117225000 {
+		t.Errorf("prod TargetRoleID = %d, want 791104833117225000", roleID)
 	}
 }
 

@@ -2,8 +2,11 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
@@ -11,18 +14,66 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
+	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 const embedSplitSize = 1024
 
-type modLogConfig struct {
-	ChannelID snowflake.ID
+type modLogState struct {
+	mu        sync.Mutex
+	ChannelID snowflake.ID `json:"channel_id"`
 }
 
-func getModLogConfig() map[snowflake.ID]modLogConfig {
-	return map[snowflake.ID]modLogConfig{
-		726985544038612993:  {ChannelID: 1141477354129080361},
-		1013566342345019512: {ChannelID: 1142519200682876938},
+func defaultModLogConfig() map[snowflake.ID]snowflake.ID {
+	return map[snowflake.ID]snowflake.ID{
+		726985544038612993:  1141477354129080361,
+		1013566342345019512: 1142519200682876938,
+	}
+}
+
+func (b *Bot) loadModLog() {
+	ctx := context.Background()
+	defaults := defaultModLogConfig()
+	for _, guildID := range b.GuildIDs() {
+		st := &modLogState{}
+
+		data, err := b.S3.FetchGuildJSON(ctx, "modlog", fmt.Sprintf("%d", guildID))
+		if errors.Is(err, s3client.ErrNotFound) {
+			if chID, ok := defaults[guildID]; ok {
+				st.ChannelID = chID
+			}
+			b.Log.Info("No existing modlog config, using defaults", "guild_id", guildID)
+		} else if err != nil {
+			b.Log.Error("Failed to load modlog config", "guild_id", guildID, "error", err)
+			if chID, ok := defaults[guildID]; ok {
+				st.ChannelID = chID
+			}
+		} else {
+			if err := json.Unmarshal(data, st); err != nil {
+				b.Log.Error("Failed to decode modlog config", "guild_id", guildID, "error", err)
+			}
+		}
+
+		b.modLog[guildID] = st
+		b.Log.Info("Loaded modlog config", "guild_id", guildID, "channel_id", st.ChannelID)
+	}
+}
+
+func (b *Bot) persistModLog(guildID snowflake.ID, st *modLogState) error {
+	st.mu.Lock()
+	data, err := json.Marshal(st)
+	st.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	return b.S3.SaveGuildJSON(context.Background(), "modlog", fmt.Sprintf("%d", guildID), data)
+}
+
+func (b *Bot) saveModLog() {
+	for guildID, st := range b.modLog {
+		if err := b.persistModLog(guildID, st); err != nil {
+			b.Log.Error("Failed to save modlog config", "guild_id", guildID, "error", err)
+		}
 	}
 }
 
@@ -162,14 +213,21 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		})
 	}
 
-	mlCfg, ok := b.modLogConfig[*e.GuildID()]
-	if !ok {
+	st := b.modLog[*e.GuildID()]
+	if st == nil {
 		b.Log.Info("No mod log config found")
+		return
+	}
+	st.mu.Lock()
+	modLogChannelID := st.ChannelID
+	st.mu.Unlock()
+	if modLogChannelID == 0 {
+		b.Log.Info("Mod log channel not set")
 		return
 	}
 
 	// Find or create thread in the mod log forum channel
-	thread := b.findOrCreateModLogThread(mlCfg.ChannelID, msg.Author)
+	thread := b.findOrCreateModLogThread(modLogChannelID, msg.Author)
 	if thread == nil {
 		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 			Content: "Oops! Something went wrong finding the mod log channel.",
@@ -190,8 +248,8 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		return
 	}
 
-	modLogChannel, _ := b.Client.Rest.GetChannel(mlCfg.ChannelID)
-	modLogChannelName := fmt.Sprintf("%d", mlCfg.ChannelID)
+	modLogChannel, _ := b.Client.Rest.GetChannel(modLogChannelID)
+	modLogChannelName := fmt.Sprintf("%d", modLogChannelID)
 	if modLogChannel != nil {
 		modLogChannelName = modLogChannel.Name()
 	}
@@ -275,4 +333,92 @@ func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author disco
 
 func messageLink(guildID, channelID, messageID snowflake.ID) string {
 	return fmt.Sprintf("https://discord.com/channels/%d/%d/%d", guildID, channelID, messageID)
+}
+
+// --- /config modlog handlers ---
+
+func (b *Bot) handleModLogConfig(e *events.ApplicationCommandInteractionCreate) {
+	data, ok := e.Data.(discord.SlashCommandInteractionData)
+	if !ok {
+		return
+	}
+
+	guildID := e.GuildID()
+	if guildID == nil {
+		return
+	}
+
+	st := b.modLog[*guildID]
+	if st == nil {
+		st = &modLogState{}
+		b.modLog[*guildID] = st
+	}
+
+	subCmd := data.SubCommandName
+	if subCmd == nil {
+		return
+	}
+
+	switch *subCmd {
+	case "set":
+		b.handleModLogConfigSet(e, *guildID, st)
+	case "show":
+		b.handleModLogConfigShow(e, st)
+	case "clear":
+		b.handleModLogConfigClear(e, *guildID, st)
+	}
+}
+
+func (b *Bot) handleModLogConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *modLogState) {
+	data := e.Data.(discord.SlashCommandInteractionData)
+
+	ch, ok := data.OptChannel("channel")
+	if !ok {
+		botutil.RespondEphemeral(e, "Please provide a channel.")
+		return
+	}
+
+	b.Log.Info("Modlog config set", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
+
+	st.mu.Lock()
+	st.ChannelID = ch.ID
+	st.mu.Unlock()
+
+	if err := b.persistModLog(guildID, st); err != nil {
+		b.Log.Error("Failed to persist modlog config", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("Mod log forum channel set to <#%d>.", ch.ID))
+}
+
+func (b *Bot) handleModLogConfigShow(e *events.ApplicationCommandInteractionCreate, st *modLogState) {
+	b.Log.Info("Modlog config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
+
+	st.mu.Lock()
+	channelID := st.ChannelID
+	st.mu.Unlock()
+
+	if channelID == 0 {
+		botutil.RespondEphemeral(e, "**Mod log channel:** Not set")
+		return
+	}
+	botutil.RespondEphemeral(e, fmt.Sprintf("**Mod log channel:** <#%d>", channelID))
+}
+
+func (b *Bot) handleModLogConfigClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *modLogState) {
+	b.Log.Info("Modlog config clear", "user_id", e.User().ID, "guild_id", guildID)
+
+	st.mu.Lock()
+	st.ChannelID = 0
+	st.mu.Unlock()
+
+	if err := b.persistModLog(guildID, st); err != nil {
+		b.Log.Error("Failed to persist modlog config", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, "Mod log disabled.")
 }

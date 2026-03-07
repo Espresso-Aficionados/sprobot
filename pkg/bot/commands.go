@@ -331,6 +331,106 @@ func (b *Bot) registerAllCommands() error {
 
 		configOpts = append(configOpts,
 			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "autorole",
+				Description: "Configure auto-role for new members",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "set",
+						Description: "Set the auto-role",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionRole{
+								Name:        "role",
+								Description: "Role to assign to new members",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "show",
+						Description: "Show current auto-role",
+					},
+					{
+						Name:        "clear",
+						Description: "Disable auto-role",
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "eventlog",
+				Description: "Configure event log channel",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "set",
+						Description: "Set the event log channel",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to post event logs in",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "show",
+						Description: "Show current event log channel",
+					},
+					{
+						Name:        "clear",
+						Description: "Disable event logging",
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "modlog",
+				Description: "Configure mod log forum channel",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "set",
+						Description: "Set the mod log forum channel",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Forum channel for mod logs",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "show",
+						Description: "Show current mod log channel",
+					},
+					{
+						Name:        "clear",
+						Description: "Disable mod log",
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "topposters",
+				Description: "Configure top posters tracking",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "set",
+						Description: "Set role to exclude from top posters",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionRole{
+								Name:        "role",
+								Description: "Role to exclude from tracking",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "show",
+						Description: "Show current top posters configuration",
+					},
+					{
+						Name:        "clear",
+						Description: "Clear role exclusion filter",
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
 				Name:        "starboard",
 				Description: "Configure starboard",
 				Options: []discord.ApplicationCommandOptionSubCommand{
@@ -561,6 +661,14 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			b.handleMarketConfig(e)
 		case "market-blacklist":
 			b.handleMarketBlacklist(e)
+		case "autorole":
+			b.handleAutoRoleConfig(e)
+		case "eventlog":
+			b.handleEventLogConfig(e)
+		case "modlog":
+			b.handleModLogConfig(e)
+		case "topposters":
+			b.handleTopPostersConfigCmd(e)
 		}
 	}
 }

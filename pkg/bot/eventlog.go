@@ -1,13 +1,20 @@
 package bot
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/botutil"
+	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 // Embed colors for event log entries.
@@ -21,24 +28,77 @@ const (
 	colorTeal    = 0x1ABC9C
 )
 
-type eventLogChannelConfig struct {
-	ChannelID snowflake.ID
+type eventLogState struct {
+	mu        sync.Mutex
+	ChannelID snowflake.ID `json:"channel_id"`
 }
 
-func getEventLogConfig() map[snowflake.ID]eventLogChannelConfig {
-	return map[snowflake.ID]eventLogChannelConfig{
-		726985544038612993:  {ChannelID: 835704010161258526},
-		1013566342345019512: {ChannelID: 1015659489610960987},
+func defaultEventLogConfig() map[snowflake.ID]snowflake.ID {
+	return map[snowflake.ID]snowflake.ID{
+		726985544038612993:  835704010161258526,
+		1013566342345019512: 1015659489610960987,
+	}
+}
+
+func (b *Bot) loadEventLog() {
+	ctx := context.Background()
+	defaults := defaultEventLogConfig()
+	for _, guildID := range b.GuildIDs() {
+		st := &eventLogState{}
+
+		data, err := b.S3.FetchGuildJSON(ctx, "eventlog", fmt.Sprintf("%d", guildID))
+		if errors.Is(err, s3client.ErrNotFound) {
+			if chID, ok := defaults[guildID]; ok {
+				st.ChannelID = chID
+			}
+			b.Log.Info("No existing eventlog config, using defaults", "guild_id", guildID)
+		} else if err != nil {
+			b.Log.Error("Failed to load eventlog config", "guild_id", guildID, "error", err)
+			if chID, ok := defaults[guildID]; ok {
+				st.ChannelID = chID
+			}
+		} else {
+			if err := json.Unmarshal(data, st); err != nil {
+				b.Log.Error("Failed to decode eventlog config", "guild_id", guildID, "error", err)
+			}
+		}
+
+		b.eventLog[guildID] = st
+		b.Log.Info("Loaded eventlog config", "guild_id", guildID, "channel_id", st.ChannelID)
+	}
+}
+
+func (b *Bot) persistEventLog(guildID snowflake.ID, st *eventLogState) error {
+	st.mu.Lock()
+	data, err := json.Marshal(st)
+	st.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	return b.S3.SaveGuildJSON(context.Background(), "eventlog", fmt.Sprintf("%d", guildID), data)
+}
+
+func (b *Bot) saveEventLog() {
+	for guildID, st := range b.eventLog {
+		if err := b.persistEventLog(guildID, st); err != nil {
+			b.Log.Error("Failed to save eventlog config", "guild_id", guildID, "error", err)
+		}
 	}
 }
 
 func (b *Bot) postEventLog(guildID snowflake.ID, embed discord.Embed) {
-	cfg, ok := b.eventLogConfig[guildID]
-	if !ok || cfg.ChannelID == 0 {
+	st := b.eventLog[guildID]
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	channelID := st.ChannelID
+	st.mu.Unlock()
+	if channelID == 0 {
 		return
 	}
 	embed.Timestamp = timePtr(time.Now())
-	if _, err := b.Client.Rest.CreateMessage(cfg.ChannelID, discord.MessageCreate{
+	if _, err := b.Client.Rest.CreateMessage(channelID, discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}); err != nil {
 		b.Log.Error("Failed to post event log", "guild_id", guildID, "error", err)
@@ -59,8 +119,14 @@ func truncate(s string, max int) string {
 
 // isEventLogChannel returns true if the channel is this guild's event log channel.
 func (b *Bot) isEventLogChannel(guildID, channelID snowflake.ID) bool {
-	cfg, ok := b.eventLogConfig[guildID]
-	return ok && cfg.ChannelID != 0 && cfg.ChannelID == channelID
+	st := b.eventLog[guildID]
+	if st == nil {
+		return false
+	}
+	st.mu.Lock()
+	elChannelID := st.ChannelID
+	st.mu.Unlock()
+	return elChannelID != 0 && elChannelID == channelID
 }
 
 // --- Message events ---
@@ -695,11 +761,17 @@ func formatPermissionDiff(action discord.AuditLogEvent, oldAllow, oldDeny, newAl
 }
 
 func (b *Bot) crossPostToModLog(guildID snowflake.ID, user discord.User, embed discord.Embed) {
-	mlCfg, ok := b.modLogConfig[guildID]
-	if !ok {
+	st := b.modLog[guildID]
+	if st == nil {
 		return
 	}
-	thread := b.findOrCreateModLogThread(mlCfg.ChannelID, user)
+	st.mu.Lock()
+	channelID := st.ChannelID
+	st.mu.Unlock()
+	if channelID == 0 {
+		return
+	}
+	thread := b.findOrCreateModLogThread(channelID, user)
 	if thread == nil {
 		return
 	}
@@ -1052,6 +1124,94 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%d hours", hours)
 	}
 	return fmt.Sprintf("%d minutes", int(d.Minutes()))
+}
+
+// --- /config eventlog handlers ---
+
+func (b *Bot) handleEventLogConfig(e *events.ApplicationCommandInteractionCreate) {
+	data, ok := e.Data.(discord.SlashCommandInteractionData)
+	if !ok {
+		return
+	}
+
+	guildID := e.GuildID()
+	if guildID == nil {
+		return
+	}
+
+	st := b.eventLog[*guildID]
+	if st == nil {
+		st = &eventLogState{}
+		b.eventLog[*guildID] = st
+	}
+
+	subCmd := data.SubCommandName
+	if subCmd == nil {
+		return
+	}
+
+	switch *subCmd {
+	case "set":
+		b.handleEventLogConfigSet(e, *guildID, st)
+	case "show":
+		b.handleEventLogConfigShow(e, st)
+	case "clear":
+		b.handleEventLogConfigClear(e, *guildID, st)
+	}
+}
+
+func (b *Bot) handleEventLogConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *eventLogState) {
+	data := e.Data.(discord.SlashCommandInteractionData)
+
+	ch, ok := data.OptChannel("channel")
+	if !ok {
+		botutil.RespondEphemeral(e, "Please provide a channel.")
+		return
+	}
+
+	b.Log.Info("Eventlog config set", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
+
+	st.mu.Lock()
+	st.ChannelID = ch.ID
+	st.mu.Unlock()
+
+	if err := b.persistEventLog(guildID, st); err != nil {
+		b.Log.Error("Failed to persist eventlog config", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("Event log channel set to <#%d>.", ch.ID))
+}
+
+func (b *Bot) handleEventLogConfigShow(e *events.ApplicationCommandInteractionCreate, st *eventLogState) {
+	b.Log.Info("Eventlog config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
+
+	st.mu.Lock()
+	channelID := st.ChannelID
+	st.mu.Unlock()
+
+	if channelID == 0 {
+		botutil.RespondEphemeral(e, "**Event log channel:** Not set")
+		return
+	}
+	botutil.RespondEphemeral(e, fmt.Sprintf("**Event log channel:** <#%d>", channelID))
+}
+
+func (b *Bot) handleEventLogConfigClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *eventLogState) {
+	b.Log.Info("Eventlog config clear", "user_id", e.User().ID, "guild_id", guildID)
+
+	st.mu.Lock()
+	st.ChannelID = 0
+	st.mu.Unlock()
+
+	if err := b.persistEventLog(guildID, st); err != nil {
+		b.Log.Error("Failed to persist eventlog config", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, "Event logging disabled.")
 }
 
 func channelTypeName(t discord.ChannelType) string {

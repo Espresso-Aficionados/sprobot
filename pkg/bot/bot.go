@@ -33,14 +33,14 @@ type Bot struct {
 	msgCache         *cappedGroupedCache[discord.Message]
 	memberCache      *cappedGroupedCache[discord.Member]
 	starboard        map[snowflake.ID]*starboardState
-	topPostersConfig map[snowflake.ID]topPostersConfig
+	topPostersConfig map[snowflake.ID]*topPostersConfigState
 	renameLogs       map[snowflake.ID]*renameLogState
 	templates        map[snowflake.ID][]sprobot.Template
 	selfroles        map[snowflake.ID][]selfroleConfig
 	ticketConfigs    map[snowflake.ID]ticketConfig
-	eventLogConfig   map[snowflake.ID]eventLogChannelConfig
-	autoRoleConfig   map[snowflake.ID]snowflake.ID
-	modLogConfig     map[snowflake.ID]modLogConfig
+	autoRole         map[snowflake.ID]*autoRoleState
+	eventLog         map[snowflake.ID]*eventLogState
+	modLog           map[snowflake.ID]*modLogState
 	threadHelpConfig map[snowflake.ID]threadHelpInfo
 }
 
@@ -71,10 +71,10 @@ func New(token string) (*Bot, error) {
 		ticketConfigs:    make(map[snowflake.ID]ticketConfig),
 		msgCache:         msgCache,
 		memberCache:      memberCache,
-		topPostersConfig: getTopPostersConfig(),
-		eventLogConfig:   getEventLogConfig(),
-		autoRoleConfig:   getAutoRoleConfig(),
-		modLogConfig:     getModLogConfig(),
+		topPostersConfig: make(map[snowflake.ID]*topPostersConfigState),
+		autoRole:         make(map[snowflake.ID]*autoRoleState),
+		eventLog:         make(map[snowflake.ID]*eventLogState),
+		modLog:           make(map[snowflake.ID]*modLogState),
 		threadHelpConfig: getThreadHelpConfig(),
 	}
 
@@ -145,6 +145,10 @@ func (b *Bot) Run() error {
 	b.loadTemplates()
 	b.loadSelfroles()
 	b.loadTicketConfigs()
+	b.loadAutoRole()
+	b.loadEventLog()
+	b.loadModLog()
+	b.loadTopPostersConfig()
 	b.loadTopPosters()
 	b.loadPosterRole()
 	b.loadTickets()
@@ -171,6 +175,10 @@ func (b *Bot) Run() error {
 
 	botutil.WaitForShutdown(b.Log, "Bot")
 	close(b.stop)
+	b.saveAutoRole()
+	b.saveEventLog()
+	b.saveModLog()
+	b.saveTopPostersConfig()
 	b.saveTopPosters()
 	b.savePosterRole()
 	b.saveTickets()

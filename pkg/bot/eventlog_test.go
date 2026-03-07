@@ -9,8 +9,8 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
-func TestGetEventLogConfig(t *testing.T) {
-	cfg := getEventLogConfig()
+func TestDefaultEventLogConfig(t *testing.T) {
+	cfg := defaultEventLogConfig()
 	if cfg == nil {
 		t.Fatal("config is nil")
 	}
@@ -22,7 +22,7 @@ func TestGetEventLogConfig(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing guild entry %d", guildID)
 		}
-		if c.ChannelID == 0 {
+		if c == 0 {
 			t.Errorf("ChannelID for guild %d should be set", guildID)
 		}
 	}

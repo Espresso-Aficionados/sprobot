@@ -2,8 +2,8 @@ package bot
 
 import "testing"
 
-func TestGetAutoRoleConfig(t *testing.T) {
-	cfg := getAutoRoleConfig()
+func TestDefaultAutoRoleConfig(t *testing.T) {
+	cfg := defaultAutoRoleConfig()
 	if len(cfg) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(cfg))
 	}

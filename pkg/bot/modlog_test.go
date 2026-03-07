@@ -5,19 +5,19 @@ import (
 	"testing"
 )
 
-func TestGetModLogConfig(t *testing.T) {
-	config := getModLogConfig()
+func TestDefaultModLogConfig(t *testing.T) {
+	config := defaultModLogConfig()
 	if config == nil {
 		t.Fatal("config is nil")
 	}
 	if len(config) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(config))
 	}
-	if config[1013566342345019512].ChannelID != 1142519200682876938 {
-		t.Errorf("dev ChannelID = %d, want %d", config[1013566342345019512].ChannelID, 1142519200682876938)
+	if config[1013566342345019512] != 1142519200682876938 {
+		t.Errorf("dev ChannelID = %d, want %d", config[1013566342345019512], 1142519200682876938)
 	}
-	if config[726985544038612993].ChannelID != 1141477354129080361 {
-		t.Errorf("prod ChannelID = %d, want %d", config[726985544038612993].ChannelID, 1141477354129080361)
+	if config[726985544038612993] != 1141477354129080361 {
+		t.Errorf("prod ChannelID = %d, want %d", config[726985544038612993], 1141477354129080361)
 	}
 }
 
