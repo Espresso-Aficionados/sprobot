@@ -21,22 +21,14 @@ type topPostersConfig struct {
 	TargetRoleID snowflake.ID // Role to filter OUT (0 = no filtering)
 }
 
-func getTopPostersConfig(env string) map[snowflake.ID]topPostersConfig {
-	switch env {
-	case "prod":
-		return map[snowflake.ID]topPostersConfig{
-			726985544038612993: {
-				TargetRoleID: 791104833117225000,
-			},
-		}
-	case "dev":
-		return map[snowflake.ID]topPostersConfig{
-			1013566342345019512: {
-				TargetRoleID: 0,
-			},
-		}
-	default:
-		return nil
+func getTopPostersConfig() map[snowflake.ID]topPostersConfig {
+	return map[snowflake.ID]topPostersConfig{
+		726985544038612993: {
+			TargetRoleID: 791104833117225000,
+		},
+		1013566342345019512: {
+			TargetRoleID: 0,
+		},
 	}
 }
 
@@ -57,24 +49,18 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	b.ensureAutoRole(guildID, e.Message)
 	b.checkPosterRole(guildID, e.ChannelID, e.Message)
 
-	configs := b.topPostersConfig
-	cfg, ok := configs[guildID]
-	if !ok {
+	gc := b.topPosters[guildID]
+	if gc == nil {
 		return
 	}
 
 	// Filter out users with the target role at recording time
-	if cfg.TargetRoleID != 0 && e.Message.Member != nil {
+	if cfg, ok := b.topPostersConfig[guildID]; ok && cfg.TargetRoleID != 0 && e.Message.Member != nil {
 		for _, roleID := range e.Message.Member.RoleIDs {
 			if roleID == cfg.TargetRoleID {
 				return
 			}
 		}
-	}
-
-	gc := b.topPosters[guildID]
-	if gc == nil {
-		return
 	}
 
 	today := time.Now().UTC().Format("2006-01-02")
@@ -90,13 +76,8 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 }
 
 func (b *Bot) loadTopPosters() {
-	configs := b.topPostersConfig
-	if configs == nil {
-		return
-	}
-
 	ctx := context.Background()
-	for guildID := range configs {
+	for _, guildID := range b.GuildIDs() {
 		gc := &guildPostCounts{Counts: make(map[string]map[string]int)}
 
 		data, err := b.S3.FetchTopPosters(ctx, fmt.Sprintf("%d", guildID))
@@ -179,12 +160,6 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 
 	b.Log.Info("Top posters", "user_id", e.User().ID, "guild_id", guildID)
-
-	configs := b.topPostersConfig
-	if _, ok := configs[guildID]; !ok {
-		botutil.RespondEphemeral(e, "This command is not configured for this server.")
-		return
-	}
 
 	// Check ManageMessages permission
 	if member := e.Member(); member == nil || member.Permissions&discord.PermissionManageMessages == 0 {

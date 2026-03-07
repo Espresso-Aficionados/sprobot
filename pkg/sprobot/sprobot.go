@@ -3,16 +3,19 @@ package sprobot
 import (
 	"fmt"
 	"net/url"
+	"os"
 )
 
 const ImageField = "Gear Picture"
 const WebEndpoint = "https://bot.espressoaf.com/"
 
-func WebEndpointForEnv(env string) string {
-	if env == "prod" {
-		return WebEndpoint
+// WebEndpointFromEnv returns the web endpoint URL.
+// It reads the WEB_ENDPOINT env var, defaulting to the production URL.
+func WebEndpointFromEnv() string {
+	if v := os.Getenv("WEB_ENDPOINT"); v != "" {
+		return v
 	}
-	return "http://localhost:8080/"
+	return WebEndpoint
 }
 
 func ProfileS3Path(guildID, templateName, userID string) string {

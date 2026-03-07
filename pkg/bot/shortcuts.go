@@ -31,12 +31,8 @@ type shortcutState struct {
 }
 
 func (b *Bot) loadShortcuts() {
-	if len(b.templates) == 0 {
-		return
-	}
-
 	ctx := context.Background()
-	for guildID := range b.templates {
+	for _, guildID := range b.GuildIDs() {
 		st := &shortcutState{
 			Shortcuts: make(map[string]shortcutEntry),
 			indices:   make(map[string]int),

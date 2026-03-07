@@ -57,11 +57,9 @@ func main() {
 		log.Fatalf("Failed to create S3 client: %v", err)
 	}
 
-	env := os.Getenv("SPROBOT_ENV")
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handleIndex)
-	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}", handleProfile(s3, env))
+	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}", handleProfile(s3))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -105,7 +103,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	renderPage(w, "index.html", nil)
 }
 
-func handleProfile(s3 *s3client.Client, env string) http.HandlerFunc {
+func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		guildID := r.PathValue("guildID")
 		templateName := r.PathValue("templateName")
@@ -121,7 +119,7 @@ func handleProfile(s3 *s3client.Client, env string) http.HandlerFunc {
 
 		// Look up the image field name from hardcoded templates.
 		imageFieldName := sprobot.ImageField
-		for _, tmpls := range sprobot.AllTemplates(env) {
+		for _, tmpls := range sprobot.AllTemplates() {
 			for _, tmpl := range tmpls {
 				if tmpl.Name == templateName {
 					imageFieldName = tmpl.Image.Name

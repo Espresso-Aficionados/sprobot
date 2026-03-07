@@ -22,14 +22,12 @@ type selfroleConfig struct {
 	Buttons   []selfroleButton `json:"buttons"`
 }
 
-func getSelfroleConfig(env string) map[snowflake.ID][]selfroleConfig {
-	switch env {
-	case "prod":
-		return map[snowflake.ID][]selfroleConfig{
-			726985544038612993: {
-				{
-					ChannelID: 727325278820368456,
-					Message: `Want to share your pronouns? Clicking the buttons below will add a role that will allow other people to click your username and identify your pronouns! Please note that there is no need to share your pronouns if you don't want to for any reason.
+func getSelfroleConfig() map[snowflake.ID][]selfroleConfig {
+	return map[snowflake.ID][]selfroleConfig{
+		726985544038612993: {
+			{
+				ChannelID: 727325278820368456,
+				Message: `Want to share your pronouns? Clicking the buttons below will add a role that will allow other people to click your username and identify your pronouns! Please note that there is no need to share your pronouns if you don't want to for any reason.
 
 :one: "Ask Me/Check Profile"
 :two: "They/them"
@@ -40,39 +38,33 @@ func getSelfroleConfig(env string) map[snowflake.ID][]selfroleConfig {
 If your chosen pronouns are not present and you would like them to be, please make a ticket to let us know. We do ask you to respect other people and not make a joke of pronouns here or in bot profiles.
 
 Made a mistake? Just click again to remove the role`,
-					Buttons: []selfroleButton{
-						{Label: "Ask Me/Check Profile", Emoji: "1️⃣", RoleID: 807495977362653214},
-						{Label: "They/them", Emoji: "2️⃣", RoleID: 807495948405178379},
-						{Label: "She/her", Emoji: "3️⃣", RoleID: 807495895499014165},
-						{Label: "He/him", Emoji: "4️⃣", RoleID: 807495784756936745},
-						{Label: "It/its", Emoji: "5️⃣", RoleID: 1088661493685432391},
-					},
+				Buttons: []selfroleButton{
+					{Label: "Ask Me/Check Profile", Emoji: "1️⃣", RoleID: 807495977362653214},
+					{Label: "They/them", Emoji: "2️⃣", RoleID: 807495948405178379},
+					{Label: "She/her", Emoji: "3️⃣", RoleID: 807495895499014165},
+					{Label: "He/him", Emoji: "4️⃣", RoleID: 807495784756936745},
+					{Label: "It/its", Emoji: "5️⃣", RoleID: 1088661493685432391},
 				},
-				{
-					ChannelID: 727325278820368456,
-					Message: `Are you excellent at dialing shots in? Do you know a lot about fixing espresso machines? Want to help people? Don't mind getting pings? Clicking the reaction below will add a role that will allow other people to request your help. You'll be able to be pinged via this role, and you'll get automatically pinged when a help thread hasn't been responded to in 24 hours.
+			},
+			{
+				ChannelID: 727325278820368456,
+				Message: `Are you excellent at dialing shots in? Do you know a lot about fixing espresso machines? Want to help people? Don't mind getting pings? Clicking the reaction below will add a role that will allow other people to request your help. You'll be able to be pinged via this role, and you'll get automatically pinged when a help thread hasn't been responded to in 24 hours.
 
 Made a mistake? Hate pings? Just click again to remove the role.`,
-					Buttons: []selfroleButton{
-						{Label: "Helper", Emoji: "🔧", RoleID: 1020401507121774722},
-					},
+				Buttons: []selfroleButton{
+					{Label: "Helper", Emoji: "🔧", RoleID: 1020401507121774722},
 				},
 			},
-		}
-	case "dev":
-		return map[snowflake.ID][]selfroleConfig{
-			1013566342345019512: {
-				{
-					ChannelID: 1019680095893471322,
-					Message:   "Click a button below to toggle a role on or off.",
-					Buttons: []selfroleButton{
-						{Label: "BOTBROS", Emoji: "🤖", RoleID: 1015493549430685706},
-					},
+		},
+		1013566342345019512: {
+			{
+				ChannelID: 1019680095893471322,
+				Message:   "Click a button below to toggle a role on or off.",
+				Buttons: []selfroleButton{
+					{Label: "BOTBROS", Emoji: "🤖", RoleID: 1015493549430685706},
 				},
 			},
-		}
-	default:
-		return nil
+		},
 	}
 }
 
@@ -94,11 +86,11 @@ func selfrolePanelButtons(cfg selfroleConfig) []discord.LayoutComponent {
 }
 
 func (b *Bot) ensureSelfrolePanels() {
-	if len(b.selfroles) == 0 {
-		return
-	}
-
-	for guildID, cfgs := range b.selfroles {
+	for _, guildID := range b.GuildIDs() {
+		cfgs, ok := b.selfroles[guildID]
+		if !ok {
+			continue
+		}
 		for _, cfg := range cfgs {
 			if cfg.ChannelID == 0 {
 				continue

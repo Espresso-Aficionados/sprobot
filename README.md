@@ -100,11 +100,11 @@ See `config/example.env` for the full list. Key variables:
 | `SPROBOT_DISCORD_TOKEN` | Discord token for sprobot |
 | `STICKYBOT_DISCORD_TOKEN` | Discord token for stickybot |
 | `THREADBOT_DISCORD_TOKEN` | Discord token for threadbot |
-| `SPROBOT_ENV` / `STICKYBOT_ENV` / `THREADBOT_ENV` | `prod` or `dev` — controls which guild commands are registered on |
 | `S3_KEY` / `S3_SECRET` / `S3_ENDPOINT` / `S3_BUCKET` | S3-compatible storage credentials (shared by all bots) |
-| `SPROBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for sprobot (prod only, optional) |
-| `STICKYBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for stickybot (prod only, optional) |
-| `THREADBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for threadbot (prod only, optional) |
+| `WEB_ENDPOINT` | Profile web URL base (defaults to `https://bot.espressoaf.com/`; set to `http://localhost:8080/` for dev) |
+| `SPROBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for sprobot (optional) |
+| `STICKYBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for stickybot (optional) |
+| `THREADBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for threadbot (optional) |
 | `PORT` | Web server port (default 8080) |
 
 ## Deployment

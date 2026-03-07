@@ -9,40 +9,27 @@ import (
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
-func TestGetTopPostersConfigDev(t *testing.T) {
-	configs := getTopPostersConfig("dev")
+func TestGetTopPostersConfig(t *testing.T) {
+	configs := getTopPostersConfig()
 	if configs == nil {
-		t.Fatal("dev config is nil")
+		t.Fatal("config is nil")
+	}
+	if len(configs) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(configs))
 	}
 	cfg, ok := configs[1013566342345019512]
 	if !ok {
 		t.Fatal("dev guild ID not found")
 	}
 	if cfg.TargetRoleID != 0 {
-		t.Errorf("TargetRoleID = %d, want 0", cfg.TargetRoleID)
+		t.Errorf("dev TargetRoleID = %d, want 0", cfg.TargetRoleID)
 	}
-}
-
-func TestGetTopPostersConfigProd(t *testing.T) {
-	configs := getTopPostersConfig("prod")
-	if configs == nil {
-		t.Fatal("prod config is nil")
-	}
-	cfg, ok := configs[726985544038612993]
+	cfg, ok = configs[726985544038612993]
 	if !ok {
 		t.Fatal("prod guild ID not found")
 	}
 	if cfg.TargetRoleID != 791104833117225000 {
-		t.Errorf("TargetRoleID = %d, want 791104833117225000", cfg.TargetRoleID)
-	}
-}
-
-func TestGetTopPostersConfigUnknown(t *testing.T) {
-	if getTopPostersConfig("staging") != nil {
-		t.Error("expected nil for unknown env")
-	}
-	if getTopPostersConfig("") != nil {
-		t.Error("expected nil for empty env")
+		t.Errorf("prod TargetRoleID = %d, want 791104833117225000", cfg.TargetRoleID)
 	}
 }
 

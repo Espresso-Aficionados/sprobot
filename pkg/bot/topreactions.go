@@ -18,24 +18,6 @@ import (
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
-// starboardStaticConfig identifies which guilds have the feature enabled.
-type starboardStaticConfig struct{}
-
-func getStarboardConfig(env string) map[snowflake.ID]starboardStaticConfig {
-	switch env {
-	case "prod":
-		return map[snowflake.ID]starboardStaticConfig{
-			726985544038612993: {},
-		}
-	case "dev":
-		return map[snowflake.ID]starboardStaticConfig{
-			1013566342345019512: {},
-		}
-	default:
-		return nil
-	}
-}
-
 type starboardSettings struct {
 	OutputChannelID snowflake.ID   `json:"output_channel_id"`
 	Emoji           string         `json:"emoji"`
@@ -152,12 +134,8 @@ func parseEmojiInput(input string) string {
 // --- Load / Save / Persist ---
 
 func (b *Bot) loadStarboard() {
-	if b.starboardConfig == nil {
-		return
-	}
-
 	ctx := context.Background()
-	for guildID := range b.starboardConfig {
+	for _, guildID := range b.GuildIDs() {
 		st := &starboardState{
 			Entries: make(map[snowflake.ID]starboardEntry),
 		}

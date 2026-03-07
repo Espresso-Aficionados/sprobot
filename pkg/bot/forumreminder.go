@@ -15,28 +15,20 @@ type threadHelpInfo struct {
 	HistoryLimit int
 }
 
-func getThreadHelpConfig(env string) map[snowflake.ID]threadHelpInfo {
-	switch env {
-	case "prod":
-		return map[snowflake.ID]threadHelpInfo{
-			1019753326469980262: {
-				HelperID:     1020401507121774722,
-				LinkToPost:   "https://discord.com/channels/726985544038612993/727325278820368456/1020402429717663854",
-				MaxThreadAge: 24 * time.Hour,
-				HistoryLimit: 50,
-			},
-		}
-	case "dev":
-		return map[snowflake.ID]threadHelpInfo{
-			1019680268229021807: {
-				HelperID:     1015493549430685706,
-				LinkToPost:   "https://discord.com/channels/1013566342345019512/1019680095893471322/1020431232129048667",
-				MaxThreadAge: 5 * time.Minute,
-				HistoryLimit: 5,
-			},
-		}
-	default:
-		return nil
+func getThreadHelpConfig() map[snowflake.ID]threadHelpInfo {
+	return map[snowflake.ID]threadHelpInfo{
+		1019753326469980262: {
+			HelperID:     1020401507121774722,
+			LinkToPost:   "https://discord.com/channels/726985544038612993/727325278820368456/1020402429717663854",
+			MaxThreadAge: 24 * time.Hour,
+			HistoryLimit: 50,
+		},
+		1019680268229021807: {
+			HelperID:     1015493549430685706,
+			LinkToPost:   "https://discord.com/channels/1013566342345019512/1019680095893471322/1020431232129048667",
+			MaxThreadAge: 5 * time.Minute,
+			HistoryLimit: 5,
+		},
 	}
 }
 
@@ -77,12 +69,7 @@ func (b *Bot) forumReminderLoop() {
 }
 
 func (b *Bot) sendForumReminders() {
-	config := getThreadHelpConfig(b.Env)
-	if config == nil {
-		return
-	}
-
-	for channelID, info := range config {
+	for channelID, info := range b.threadHelpConfig {
 		channel, err := b.Client.Rest.GetChannel(channelID)
 		if err != nil {
 			b.Log.Info("Unknown channel to check for old forum posts", "channel_id", channelID)

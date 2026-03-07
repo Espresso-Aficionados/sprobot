@@ -24,12 +24,8 @@ type renameLogState struct {
 }
 
 func (b *Bot) loadRenameLogs() {
-	if len(b.templates) == 0 {
-		return
-	}
-
 	ctx := context.Background()
-	for guildID := range b.templates {
+	for _, guildID := range b.GuildIDs() {
 		st := &renameLogState{}
 
 		data, err := b.S3.FetchGuildJSON(ctx, "renamelogs", fmt.Sprintf("%d", guildID))

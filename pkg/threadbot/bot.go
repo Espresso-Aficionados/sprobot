@@ -8,6 +8,7 @@ import (
 
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
@@ -24,7 +25,7 @@ type Bot struct {
 }
 
 func New(token string) (*Bot, error) {
-	base, err := botutil.NewBaseBot("THREADBOT_ENV")
+	base, err := botutil.NewBaseBot("THREADBOT")
 	if err != nil {
 		return nil, err
 	}
@@ -37,6 +38,7 @@ func New(token string) (*Bot, error) {
 	}
 
 	client, err := disgo.New(token,
+		bot.WithCacheConfigOpts(cache.WithCaches(cache.FlagGuilds)),
 		bot.WithGatewayConfigOpts(
 			gateway.WithIntents(
 				gateway.IntentGuilds,
@@ -64,6 +66,8 @@ func (b *Bot) Run() error {
 		return err
 	}
 	defer b.Client.Close(ctx)
+
+	b.WaitForGuilds(30 * time.Second)
 
 	b.loadReminders()
 	b.loadMemberCounts()

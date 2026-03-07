@@ -5,25 +5,19 @@ import (
 )
 
 func (b *Bot) loadTemplates() {
-	if tmpls := sprobot.AllTemplates(b.Env); tmpls != nil {
-		for gid, t := range tmpls {
-			b.templates[gid] = t
-		}
+	for gid, t := range sprobot.AllTemplates() {
+		b.templates[gid] = t
 	}
 }
 
 func (b *Bot) loadSelfroles() {
-	if cfgs := getSelfroleConfig(b.Env); cfgs != nil {
-		for gid, c := range cfgs {
-			b.selfroles[gid] = c
-		}
+	for gid, c := range getSelfroleConfig() {
+		b.selfroles[gid] = c
 	}
 }
 
 func (b *Bot) loadTicketConfigs() {
-	if cfgs := getTicketConfig(b.Env); cfgs != nil {
-		for gid, c := range cfgs {
-			b.ticketConfigs[gid] = c
-		}
+	for gid, c := range getTicketConfig() {
+		b.ticketConfigs[gid] = c
 	}
 }

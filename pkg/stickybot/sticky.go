@@ -50,7 +50,7 @@ func (s *stickyMessage) applyDefaults() {
 
 func (b *Bot) loadStickies() {
 	ctx := context.Background()
-	for _, guildID := range botutil.GetGuildIDs(b.Env) {
+	for _, guildID := range b.GuildIDs() {
 		data, err := b.S3.FetchStickies(ctx, fmt.Sprintf("%d", guildID))
 		if errors.Is(err, s3client.ErrNotFound) {
 			b.Log.Info("No existing stickies data", "guild_id", guildID)

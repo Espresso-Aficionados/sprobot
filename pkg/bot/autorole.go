@@ -7,14 +7,10 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
-func getAutoRoleID(env string) snowflake.ID {
-	switch env {
-	case "prod":
-		return 727179134341480508
-	case "dev":
-		return 1475339084292685998
-	default:
-		return 0
+func getAutoRoleConfig() map[snowflake.ID]snowflake.ID {
+	return map[snowflake.ID]snowflake.ID{
+		726985544038612993:  727179134341480508,
+		1013566342345019512: 1475339084292685998,
 	}
 }
 
@@ -22,8 +18,8 @@ func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
 	b.logMemberJoin(e.GuildID, e.Member)
 	b.sendWelcomeDM(e.GuildID, e.Member.User.ID)
 
-	roleID := b.autoRoleID
-	if roleID == 0 {
+	roleID, ok := b.autoRoleConfig[e.GuildID]
+	if !ok || roleID == 0 {
 		return
 	}
 	if err := b.Client.Rest.AddMemberRole(e.GuildID, e.Member.User.ID, roleID, rest.WithReason("Auto-role on member join")); err != nil {
@@ -32,8 +28,8 @@ func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
 }
 
 func (b *Bot) ensureAutoRole(guildID snowflake.ID, msg discord.Message) {
-	roleID := b.autoRoleID
-	if roleID == 0 {
+	roleID, ok := b.autoRoleConfig[guildID]
+	if !ok || roleID == 0 {
 		return
 	}
 	if msg.Member == nil {

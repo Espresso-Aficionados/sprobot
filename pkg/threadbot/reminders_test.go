@@ -17,9 +17,9 @@ func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {
 	t.Helper()
 	return &Bot{
 		BaseBot: &botutil.BaseBot{
-			S3:  s3c,
-			Env: "dev",
-			Log: testutil.DiscardLogger(),
+			S3:                   s3c,
+			Log:                  testutil.DiscardLogger(),
+			TestGuildIDsOverride: []snowflake.ID{1013566342345019512},
 		},
 		reminders:    make(map[snowflake.ID]map[snowflake.ID]*threadReminder),
 		memberCounts: make(map[snowflake.ID]*memberCountCache),

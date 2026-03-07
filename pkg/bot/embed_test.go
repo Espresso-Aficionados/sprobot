@@ -38,7 +38,7 @@ func TestBuildProfileEmbedBasic(t *testing.T) {
 		"Gear Picture": "https://example.com/image.png",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "testuser", profile, "123", "456", "prod", newTestS3(t))
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "testuser", profile, "123", "456", newTestS3(t))
 
 	if embed.Title != "Coffee Setup for testuser" {
 		t.Errorf("Title = %q, want %q", embed.Title, "Coffee Setup for testuser")
@@ -64,7 +64,7 @@ func TestBuildProfileEmbedFields(t *testing.T) {
 		"Favorite Beans": "Ethiopian Yirgacheffe",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "prod", newTestS3(t))
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", newTestS3(t))
 
 	fieldNames := make(map[string]string)
 	for _, f := range embed.Fields {
@@ -88,7 +88,7 @@ func TestBuildProfileEmbedSkipsEmptyFields(t *testing.T) {
 		"Grinder": "",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "prod", newTestS3(t))
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", newTestS3(t))
 
 	for _, f := range embed.Fields {
 		if f.Name == "Grinder" {
@@ -102,7 +102,7 @@ func TestBuildProfileEmbedWithImage(t *testing.T) {
 		"Gear Picture": "https://example.com/photo.jpg",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "prod", newTestS3(t))
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", newTestS3(t))
 
 	if embed.Image == nil {
 		t.Fatal("Image is nil when profile has image")
@@ -117,7 +117,7 @@ func TestBuildProfileEmbedWithoutImage(t *testing.T) {
 		"Machine": "Rocket",
 	}
 
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "prod", newTestS3(t))
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", newTestS3(t))
 
 	if embed.Image != nil {
 		t.Error("Image should be nil when no image in profile")
@@ -140,7 +140,7 @@ func TestBuildProfileEmbedWithoutImage(t *testing.T) {
 
 func TestBuildProfileEmbedURL(t *testing.T) {
 	profile := map[string]string{}
-	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", "prod", newTestS3(t))
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", newTestS3(t))
 
 	want := sprobot.WebEndpoint + "profiles/123/Coffee%20Setup/456"
 	if embed.URL != want {

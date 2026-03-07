@@ -39,12 +39,13 @@ type Bot struct {
 	selfroles        map[snowflake.ID][]selfroleConfig
 	ticketConfigs    map[snowflake.ID]ticketConfig
 	eventLogConfig   map[snowflake.ID]eventLogChannelConfig
-	starboardConfig  map[snowflake.ID]starboardStaticConfig
-	autoRoleID       snowflake.ID
+	autoRoleConfig   map[snowflake.ID]snowflake.ID
+	modLogConfig     map[snowflake.ID]modLogConfig
+	threadHelpConfig map[snowflake.ID]threadHelpInfo
 }
 
 func New(token string) (*Bot, error) {
-	base, err := botutil.NewBaseBot("SPROBOT_ENV")
+	base, err := botutil.NewBaseBot("SPROBOT")
 	if err != nil {
 		return nil, err
 	}
@@ -70,10 +71,11 @@ func New(token string) (*Bot, error) {
 		ticketConfigs:    make(map[snowflake.ID]ticketConfig),
 		msgCache:         msgCache,
 		memberCache:      memberCache,
-		topPostersConfig: getTopPostersConfig(base.Env),
-		eventLogConfig:   getEventLogConfig(base.Env),
-		starboardConfig:  getStarboardConfig(base.Env),
-		autoRoleID:       getAutoRoleID(base.Env),
+		topPostersConfig: getTopPostersConfig(),
+		eventLogConfig:   getEventLogConfig(),
+		autoRoleConfig:   getAutoRoleConfig(),
+		modLogConfig:     getModLogConfig(),
+		threadHelpConfig: getThreadHelpConfig(),
 	}
 
 	b.loadMessageCache()
@@ -82,7 +84,7 @@ func New(token string) (*Bot, error) {
 	client, err := disgo.New(token,
 		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
 		bot.WithCacheConfigOpts(
-			cache.WithCaches(cache.FlagMessages|cache.FlagMembers),
+			cache.WithCaches(cache.FlagGuilds|cache.FlagMessages|cache.FlagMembers),
 			cache.WithMessageCache(cache.NewMessageCache(msgCache)),
 			cache.WithMemberCache(cache.NewMemberCache(memberCache)),
 		),
@@ -137,6 +139,8 @@ func (b *Bot) Run() error {
 		return err
 	}
 	defer b.Client.Close(ctx)
+
+	b.WaitForGuilds(30 * time.Second)
 
 	b.loadTemplates()
 	b.loadSelfroles()

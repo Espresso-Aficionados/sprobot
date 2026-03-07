@@ -9,40 +9,22 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
-func TestGetEventLogConfigDev(t *testing.T) {
-	cfg := getEventLogConfig("dev")
+func TestGetEventLogConfig(t *testing.T) {
+	cfg := getEventLogConfig()
 	if cfg == nil {
-		t.Fatal("dev config is nil")
+		t.Fatal("config is nil")
 	}
-	c, ok := cfg[1013566342345019512]
-	if !ok {
-		t.Fatal("missing dev guild entry")
+	if len(cfg) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(cfg))
 	}
-	if c.ChannelID == 0 {
-		t.Error("dev ChannelID should be set")
-	}
-}
-
-func TestGetEventLogConfigProd(t *testing.T) {
-	cfg := getEventLogConfig("prod")
-	if cfg == nil {
-		t.Fatal("prod config is nil")
-	}
-	c, ok := cfg[726985544038612993]
-	if !ok {
-		t.Fatal("missing prod guild entry")
-	}
-	if c.ChannelID == 0 {
-		t.Error("prod ChannelID should be set")
-	}
-}
-
-func TestGetEventLogConfigUnknown(t *testing.T) {
-	if getEventLogConfig("staging") != nil {
-		t.Error("expected nil for unknown env")
-	}
-	if getEventLogConfig("") != nil {
-		t.Error("expected nil for empty env")
+	for _, guildID := range []snowflake.ID{726985544038612993, 1013566342345019512} {
+		c, ok := cfg[guildID]
+		if !ok {
+			t.Fatalf("missing guild entry %d", guildID)
+		}
+		if c.ChannelID == 0 {
+			t.Errorf("ChannelID for guild %d should be set", guildID)
+		}
 	}
 }
 

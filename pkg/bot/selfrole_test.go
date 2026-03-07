@@ -39,7 +39,7 @@ func TestIsSelfroleInteractionEmpty(t *testing.T) {
 }
 
 func TestSelfroleLabel(t *testing.T) {
-	cfgs := getSelfroleConfig("dev")[1013566342345019512]
+	cfgs := getSelfroleConfig()[1013566342345019512]
 	label := selfroleLabel(cfgs, 1015493549430685706)
 	if label != "BOTBROS" {
 		t.Errorf("label = %q, want %q", label, "BOTBROS")
@@ -47,7 +47,7 @@ func TestSelfroleLabel(t *testing.T) {
 }
 
 func TestSelfrroleLabelNotFound(t *testing.T) {
-	cfgs := getSelfroleConfig("dev")[1013566342345019512]
+	cfgs := getSelfroleConfig()[1013566342345019512]
 	label := selfroleLabel(cfgs, 999)
 	if label != "role" {
 		t.Errorf("label = %q, want %q", label, "role")
@@ -141,36 +141,26 @@ func TestSelfrolePanelNeedsUpdateRowMismatch(t *testing.T) {
 	}
 }
 
-func TestGetSelfroleConfigDev(t *testing.T) {
-	cfg := getSelfroleConfig("dev")
+func TestGetSelfroleConfig(t *testing.T) {
+	cfg := getSelfroleConfig()
 	if cfg == nil {
-		t.Fatal("dev config is nil")
+		t.Fatal("config is nil")
+	}
+	if len(cfg) != 2 {
+		t.Fatalf("expected 2 guild entries, got %d", len(cfg))
 	}
 	cfgs, ok := cfg[1013566342345019512]
 	if !ok {
 		t.Fatal("missing dev guild")
 	}
 	if len(cfgs) != 1 {
-		t.Errorf("expected 1 panel config, got %d", len(cfgs))
+		t.Errorf("expected 1 panel config for dev, got %d", len(cfgs))
 	}
-}
-
-func TestGetSelfroleConfigProd(t *testing.T) {
-	cfg := getSelfroleConfig("prod")
-	if cfg == nil {
-		t.Fatal("prod config is nil")
-	}
-	cfgs, ok := cfg[726985544038612993]
+	cfgs, ok = cfg[726985544038612993]
 	if !ok {
 		t.Fatal("missing prod guild")
 	}
 	if len(cfgs) != 2 {
-		t.Errorf("expected 2 panel configs, got %d", len(cfgs))
-	}
-}
-
-func TestGetSelfroleConfigUnknown(t *testing.T) {
-	if getSelfroleConfig("staging") != nil {
-		t.Error("expected nil for unknown env")
+		t.Errorf("expected 2 panel configs for prod, got %d", len(cfgs))
 	}
 }

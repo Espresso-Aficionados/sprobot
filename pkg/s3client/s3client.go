@@ -114,7 +114,7 @@ func New() (*Client, error) {
 		presigner:   s3.NewPresignClient(client),
 		bucket:      bucket,
 		endpoint:    endpoint,
-		webEndpoint: sprobot.WebEndpointForEnv(os.Getenv("SPROBOT_ENV")),
+		webEndpoint: sprobot.WebEndpointFromEnv(),
 		cache:       cache,
 		log:         slog.Default(),
 	}, nil

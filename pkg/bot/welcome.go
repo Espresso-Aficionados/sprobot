@@ -24,12 +24,8 @@ type welcomeState struct {
 }
 
 func (b *Bot) loadWelcome() {
-	if len(b.templates) == 0 {
-		return
-	}
-
 	ctx := context.Background()
-	for guildID := range b.templates {
+	for _, guildID := range b.GuildIDs() {
 		st := &welcomeState{}
 
 		data, err := b.S3.FetchGuildJSON(ctx, "welcome", fmt.Sprintf("%d", guildID))

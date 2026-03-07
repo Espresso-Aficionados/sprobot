@@ -207,12 +207,8 @@ func (b *Bot) clearPosterRoleTracking(guildID snowflake.ID, userIDStr string) {
 }
 
 func (b *Bot) loadPosterRole() {
-	if len(b.templates) == 0 {
-		return
-	}
-
 	ctx := context.Background()
-	for guildID := range b.templates {
+	for _, guildID := range b.GuildIDs() {
 		st := &posterRoleState{
 			Counts:  make(map[string]int),
 			Fetched: make(map[string]bool),

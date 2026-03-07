@@ -19,14 +19,10 @@ type modLogConfig struct {
 	ChannelID snowflake.ID
 }
 
-func getModLogCfg(env string) *modLogConfig {
-	switch env {
-	case "prod":
-		return &modLogConfig{ChannelID: 1141477354129080361}
-	case "dev":
-		return &modLogConfig{ChannelID: 1142519200682876938}
-	default:
-		return nil
+func getModLogConfig() map[snowflake.ID]modLogConfig {
+	return map[snowflake.ID]modLogConfig{
+		726985544038612993:  {ChannelID: 1141477354129080361},
+		1013566342345019512: {ChannelID: 1142519200682876938},
 	}
 }
 
@@ -166,14 +162,14 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		})
 	}
 
-	modLogConfig := getModLogCfg(b.Env)
-	if modLogConfig == nil {
+	mlCfg, ok := b.modLogConfig[*e.GuildID()]
+	if !ok {
 		b.Log.Info("No mod log config found")
 		return
 	}
 
 	// Find or create thread in the mod log forum channel
-	thread := b.findOrCreateModLogThread(modLogConfig.ChannelID, msg.Author)
+	thread := b.findOrCreateModLogThread(mlCfg.ChannelID, msg.Author)
 	if thread == nil {
 		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 			Content: "Oops! Something went wrong finding the mod log channel.",
@@ -194,8 +190,8 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		return
 	}
 
-	modLogChannel, _ := b.Client.Rest.GetChannel(modLogConfig.ChannelID)
-	modLogChannelName := fmt.Sprintf("%d", modLogConfig.ChannelID)
+	modLogChannel, _ := b.Client.Rest.GetChannel(mlCfg.ChannelID)
+	modLogChannelName := fmt.Sprintf("%d", mlCfg.ChannelID)
 	if modLogChannel != nil {
 		modLogChannelName = modLogChannel.Name()
 	}

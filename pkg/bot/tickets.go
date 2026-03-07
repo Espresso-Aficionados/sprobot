@@ -66,34 +66,26 @@ Please don't use the tickets for joke posts; we try to respond quickly to ticket
 		staffRoleID, faqChannel1, faqChannel2)
 }
 
-func getTicketConfig(env string) map[snowflake.ID]ticketConfig {
-	switch env {
-	case "prod":
-		return map[snowflake.ID]ticketConfig{
-			726985544038612993: {
-				ChannelID:        733016849561944156,
-				StaffRoleID:      738986689749450769,
-				CounterOffset:    300,
-				PanelButtonLabel: "Open Ticket",
-				PanelMessage:     hardcodedPanelMessage(738986689749450769, 727212292684644412, 727325278820368456),
-				TicketIntro:      introMessage,
-				CloseButtonLabel: "Close Ticket",
-			},
-		}
-	case "dev":
-		return map[snowflake.ID]ticketConfig{
-			1013566342345019512: {
-				ChannelID:        1475318848956661921,
-				StaffRoleID:      1015493549430685706,
-				CounterOffset:    40,
-				PanelButtonLabel: "Open Ticket",
-				PanelMessage:     hardcodedPanelMessage(1015493549430685706, 1019680095893471322, 1013566342865092671),
-				TicketIntro:      introMessage,
-				CloseButtonLabel: "Close Ticket",
-			},
-		}
-	default:
-		return nil
+func getTicketConfig() map[snowflake.ID]ticketConfig {
+	return map[snowflake.ID]ticketConfig{
+		726985544038612993: {
+			ChannelID:        733016849561944156,
+			StaffRoleID:      738986689749450769,
+			CounterOffset:    300,
+			PanelButtonLabel: "Open Ticket",
+			PanelMessage:     hardcodedPanelMessage(738986689749450769, 727212292684644412, 727325278820368456),
+			TicketIntro:      introMessage,
+			CloseButtonLabel: "Close Ticket",
+		},
+		1013566342345019512: {
+			ChannelID:        1475318848956661921,
+			StaffRoleID:      1015493549430685706,
+			CounterOffset:    40,
+			PanelButtonLabel: "Open Ticket",
+			PanelMessage:     hardcodedPanelMessage(1015493549430685706, 1019680095893471322, 1013566342865092671),
+			TicketIntro:      introMessage,
+			CloseButtonLabel: "Close Ticket",
+		},
 	}
 }
 
@@ -103,12 +95,11 @@ type ticketState struct {
 }
 
 func (b *Bot) loadTickets() {
-	if len(b.ticketConfigs) == 0 {
-		return
-	}
-
 	ctx := context.Background()
-	for guildID := range b.ticketConfigs {
+	for _, guildID := range b.GuildIDs() {
+		if _, ok := b.ticketConfigs[guildID]; !ok {
+			continue
+		}
 		st := &ticketState{Counter: 1}
 
 		data, err := b.S3.FetchGuildJSON(ctx, "tickets", fmt.Sprintf("%d", guildID))
@@ -151,11 +142,11 @@ func (b *Bot) saveTickets() {
 }
 
 func (b *Bot) ensureTicketPanels() {
-	if len(b.ticketConfigs) == 0 {
-		return
-	}
-
-	for guildID, cfg := range b.ticketConfigs {
+	for _, guildID := range b.GuildIDs() {
+		cfg, ok := b.ticketConfigs[guildID]
+		if !ok {
+			continue
+		}
 		if cfg.ChannelID == 0 {
 			continue
 		}

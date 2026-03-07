@@ -7,10 +7,13 @@ import (
 	"github.com/disgoorg/disgo/discord"
 )
 
-func TestGetTicketConfigDev(t *testing.T) {
-	cfg := getTicketConfig("dev")
+func TestGetTicketConfig(t *testing.T) {
+	cfg := getTicketConfig()
 	if cfg == nil {
-		t.Fatal("dev config is nil")
+		t.Fatal("config is nil")
+	}
+	if len(cfg) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(cfg))
 	}
 	c, ok := cfg[1013566342345019512]
 	if !ok {
@@ -22,14 +25,7 @@ func TestGetTicketConfigDev(t *testing.T) {
 	if c.PanelButtonLabel == "" {
 		t.Error("dev PanelButtonLabel should be set")
 	}
-}
-
-func TestGetTicketConfigProd(t *testing.T) {
-	cfg := getTicketConfig("prod")
-	if cfg == nil {
-		t.Fatal("prod config is nil")
-	}
-	c, ok := cfg[726985544038612993]
+	c, ok = cfg[726985544038612993]
 	if !ok {
 		t.Fatal("missing prod guild entry")
 	}
@@ -38,17 +34,8 @@ func TestGetTicketConfigProd(t *testing.T) {
 	}
 }
 
-func TestGetTicketConfigUnknown(t *testing.T) {
-	if getTicketConfig("staging") != nil {
-		t.Error("expected nil for unknown env")
-	}
-	if getTicketConfig("") != nil {
-		t.Error("expected nil for empty env")
-	}
-}
-
 func TestTicketPanelEmbed(t *testing.T) {
-	cfg := getTicketConfig("dev")[1013566342345019512]
+	cfg := getTicketConfig()[1013566342345019512]
 	embed := ticketPanelEmbed(cfg)
 	if embed.Description == "" {
 		t.Error("embed description should not be empty")
@@ -78,7 +65,7 @@ func TestPanelMessageUsesField(t *testing.T) {
 }
 
 func TestTicketPanelButton(t *testing.T) {
-	cfg := getTicketConfig("dev")[1013566342345019512]
+	cfg := getTicketConfig()[1013566342345019512]
 	btn := ticketPanelButton(cfg)
 	if btn.Label != "Open Ticket" {
 		t.Errorf("button label = %q, want %q", btn.Label, "Open Ticket")
@@ -92,7 +79,7 @@ func TestTicketPanelButton(t *testing.T) {
 }
 
 func TestPanelNeedsUpdateMatch(t *testing.T) {
-	cfg := getTicketConfig("dev")[1013566342345019512]
+	cfg := getTicketConfig()[1013566342345019512]
 	embed := ticketPanelEmbed(cfg)
 	btn := ticketPanelButton(cfg)
 	msg := discord.Message{
@@ -108,7 +95,7 @@ func TestPanelNeedsUpdateMatch(t *testing.T) {
 }
 
 func TestPanelNeedsUpdateMismatch(t *testing.T) {
-	cfg := getTicketConfig("dev")[1013566342345019512]
+	cfg := getTicketConfig()[1013566342345019512]
 	msg := discord.Message{
 		Content: "stale content",
 		Embeds:  []discord.Embed{ticketPanelEmbed(cfg)},
@@ -123,7 +110,7 @@ func TestPanelNeedsUpdateMismatch(t *testing.T) {
 }
 
 func TestPanelNeedsUpdateMissingEmbed(t *testing.T) {
-	cfg := getTicketConfig("dev")[1013566342345019512]
+	cfg := getTicketConfig()[1013566342345019512]
 	msg := discord.Message{
 		Embeds: []discord.Embed{},
 		Components: []discord.LayoutComponent{

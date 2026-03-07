@@ -25,18 +25,10 @@ type eventLogChannelConfig struct {
 	ChannelID snowflake.ID
 }
 
-func getEventLogConfig(env string) map[snowflake.ID]eventLogChannelConfig {
-	switch env {
-	case "prod":
-		return map[snowflake.ID]eventLogChannelConfig{
-			726985544038612993: {ChannelID: 835704010161258526},
-		}
-	case "dev":
-		return map[snowflake.ID]eventLogChannelConfig{
-			1013566342345019512: {ChannelID: 1015659489610960987},
-		}
-	default:
-		return nil
+func getEventLogConfig() map[snowflake.ID]eventLogChannelConfig {
+	return map[snowflake.ID]eventLogChannelConfig{
+		726985544038612993:  {ChannelID: 835704010161258526},
+		1013566342345019512: {ChannelID: 1015659489610960987},
 	}
 }
 
@@ -703,11 +695,11 @@ func formatPermissionDiff(action discord.AuditLogEvent, oldAllow, oldDeny, newAl
 }
 
 func (b *Bot) crossPostToModLog(guildID snowflake.ID, user discord.User, embed discord.Embed) {
-	modLogConfig := getModLogCfg(b.Env)
-	if modLogConfig == nil {
+	mlCfg, ok := b.modLogConfig[guildID]
+	if !ok {
 		return
 	}
-	thread := b.findOrCreateModLogThread(modLogConfig.ChannelID, user)
+	thread := b.findOrCreateModLogThread(mlCfg.ChannelID, user)
 	if thread == nil {
 		return
 	}

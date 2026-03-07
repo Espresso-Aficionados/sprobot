@@ -14,64 +14,62 @@ import (
 )
 
 func (b *Bot) registerAllCommands() error {
-	if len(b.templates) == 0 {
-		b.Log.Info("No templates configured")
-		return nil
-	}
-
-	for guildID, tmpls := range b.templates {
+	for _, guildID := range b.GuildIDs() {
+		tmpls := b.templates[guildID]
 		var commands []discord.ApplicationCommandCreate
 
-		for _, tmpl := range tmpls {
-			commands = append(commands, templateCommands(tmpl)...)
-		}
+		if len(tmpls) > 0 {
+			for _, tmpl := range tmpls {
+				commands = append(commands, templateCommands(tmpl)...)
+			}
 
-		// Build type choices from template ShortNames
-		var typeChoices []discord.ApplicationCommandOptionChoiceString
-		for _, tmpl := range tmpls {
-			typeChoices = append(typeChoices, discord.ApplicationCommandOptionChoiceString{
-				Name:  tmpl.Name,
-				Value: tmpl.ShortName,
-			})
-		}
-		typeOpt := discord.ApplicationCommandOptionString{
-			Name:        "type",
-			Description: "Profile type",
-			Choices:     typeChoices,
-		}
+			// Build type choices from template ShortNames
+			var typeChoices []discord.ApplicationCommandOptionChoiceString
+			for _, tmpl := range tmpls {
+				typeChoices = append(typeChoices, discord.ApplicationCommandOptionChoiceString{
+					Name:  tmpl.Name,
+					Value: tmpl.ShortName,
+				})
+			}
+			typeOpt := discord.ApplicationCommandOptionString{
+				Name:        "type",
+				Description: "Profile type",
+				Choices:     typeChoices,
+			}
 
-		// /profile edit|view|delete
-		commands = append(commands, discord.SlashCommandCreate{
-			Name:        "profile",
-			Description: "Manage your profile",
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "edit",
-					Description: "Edit or create your profile",
-					Options: []discord.ApplicationCommandOption{
-						typeOpt,
+			// /profile edit|view|delete
+			commands = append(commands, discord.SlashCommandCreate{
+				Name:        "profile",
+				Description: "Manage your profile",
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "edit",
+						Description: "Edit or create your profile",
+						Options: []discord.ApplicationCommandOption{
+							typeOpt,
+						},
 					},
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "view",
-					Description: "View a user's profile",
-					Options: []discord.ApplicationCommandOption{
-						typeOpt,
-						discord.ApplicationCommandOptionUser{
-							Name:        "name",
-							Description: "User to get profile for",
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "view",
+						Description: "View a user's profile",
+						Options: []discord.ApplicationCommandOption{
+							typeOpt,
+							discord.ApplicationCommandOptionUser{
+								Name:        "name",
+								Description: "User to get profile for",
+							},
+						},
+					},
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "delete",
+						Description: "Delete profile or profile image",
+						Options: []discord.ApplicationCommandOption{
+							typeOpt,
 						},
 					},
 				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "delete",
-					Description: "Delete profile or profile image",
-					Options: []discord.ApplicationCommandOption{
-						typeOpt,
-					},
-				},
-			},
-		})
+			})
+		}
 
 		// Mod log context menu
 		perm := discord.PermissionManageMessages
@@ -111,13 +109,11 @@ func (b *Bot) registerAllCommands() error {
 		})
 
 		// /topposters
-		if _, ok := b.topPostersConfig[guildID]; ok {
-			commands = append(commands, discord.SlashCommandCreate{
-				Name:                     "topposters",
-				Description:              "Show top message posters over the last 7 days",
-				DefaultMemberPermissions: omit.NewPtr(perm),
-			})
-		}
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "topposters",
+			Description:              "Show top message posters over the last 7 days",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+		})
 
 		// /market progress|leaderboard
 		commands = append(commands, discord.SlashCommandCreate{
@@ -333,81 +329,79 @@ func (b *Bot) registerAllCommands() error {
 			},
 		}
 
-		if _, ok := b.starboardConfig[guildID]; ok {
-			configOpts = append(configOpts,
-				discord.ApplicationCommandOptionSubCommandGroup{
-					Name:        "starboard",
-					Description: "Configure starboard",
-					Options: []discord.ApplicationCommandOptionSubCommand{
-						{
-							Name:        "set",
-							Description: "Update starboard settings",
-							Options: []discord.ApplicationCommandOption{
-								discord.ApplicationCommandOptionChannel{
-									Name:        "channel",
-									Description: "Channel to post starboard entries in",
-								},
-								discord.ApplicationCommandOptionString{
-									Name:        "emoji",
-									Description: "Reaction emoji (e.g. ⭐ or paste a custom emoji)",
-									MaxLength:   &emojiMaxLen,
-								},
-								discord.ApplicationCommandOptionInt{
-									Name:        "threshold",
-									Description: "Number of reactions to trigger starboard (1-100)",
-									MinValue:    intPtr(1),
-									MaxValue:    intPtr(100),
-								},
+		configOpts = append(configOpts,
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "starboard",
+				Description: "Configure starboard",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "set",
+						Description: "Update starboard settings",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to post starboard entries in",
 							},
-						},
-						{
-							Name:        "show",
-							Description: "Show current starboard configuration",
-						},
-						{
-							Name:        "disable",
-							Description: "Disable starboard posting",
+							discord.ApplicationCommandOptionString{
+								Name:        "emoji",
+								Description: "Reaction emoji (e.g. ⭐ or paste a custom emoji)",
+								MaxLength:   &emojiMaxLen,
+							},
+							discord.ApplicationCommandOptionInt{
+								Name:        "threshold",
+								Description: "Number of reactions to trigger starboard (1-100)",
+								MinValue:    intPtr(1),
+								MaxValue:    intPtr(100),
+							},
 						},
 					},
-				},
-				discord.ApplicationCommandOptionSubCommandGroup{
-					Name:        "starboard-blacklist",
-					Description: "Manage starboard channel blacklist",
-					Options: []discord.ApplicationCommandOptionSubCommand{
-						{
-							Name:        "add",
-							Description: "Add a channel to the blacklist",
-							Options: []discord.ApplicationCommandOption{
-								discord.ApplicationCommandOptionChannel{
-									Name:        "channel",
-									Description: "Channel to blacklist",
-									Required:    true,
-								},
-							},
-						},
-						{
-							Name:        "remove",
-							Description: "Remove a channel from the blacklist",
-							Options: []discord.ApplicationCommandOption{
-								discord.ApplicationCommandOptionChannel{
-									Name:        "channel",
-									Description: "Channel to remove from blacklist",
-									Required:    true,
-								},
-							},
-						},
-						{
-							Name:        "list",
-							Description: "List all blacklisted channels",
-						},
-						{
-							Name:        "clear",
-							Description: "Remove all channels from the blacklist",
-						},
+					{
+						Name:        "show",
+						Description: "Show current starboard configuration",
+					},
+					{
+						Name:        "disable",
+						Description: "Disable starboard posting",
 					},
 				},
-			)
-		}
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "starboard-blacklist",
+				Description: "Manage starboard channel blacklist",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "add",
+						Description: "Add a channel to the blacklist",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to blacklist",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "remove",
+						Description: "Remove a channel from the blacklist",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to remove from blacklist",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "list",
+						Description: "List all blacklisted channels",
+					},
+					{
+						Name:        "clear",
+						Description: "Remove all channels from the blacklist",
+					},
+				},
+			},
+		)
 
 		commands = append(commands, discord.SlashCommandCreate{
 			Name:                     "config",
@@ -490,13 +484,13 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	tmpls, ok := b.templates[guildID]
-	if !ok {
-		return
-	}
+	tmpls := b.templates[guildID]
 
 	// /profile edit|view|delete
 	if name == "profile" {
+		if len(tmpls) == 0 {
+			return
+		}
 		data, ok := e.Data.(discord.SlashCommandInteractionData)
 		if !ok || data.SubCommandName == nil {
 			return

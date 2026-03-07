@@ -77,7 +77,7 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 		return
 	}
 
-	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr, b.Env, b.S3)
+	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr, b.S3)
 	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}); err != nil {
@@ -148,7 +148,7 @@ func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl 
 		return
 	}
 
-	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr, b.Env, b.S3)
+	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr, b.S3)
 	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}); err != nil {

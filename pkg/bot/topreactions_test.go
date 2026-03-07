@@ -151,28 +151,6 @@ func TestParseEmojiInputAnimated(t *testing.T) {
 	}
 }
 
-func TestGetStarboardConfig(t *testing.T) {
-	devCfg := getStarboardConfig("dev")
-	if devCfg == nil {
-		t.Fatal("expected dev config")
-	}
-	if _, ok := devCfg[1013566342345019512]; !ok {
-		t.Error("expected dev guild in config")
-	}
-
-	prodCfg := getStarboardConfig("prod")
-	if prodCfg == nil {
-		t.Fatal("expected prod config")
-	}
-	if _, ok := prodCfg[726985544038612993]; !ok {
-		t.Error("expected prod guild in config")
-	}
-
-	if getStarboardConfig("other") != nil {
-		t.Error("expected nil for unknown env")
-	}
-}
-
 func TestIntPtr(t *testing.T) {
 	p := intPtr(42)
 	if *p != 42 {

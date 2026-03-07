@@ -62,7 +62,7 @@ func (b *Bot) registerAllCommands() error {
 		},
 	}
 
-	return botutil.RegisterGuildCommands(b.Client, b.Env, commands, b.Log)
+	return botutil.RegisterGuildCommands(b.Client, b.GuildIDs(), commands, b.Log)
 }
 
 func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {

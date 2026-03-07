@@ -2,30 +2,15 @@ package bot
 
 import "testing"
 
-func TestGetAutoRoleIDDev(t *testing.T) {
-	id := getAutoRoleID("dev")
-	if id == 0 {
-		t.Error("dev auto role ID should not be 0")
+func TestGetAutoRoleConfig(t *testing.T) {
+	cfg := getAutoRoleConfig()
+	if len(cfg) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(cfg))
 	}
-}
-
-func TestGetAutoRoleIDProd(t *testing.T) {
-	id := getAutoRoleID("prod")
-	if id == 0 {
+	if cfg[726985544038612993] == 0 {
 		t.Error("prod auto role ID should not be 0")
 	}
-}
-
-func TestGetAutoRoleIDUnknown(t *testing.T) {
-	id := getAutoRoleID("staging")
-	if id != 0 {
-		t.Errorf("unknown env should return 0, got %d", id)
-	}
-}
-
-func TestGetAutoRoleIDEmpty(t *testing.T) {
-	id := getAutoRoleID("")
-	if id != 0 {
-		t.Errorf("empty env should return 0, got %d", id)
+	if cfg[1013566342345019512] == 0 {
+		t.Error("dev auto role ID should not be 0")
 	}
 }

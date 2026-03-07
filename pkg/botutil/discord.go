@@ -68,9 +68,9 @@ func OnlyBotsAfter(restClient rest.Rest, channelID, lastMsgID snowflake.ID, log 
 	return false
 }
 
-// RegisterGuildCommands registers the given commands for each guild matching the env.
-func RegisterGuildCommands(client *bot.Client, env string, commands []discord.ApplicationCommandCreate, log *slog.Logger) error {
-	for _, guildID := range GetGuildIDs(env) {
+// RegisterGuildCommands registers the given commands for each of the provided guilds.
+func RegisterGuildCommands(client *bot.Client, guildIDs []snowflake.ID, commands []discord.ApplicationCommandCreate, log *slog.Logger) error {
+	for _, guildID := range guildIDs {
 		if _, err := client.Rest.SetGuildCommands(client.ApplicationID, guildID, commands); err != nil {
 			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
 		}

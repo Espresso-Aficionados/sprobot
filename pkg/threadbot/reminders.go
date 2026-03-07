@@ -55,7 +55,7 @@ func (r *threadReminder) applyDefaults() {
 
 func (b *Bot) loadReminders() {
 	ctx := context.Background()
-	for _, guildID := range botutil.GetGuildIDs(b.Env) {
+	for _, guildID := range b.GuildIDs() {
 		data, err := b.S3.FetchThreadReminders(ctx, fmt.Sprintf("%d", guildID))
 		if errors.Is(err, s3client.ErrNotFound) {
 			b.Log.Info("No existing thread reminders data", "guild_id", guildID)
@@ -467,7 +467,7 @@ func formatAge(d time.Duration) string {
 
 func (b *Bot) loadMemberCounts() {
 	ctx := context.Background()
-	for _, guildID := range botutil.GetGuildIDs(b.Env) {
+	for _, guildID := range b.GuildIDs() {
 		data, err := b.S3.FetchThreadMemberCounts(ctx, fmt.Sprintf("%d", guildID))
 		if errors.Is(err, s3client.ErrNotFound) {
 			b.Log.Info("No existing thread member counts", "guild_id", guildID)

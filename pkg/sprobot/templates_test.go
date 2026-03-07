@@ -3,6 +3,8 @@ package sprobot
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/disgoorg/snowflake/v2"
 )
 
 func TestProfileTemplate(t *testing.T) {
@@ -49,46 +51,34 @@ func TestRoasterTemplate(t *testing.T) {
 	}
 }
 
-func TestAllTemplatesDev(t *testing.T) {
-	templates := AllTemplates("dev")
+func TestAllTemplates(t *testing.T) {
+	templates := AllTemplates()
 	if templates == nil {
-		t.Fatal("AllTemplates(dev) returned nil")
+		t.Fatal("AllTemplates() returned nil")
 	}
-	tmpls, ok := templates[1013566342345019512]
-	if !ok {
-		t.Fatal("dev guild ID not found")
-	}
-	if len(tmpls) != 2 {
-		t.Errorf("expected 2 templates for dev guild, got %d", len(tmpls))
-	}
-	if tmpls[0].ShortName != "profile" {
-		t.Errorf("first template should be profile, got %q", tmpls[0].ShortName)
-	}
-	if tmpls[1].ShortName != "roaster" {
-		t.Errorf("second template should be roaster, got %q", tmpls[1].ShortName)
+
+	// Both guilds should be present
+	for _, guildID := range []snowflake.ID{726985544038612993, 1013566342345019512} {
+		tmpls, ok := templates[guildID]
+		if !ok {
+			t.Fatalf("guild ID %d not found", guildID)
+		}
+		if len(tmpls) != 2 {
+			t.Errorf("expected 2 templates for guild %d, got %d", guildID, len(tmpls))
+		}
+		if tmpls[0].ShortName != "profile" {
+			t.Errorf("first template should be profile, got %q", tmpls[0].ShortName)
+		}
+		if tmpls[1].ShortName != "roaster" {
+			t.Errorf("second template should be roaster, got %q", tmpls[1].ShortName)
+		}
 	}
 }
 
-func TestAllTemplatesProd(t *testing.T) {
-	templates := AllTemplates("prod")
-	if templates == nil {
-		t.Fatal("AllTemplates(prod) returned nil")
-	}
-	tmpls, ok := templates[726985544038612993]
-	if !ok {
-		t.Fatal("prod guild ID not found")
-	}
-	if len(tmpls) != 2 {
-		t.Errorf("expected 2 templates for prod guild, got %d", len(tmpls))
-	}
-}
-
-func TestAllTemplatesUnknownEnv(t *testing.T) {
-	if AllTemplates("staging") != nil {
-		t.Error("AllTemplates(staging) should return nil")
-	}
-	if AllTemplates("") != nil {
-		t.Error("AllTemplates('') should return nil")
+func TestAllTemplatesGuildsDiffer(t *testing.T) {
+	templates := AllTemplates()
+	if len(templates) != 2 {
+		t.Errorf("expected 2 guild entries, got %d", len(templates))
 	}
 }
 
@@ -101,17 +91,6 @@ func TestTemplateFieldLimit(t *testing.T) {
 		if total > maxComponents {
 			t.Errorf("template %q has %d fields + 1 image = %d components, max is %d",
 				tmpl.Name, len(tmpl.Fields), total, maxComponents)
-		}
-	}
-}
-
-func TestDevAndProdGuildsDiffer(t *testing.T) {
-	dev := AllTemplates("dev")
-	prod := AllTemplates("prod")
-
-	for guildID := range dev {
-		if _, ok := prod[guildID]; ok {
-			t.Errorf("guild ID %d appears in both dev and prod", guildID)
 		}
 	}
 }

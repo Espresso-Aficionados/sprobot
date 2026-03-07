@@ -25,7 +25,6 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /threadbot ./cmd/threadbot
 
 FROM ${TARGET_DIST} AS prod
-ENV SPROBOT_ENV=prod
 COPY --from=build-sprobot /sprobot /sprobot
 COPY --from=base --chown=nonroot:nonroot /empty-dir /sprobot-cache
 VOLUME /sprobot-cache
@@ -33,40 +32,34 @@ USER nonroot:nonroot
 CMD ["/sprobot"]
 
 FROM ${TARGET_DIST} AS prodweb
-ENV SPROBOT_ENV=prod
 ENV PORT=9001
 COPY --from=build-sprobot-web /sprobot-web /sprobot-web
 USER nonroot:nonroot
 CMD ["/sprobot-web"]
 
 FROM build-sprobot AS dev
-ENV SPROBOT_ENV=dev
 VOLUME /sprobot-cache
 CMD ["/sprobot"]
 
 FROM build-sprobot-web AS devweb
-ENV SPROBOT_ENV=dev
+ENV WEB_ENDPOINT=http://localhost:8080/
 ENV PORT=8080
 CMD ["/sprobot-web"]
 
 FROM ${TARGET_DIST} AS prodstickybot
-ENV STICKYBOT_ENV=prod
 COPY --from=build-stickybot /stickybot /stickybot
 USER nonroot:nonroot
 CMD ["/stickybot"]
 
 FROM build-stickybot AS devstickybot
-ENV STICKYBOT_ENV=dev
 CMD ["/stickybot"]
 
 FROM ${TARGET_DIST} AS prodthreadbot
-ENV THREADBOT_ENV=prod
 COPY --from=build-threadbot /threadbot /threadbot
 USER nonroot:nonroot
 CMD ["/threadbot"]
 
 FROM build-threadbot AS devthreadbot
-ENV THREADBOT_ENV=dev
 CMD ["/threadbot"]
 
 FROM base AS test

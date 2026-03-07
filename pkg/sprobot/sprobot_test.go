@@ -44,14 +44,16 @@ func TestConstants(t *testing.T) {
 	}
 }
 
-func TestWebEndpointForEnv(t *testing.T) {
-	if got := WebEndpointForEnv("prod"); got != "https://bot.espressoaf.com/" {
-		t.Errorf("WebEndpointForEnv(prod) = %q, want prod URL", got)
+func TestWebEndpointFromEnvDefault(t *testing.T) {
+	t.Setenv("WEB_ENDPOINT", "")
+	if got := WebEndpointFromEnv(); got != "https://bot.espressoaf.com/" {
+		t.Errorf("WebEndpointFromEnv() = %q, want prod URL", got)
 	}
-	if got := WebEndpointForEnv("dev"); got != "http://localhost:8080/" {
-		t.Errorf("WebEndpointForEnv(dev) = %q, want localhost", got)
-	}
-	if got := WebEndpointForEnv(""); got != "http://localhost:8080/" {
-		t.Errorf("WebEndpointForEnv('') = %q, want localhost", got)
+}
+
+func TestWebEndpointFromEnvCustom(t *testing.T) {
+	t.Setenv("WEB_ENDPOINT", "http://localhost:9999/")
+	if got := WebEndpointFromEnv(); got != "http://localhost:9999/" {
+		t.Errorf("WebEndpointFromEnv() = %q, want custom URL", got)
 	}
 }

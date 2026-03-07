@@ -57,17 +57,9 @@ var RoasterTemplate = Template{
 	},
 }
 
-func AllTemplates(env string) map[snowflake.ID][]Template {
-	switch env {
-	case "dev":
-		return map[snowflake.ID][]Template{
-			1013566342345019512: {ProfileTemplate, RoasterTemplate},
-		}
-	case "prod":
-		return map[snowflake.ID][]Template{
-			726985544038612993: {ProfileTemplate, RoasterTemplate},
-		}
-	default:
-		return nil
+func AllTemplates() map[snowflake.ID][]Template {
+	return map[snowflake.ID][]Template{
+		726985544038612993:  {ProfileTemplate, RoasterTemplate},
+		1013566342345019512: {ProfileTemplate, RoasterTemplate},
 	}
 }
