@@ -138,13 +138,13 @@ func (c *Client) Bucket() string {
 	return c.bucket
 }
 
-// PresignedURL returns a presigned GET URL for the given S3 key with a 5-minute expiry.
+// PresignedURL returns a presigned GET URL for the given S3 key with a 48-hour expiry.
 func (c *Client) PresignedURL(ctx context.Context, s3Key string) (string, error) {
 	out, err := c.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: &c.bucket,
 		Key:    &s3Key,
 	}, func(opts *s3.PresignOptions) {
-		opts.Expires = 5 * time.Minute
+		opts.Expires = 48 * time.Hour
 	})
 	if err != nil {
 		return "", fmt.Errorf("presigning %q: %w", s3Key, err)

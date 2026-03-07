@@ -122,7 +122,6 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 	b.Log.Info("Shortcut used", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
 
 	response = expandShortcutVars(response, e.User().ID)
-	response = b.S3.PresignExisting(context.Background(), response)
 
 	username := getNickOrName(e.Member())
 	embed := discord.Embed{
@@ -132,6 +131,7 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 		},
 	}
 	if isImageURL(response) {
+		response = b.S3.PresignExisting(context.Background(), response)
 		embed.Image = &discord.EmbedResource{URL: response}
 	} else {
 		embed.Description = response
