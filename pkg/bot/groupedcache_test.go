@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 )
@@ -420,3 +421,192 @@ func TestCappedCache_EvictionCompaction(t *testing.T) {
 		t.Fatalf("order slice length = %d, should be bounded near cap (%d)", len(c.order), cap)
 	}
 }
+
+// --- Ungrouped cappedCache[T] tests ---
+
+func TestUngroupedCache_PutGet(t *testing.T) {
+	c := newCappedCache[discord.Guild](100)
+	g := discord.Guild{ID: 10, Name: "test"}
+	c.Put(10, g)
+
+	got, ok := c.Get(10)
+	if !ok {
+		t.Fatal("expected guild to be found")
+	}
+	if got.Name != "test" {
+		t.Fatalf("got name %q, want %q", got.Name, "test")
+	}
+
+	_, ok = c.Get(99)
+	if ok {
+		t.Fatal("expected guild not found")
+	}
+}
+
+func TestUngroupedCache_Eviction(t *testing.T) {
+	const cap = 50
+	c := newCappedCache[discord.Guild](cap)
+
+	for i := 1; i <= cap+1; i++ {
+		c.Put(snowflake.ID(i), discord.Guild{ID: snowflake.ID(i)})
+	}
+
+	if c.Len() != cap {
+		t.Fatalf("len = %d, want %d", c.Len(), cap)
+	}
+
+	if _, ok := c.Get(1); ok {
+		t.Fatal("expected oldest to be evicted")
+	}
+	if _, ok := c.Get(snowflake.ID(cap + 1)); !ok {
+		t.Fatal("expected newest to be present")
+	}
+}
+
+func TestUngroupedCache_PutOverwrite(t *testing.T) {
+	c := newCappedCache[discord.Guild](100)
+	c.Put(10, discord.Guild{ID: 10, Name: "first"})
+	c.Put(10, discord.Guild{ID: 10, Name: "second"})
+
+	if c.Len() != 1 {
+		t.Fatalf("len = %d, want 1", c.Len())
+	}
+	got, _ := c.Get(10)
+	if got.Name != "second" {
+		t.Fatalf("name = %q, want %q", got.Name, "second")
+	}
+}
+
+func TestUngroupedCache_Remove(t *testing.T) {
+	c := newCappedCache[discord.Guild](100)
+	c.Put(10, discord.Guild{ID: 10})
+	c.Put(11, discord.Guild{ID: 11})
+
+	removed, ok := c.Remove(10)
+	if !ok {
+		t.Fatal("expected remove to succeed")
+	}
+	if removed.ID != 10 {
+		t.Fatalf("removed ID = %d, want 10", removed.ID)
+	}
+	if c.Len() != 1 {
+		t.Fatalf("len = %d, want 1", c.Len())
+	}
+
+	_, ok = c.Remove(999)
+	if ok {
+		t.Fatal("expected remove non-existent to return false")
+	}
+}
+
+func TestUngroupedCache_RemoveIf(t *testing.T) {
+	c := newCappedCache[discord.Guild](100)
+	c.Put(10, discord.Guild{ID: 10, Name: "keep"})
+	c.Put(11, discord.Guild{ID: 11, Name: "drop"})
+	c.Put(12, discord.Guild{ID: 12, Name: "keep"})
+
+	c.RemoveIf(func(g discord.Guild) bool { return g.Name == "drop" })
+
+	if c.Len() != 2 {
+		t.Fatalf("len = %d, want 2", c.Len())
+	}
+	if _, ok := c.Get(11); ok {
+		t.Fatal("expected 11 to be removed")
+	}
+}
+
+func TestUngroupedCache_SnapshotLoad(t *testing.T) {
+	c := newCappedCache[discord.Guild](100)
+	c.Put(10, discord.Guild{ID: 10, Name: "a"})
+	c.Put(11, discord.Guild{ID: 11, Name: "b"})
+
+	items := c.snapshot()
+	if len(items) != 2 {
+		t.Fatalf("snapshot len = %d, want 2", len(items))
+	}
+
+	c2 := newCappedCache[discord.Guild](100)
+	c2.load(items, func(g discord.Guild) snowflake.ID { return g.ID })
+
+	if c2.Len() != 2 {
+		t.Fatalf("loaded len = %d, want 2", c2.Len())
+	}
+	if _, ok := c2.Get(10); !ok {
+		t.Fatal("expected 10 after load")
+	}
+	if _, ok := c2.Get(11); !ok {
+		t.Fatal("expected 11 after load")
+	}
+}
+
+func TestUngroupedCache_All(t *testing.T) {
+	c := newCappedCache[discord.Guild](100)
+	c.Put(10, discord.Guild{ID: 10})
+	c.Put(11, discord.Guild{ID: 11})
+	c.Put(12, discord.Guild{ID: 12})
+
+	count := 0
+	for range c.All() {
+		count++
+	}
+	if count != 3 {
+		t.Fatalf("All() yielded %d, want 3", count)
+	}
+}
+
+func TestUngroupedCache_EvictionCompaction(t *testing.T) {
+	const cap = 50
+	c := newCappedCache[discord.Guild](cap)
+
+	for i := 1; i <= cap*10; i++ {
+		c.Put(snowflake.ID(i), discord.Guild{ID: snowflake.ID(i)})
+	}
+
+	if c.Len() != cap {
+		t.Fatalf("len = %d, want %d", c.Len(), cap)
+	}
+	if len(c.order) > cap*2 {
+		t.Fatalf("order slice length = %d, should be bounded near cap (%d)", len(c.order), cap)
+	}
+}
+
+// --- Completeness guard ---
+
+func TestAllCacheFlagsHavePersistence(t *testing.T) {
+	expected := map[cache.Flags]string{
+		cache.FlagGuilds:                guildCacheFile,
+		cache.FlagChannels:              channelCacheFile,
+		cache.FlagMessages:              messageCacheFile,
+		cache.FlagMembers:               memberCacheFile,
+		cache.FlagRoles:                 roleCacheFile,
+		cache.FlagEmojis:                emojiCacheFile,
+		cache.FlagStickers:              stickerCacheFile,
+		cache.FlagVoiceStates:           voiceStateCacheFile,
+		cache.FlagPresences:             presenceCacheFile,
+		cache.FlagThreadMembers:         threadMemberCacheFile,
+		cache.FlagStageInstances:        stageInstanceCacheFile,
+		cache.FlagGuildScheduledEvents:  scheduledEventCacheFile,
+		cache.FlagGuildSoundboardSounds: soundboardSoundCacheFile,
+	}
+
+	for flag, file := range expected {
+		if !cache.FlagsAll.Has(flag) {
+			t.Errorf("flag %d listed but not in FlagsAll", flag)
+		}
+		if file == "" {
+			t.Errorf("flag %d has no cache file", flag)
+		}
+	}
+
+	for bit := cache.Flags(1); bit <= cache.FlagsAll; bit <<= 1 {
+		if cache.FlagsAll.Has(bit) {
+			if _, ok := expected[bit]; !ok {
+				t.Errorf("FlagsAll includes flag %d but no disk cache is configured for it", bit)
+			}
+		}
+	}
+}
+
+// Suppress unused import warning for filepath/os.
+var _ = filepath.Join
+var _ = os.Remove

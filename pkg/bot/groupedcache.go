@@ -15,6 +15,17 @@ import (
 const cacheDir = "/sprobot-cache"
 const messageCacheFile = "messagecache.json"
 const memberCacheFile = "membercache.json"
+const guildCacheFile = "guildcache.json"
+const channelCacheFile = "channelcache.json"
+const roleCacheFile = "rolecache.json"
+const emojiCacheFile = "emojicache.json"
+const stickerCacheFile = "stickercache.json"
+const voiceStateCacheFile = "voicestatecache.json"
+const presenceCacheFile = "presencecache.json"
+const threadMemberCacheFile = "threadmembercache.json"
+const stageInstanceCacheFile = "stageinstancecache.json"
+const scheduledEventCacheFile = "scheduledeventcache.json"
+const soundboardSoundCacheFile = "soundboardsoundcache.json"
 
 type cacheKey struct {
 	GroupID snowflake.ID
@@ -23,6 +34,128 @@ type cacheKey struct {
 
 var _ cache.GroupedCache[discord.Message] = (*cappedGroupedCache[discord.Message])(nil)
 var _ cache.GroupedCache[discord.Member] = (*cappedGroupedCache[discord.Member])(nil)
+var _ cache.Cache[discord.Guild] = (*cappedCache[discord.Guild])(nil)
+var _ cache.Cache[discord.GuildChannel] = (*cappedCache[discord.GuildChannel])(nil)
+
+type cappedCache[T any] struct {
+	mu      sync.RWMutex
+	data    map[snowflake.ID]T
+	order   []snowflake.ID
+	head    int
+	size    int
+	maxSize int
+}
+
+func newCappedCache[T any](maxSize int) *cappedCache[T] {
+	return &cappedCache[T]{
+		data:    make(map[snowflake.ID]T),
+		maxSize: maxSize,
+	}
+}
+
+func (c *cappedCache[T]) Get(id snowflake.ID) (T, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entity, ok := c.data[id]
+	return entity, ok
+}
+
+func (c *cappedCache[T]) Put(id snowflake.ID, entity T) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.data[id]; !exists {
+		c.order = append(c.order, id)
+		c.size++
+	}
+	c.data[id] = entity
+	c.evict()
+}
+
+func (c *cappedCache[T]) evict() {
+	for c.size > c.maxSize && c.head < len(c.order) {
+		id := c.order[c.head]
+		c.order[c.head] = 0
+		c.head++
+		if _, ok := c.data[id]; ok {
+			delete(c.data, id)
+			c.size--
+			break
+		}
+	}
+	if c.head >= len(c.order)/2 && c.head > 0 {
+		remaining := copy(c.order, c.order[c.head:])
+		for i := remaining; i < len(c.order); i++ {
+			c.order[i] = 0
+		}
+		c.order = c.order[:remaining]
+		c.head = 0
+	}
+}
+
+func (c *cappedCache[T]) Remove(id snowflake.ID) (T, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entity, ok := c.data[id]
+	if ok {
+		delete(c.data, id)
+		c.size--
+	}
+	return entity, ok
+}
+
+func (c *cappedCache[T]) RemoveIf(filterFunc cache.FilterFunc[T]) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, entity := range c.data {
+		if filterFunc(entity) {
+			delete(c.data, id)
+			c.size--
+		}
+	}
+}
+
+func (c *cappedCache[T]) Len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.size
+}
+
+func (c *cappedCache[T]) All() iter.Seq[T] {
+	return func(yield func(T) bool) {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+		for _, entity := range c.data {
+			if !yield(entity) {
+				return
+			}
+		}
+	}
+}
+
+func (c *cappedCache[T]) snapshot() []T {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	items := make([]T, 0, len(c.data))
+	for _, entity := range c.data {
+		items = append(items, entity)
+	}
+	return items
+}
+
+func (c *cappedCache[T]) load(items []T, keyFn func(T) snowflake.ID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data = make(map[snowflake.ID]T)
+	c.order = nil
+	c.head = 0
+	c.size = 0
+	for _, item := range items {
+		id := keyFn(item)
+		c.data[id] = item
+		c.order = append(c.order, id)
+		c.size++
+	}
+}
 
 type cappedGroupedCache[T any] struct {
 	mu      sync.RWMutex
@@ -318,5 +451,398 @@ func (b *Bot) saveMemberCache() {
 	path := filepath.Join(cacheDir, memberCacheFile)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		b.Log.Error("Failed to write member cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadGuildCache() {
+	path := filepath.Join(cacheDir, guildCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read guild cache file", "error", err)
+		}
+		return
+	}
+	var guilds []discord.Guild
+	if err := json.Unmarshal(data, &guilds); err != nil {
+		b.Log.Error("Failed to decode guild cache", "error", err)
+		return
+	}
+	b.guildCache.load(guilds, func(g discord.Guild) snowflake.ID { return g.ID })
+	b.Log.Info("Loaded guild cache", "count", len(guilds))
+}
+
+func (b *Bot) saveGuildCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.guildCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal guild cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, guildCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write guild cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadChannelCache() {
+	path := filepath.Join(cacheDir, channelCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read channel cache file", "error", err)
+		}
+		return
+	}
+	var wrappers []discord.UnmarshalChannel
+	if err := json.Unmarshal(data, &wrappers); err != nil {
+		b.Log.Error("Failed to decode channel cache", "error", err)
+		return
+	}
+	channels := make([]discord.GuildChannel, 0, len(wrappers))
+	for _, w := range wrappers {
+		if gc, ok := w.Channel.(discord.GuildChannel); ok {
+			channels = append(channels, gc)
+		}
+	}
+	b.channelCache.load(channels, func(ch discord.GuildChannel) snowflake.ID { return ch.ID() })
+	b.Log.Info("Loaded channel cache", "count", len(channels))
+}
+
+func (b *Bot) saveChannelCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.channelCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal channel cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, channelCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write channel cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadRoleCache() {
+	path := filepath.Join(cacheDir, roleCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read role cache file", "error", err)
+		}
+		return
+	}
+	var roles []discord.Role
+	if err := json.Unmarshal(data, &roles); err != nil {
+		b.Log.Error("Failed to decode role cache", "error", err)
+		return
+	}
+	b.roleCache.load(roles, func(r discord.Role) (snowflake.ID, snowflake.ID) {
+		return r.GuildID, r.ID
+	})
+	b.Log.Info("Loaded role cache", "count", len(roles))
+}
+
+func (b *Bot) saveRoleCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.roleCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal role cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, roleCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write role cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadEmojiCache() {
+	path := filepath.Join(cacheDir, emojiCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read emoji cache file", "error", err)
+		}
+		return
+	}
+	var emojis []discord.Emoji
+	if err := json.Unmarshal(data, &emojis); err != nil {
+		b.Log.Error("Failed to decode emoji cache", "error", err)
+		return
+	}
+	b.emojiCache.load(emojis, func(e discord.Emoji) (snowflake.ID, snowflake.ID) {
+		return e.GuildID, e.ID
+	})
+	b.Log.Info("Loaded emoji cache", "count", len(emojis))
+}
+
+func (b *Bot) saveEmojiCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.emojiCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal emoji cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, emojiCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write emoji cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadStickerCache() {
+	path := filepath.Join(cacheDir, stickerCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read sticker cache file", "error", err)
+		}
+		return
+	}
+	var stickers []discord.Sticker
+	if err := json.Unmarshal(data, &stickers); err != nil {
+		b.Log.Error("Failed to decode sticker cache", "error", err)
+		return
+	}
+	b.stickerCache.load(stickers, func(s discord.Sticker) (snowflake.ID, snowflake.ID) {
+		if s.GuildID == nil {
+			return 0, s.ID
+		}
+		return *s.GuildID, s.ID
+	})
+	b.Log.Info("Loaded sticker cache", "count", len(stickers))
+}
+
+func (b *Bot) saveStickerCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.stickerCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal sticker cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, stickerCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write sticker cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadVoiceStateCache() {
+	path := filepath.Join(cacheDir, voiceStateCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read voice state cache file", "error", err)
+		}
+		return
+	}
+	var states []discord.VoiceState
+	if err := json.Unmarshal(data, &states); err != nil {
+		b.Log.Error("Failed to decode voice state cache", "error", err)
+		return
+	}
+	b.voiceStateCache.load(states, func(vs discord.VoiceState) (snowflake.ID, snowflake.ID) {
+		return vs.GuildID, vs.UserID
+	})
+	b.Log.Info("Loaded voice state cache", "count", len(states))
+}
+
+func (b *Bot) saveVoiceStateCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.voiceStateCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal voice state cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, voiceStateCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write voice state cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadPresenceCache() {
+	path := filepath.Join(cacheDir, presenceCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read presence cache file", "error", err)
+		}
+		return
+	}
+	var presences []discord.Presence
+	if err := json.Unmarshal(data, &presences); err != nil {
+		b.Log.Error("Failed to decode presence cache", "error", err)
+		return
+	}
+	b.presenceCache.load(presences, func(p discord.Presence) (snowflake.ID, snowflake.ID) {
+		return p.GuildID, p.PresenceUser.ID
+	})
+	b.Log.Info("Loaded presence cache", "count", len(presences))
+}
+
+func (b *Bot) savePresenceCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.presenceCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal presence cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, presenceCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write presence cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadThreadMemberCache() {
+	path := filepath.Join(cacheDir, threadMemberCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read thread member cache file", "error", err)
+		}
+		return
+	}
+	var members []discord.ThreadMember
+	if err := json.Unmarshal(data, &members); err != nil {
+		b.Log.Error("Failed to decode thread member cache", "error", err)
+		return
+	}
+	b.threadMemberCache.load(members, func(tm discord.ThreadMember) (snowflake.ID, snowflake.ID) {
+		return tm.ThreadID, tm.UserID
+	})
+	b.Log.Info("Loaded thread member cache", "count", len(members))
+}
+
+func (b *Bot) saveThreadMemberCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.threadMemberCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal thread member cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, threadMemberCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write thread member cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadStageInstanceCache() {
+	path := filepath.Join(cacheDir, stageInstanceCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read stage instance cache file", "error", err)
+		}
+		return
+	}
+	var instances []discord.StageInstance
+	if err := json.Unmarshal(data, &instances); err != nil {
+		b.Log.Error("Failed to decode stage instance cache", "error", err)
+		return
+	}
+	b.stageInstanceCache.load(instances, func(s discord.StageInstance) (snowflake.ID, snowflake.ID) {
+		return s.GuildID, s.ID
+	})
+	b.Log.Info("Loaded stage instance cache", "count", len(instances))
+}
+
+func (b *Bot) saveStageInstanceCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.stageInstanceCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal stage instance cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, stageInstanceCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write stage instance cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadScheduledEventCache() {
+	path := filepath.Join(cacheDir, scheduledEventCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read scheduled event cache file", "error", err)
+		}
+		return
+	}
+	var events []discord.GuildScheduledEvent
+	if err := json.Unmarshal(data, &events); err != nil {
+		b.Log.Error("Failed to decode scheduled event cache", "error", err)
+		return
+	}
+	b.scheduledEventCache.load(events, func(e discord.GuildScheduledEvent) (snowflake.ID, snowflake.ID) {
+		return e.GuildID, e.ID
+	})
+	b.Log.Info("Loaded scheduled event cache", "count", len(events))
+}
+
+func (b *Bot) saveScheduledEventCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.scheduledEventCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal scheduled event cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, scheduledEventCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write scheduled event cache file", "error", err)
+	}
+}
+
+func (b *Bot) loadSoundboardSoundCache() {
+	path := filepath.Join(cacheDir, soundboardSoundCacheFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			b.Log.Error("Failed to read soundboard sound cache file", "error", err)
+		}
+		return
+	}
+	var sounds []discord.SoundboardSound
+	if err := json.Unmarshal(data, &sounds); err != nil {
+		b.Log.Error("Failed to decode soundboard sound cache", "error", err)
+		return
+	}
+	b.soundboardSoundCache.load(sounds, func(s discord.SoundboardSound) (snowflake.ID, snowflake.ID) {
+		if s.GuildID == nil {
+			return 0, s.SoundID
+		}
+		return *s.GuildID, s.SoundID
+	})
+	b.Log.Info("Loaded soundboard sound cache", "count", len(sounds))
+}
+
+func (b *Bot) saveSoundboardSoundCache() {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		b.Log.Error("Failed to create cache directory", "error", err)
+		return
+	}
+	data, err := json.Marshal(b.soundboardSoundCache.snapshot())
+	if err != nil {
+		b.Log.Error("Failed to marshal soundboard sound cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, soundboardSoundCacheFile), data, 0o644); err != nil {
+		b.Log.Error("Failed to write soundboard sound cache file", "error", err)
 	}
 }
