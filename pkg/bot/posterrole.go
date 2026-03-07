@@ -26,14 +26,7 @@ type posterRoleSettings struct {
 }
 
 func (s *posterRoleSettings) isSkipped(ids ...snowflake.ID) bool {
-	for _, id := range ids {
-		for _, skip := range s.SkipChannels {
-			if id == skip {
-				return true
-			}
-		}
-	}
-	return false
+	return containsAny(s.SkipChannels, ids...)
 }
 
 type posterRoleState struct {
@@ -44,6 +37,11 @@ type posterRoleState struct {
 
 	parentCache sync.Map // channelID → channelParents
 }
+
+func (st *posterRoleState) lock()                          { st.mu.Lock() }
+func (st *posterRoleState) unlock()                        { st.mu.Unlock() }
+func (st *posterRoleState) getBlacklist() []snowflake.ID   { return st.Settings.SkipChannels }
+func (st *posterRoleState) setBlacklist(bl []snowflake.ID) { st.Settings.SkipChannels = bl }
 
 func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg discord.Message) {
 	st := b.posterRole[guildID]
@@ -653,119 +651,15 @@ func (b *Bot) handleMarketBlacklist(e *events.ApplicationCommandInteractionCreat
 		return
 	}
 
+	persist := func() error { return b.persistPosterRole(*guildID, st) }
 	switch *subCmd {
 	case "add":
-		b.handleMarketBlacklistAdd(e, *guildID, st)
+		b.handleBlacklistAdd(e, *guildID, st, persist, "Market")
 	case "remove":
-		b.handleMarketBlacklistRemove(e, *guildID, st)
+		b.handleBlacklistRemove(e, *guildID, st, persist, "Market")
 	case "list":
-		b.handleMarketBlacklistList(e, st)
+		b.handleBlacklistList(e, st, "Market")
 	case "clear":
-		b.handleMarketBlacklistClear(e, *guildID, st)
+		b.handleBlacklistClear(e, *guildID, st, persist, "Market")
 	}
-}
-
-func (b *Bot) handleMarketBlacklistAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
-	data := e.Data.(discord.SlashCommandInteractionData)
-	ch, ok := data.OptChannel("channel")
-	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a channel.")
-		return
-	}
-
-	b.Log.Info("Market blacklist add", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
-
-	st.mu.Lock()
-	if st.Settings.isSkipped(ch.ID) {
-		st.mu.Unlock()
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> is already blacklisted.", ch.ID))
-		return
-	}
-	st.Settings.SkipChannels = append(st.Settings.SkipChannels, ch.ID)
-	st.mu.Unlock()
-
-	if err := b.persistPosterRole(guildID, st); err != nil {
-		b.Log.Error("Failed to persist market blacklist", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save blacklist.")
-		return
-	}
-
-	botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> added to blacklist.", ch.ID))
-}
-
-func (b *Bot) handleMarketBlacklistRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
-	data := e.Data.(discord.SlashCommandInteractionData)
-	ch, ok := data.OptChannel("channel")
-	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a channel.")
-		return
-	}
-
-	b.Log.Info("Market blacklist remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
-
-	st.mu.Lock()
-	found := false
-	for i, id := range st.Settings.SkipChannels {
-		if id == ch.ID {
-			st.Settings.SkipChannels = append(st.Settings.SkipChannels[:i], st.Settings.SkipChannels[i+1:]...)
-			found = true
-			break
-		}
-	}
-	st.mu.Unlock()
-
-	if !found {
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> is not blacklisted.", ch.ID))
-		return
-	}
-
-	if err := b.persistPosterRole(guildID, st); err != nil {
-		b.Log.Error("Failed to persist market blacklist", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save blacklist.")
-		return
-	}
-
-	botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> removed from blacklist.", ch.ID))
-}
-
-func (b *Bot) handleMarketBlacklistList(e *events.ApplicationCommandInteractionCreate, st *posterRoleState) {
-	b.Log.Info("Market blacklist list", "user_id", e.User().ID, "guild_id", *e.GuildID())
-
-	st.mu.Lock()
-	bl := make([]snowflake.ID, len(st.Settings.SkipChannels))
-	copy(bl, st.Settings.SkipChannels)
-	st.mu.Unlock()
-
-	if len(bl) == 0 {
-		botutil.RespondEphemeral(e, "No channels are blacklisted.")
-		return
-	}
-
-	var lines []string
-	for _, id := range bl {
-		lines = append(lines, fmt.Sprintf("<#%d>", id))
-	}
-	botutil.RespondEphemeral(e, "**Blacklisted channels:**\n"+strings.Join(lines, "\n"))
-}
-
-func (b *Bot) handleMarketBlacklistClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
-	b.Log.Info("Market blacklist clear", "user_id", e.User().ID, "guild_id", guildID)
-
-	st.mu.Lock()
-	count := len(st.Settings.SkipChannels)
-	st.Settings.SkipChannels = nil
-	st.mu.Unlock()
-
-	if count == 0 {
-		botutil.RespondEphemeral(e, "Blacklist is already empty.")
-		return
-	}
-
-	if err := b.persistPosterRole(guildID, st); err != nil {
-		b.Log.Error("Failed to persist market blacklist", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save blacklist.")
-		return
-	}
-
-	botutil.RespondEphemeral(e, fmt.Sprintf("Cleared %d entries from the blacklist.", count))
 }

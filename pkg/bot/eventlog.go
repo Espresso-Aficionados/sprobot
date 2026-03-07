@@ -226,7 +226,7 @@ func (b *Bot) logMemberJoin(guildID snowflake.ID, member discord.Member) {
 			IconURL: member.User.EffectiveAvatarURL(),
 		},
 		Fields: []discord.EmbedField{
-			{Name: "Account Age", Value: formatDuration(accountAge), Inline: boolPtr(true)},
+			{Name: "Account Age", Value: botutil.FormatAge(accountAge), Inline: boolPtr(true)},
 			{Name: "User ID", Value: fmt.Sprintf("`%d`", member.User.ID), Inline: boolPtr(true)},
 		},
 	}
@@ -243,7 +243,7 @@ func (b *Bot) onMemberLeave(e *events.GuildMemberLeave) {
 			IconURL: e.User.EffectiveAvatarURL(),
 		},
 		Fields: []discord.EmbedField{
-			{Name: "Account Age", Value: formatDuration(time.Since(e.User.CreatedAt())), Inline: boolPtr(true)},
+			{Name: "Account Age", Value: botutil.FormatAge(time.Since(e.User.CreatedAt())), Inline: boolPtr(true)},
 			{Name: "User ID", Value: fmt.Sprintf("`%d`", e.User.ID), Inline: boolPtr(true)},
 		},
 	}
@@ -1108,22 +1108,6 @@ func formatPartialRoleMentions(roles []discord.PartialRole) string {
 		mentions[i] = fmt.Sprintf("<@&%d>", r.ID)
 	}
 	return strings.Join(mentions, ", ")
-}
-
-func formatDuration(d time.Duration) string {
-	days := int(d.Hours() / 24)
-	if days > 365 {
-		years := days / 365
-		return fmt.Sprintf("%d years, %d days", years, days%365)
-	}
-	if days > 0 {
-		return fmt.Sprintf("%d days", days)
-	}
-	hours := int(d.Hours())
-	if hours > 0 {
-		return fmt.Sprintf("%d hours", hours)
-	}
-	return fmt.Sprintf("%d minutes", int(d.Minutes()))
 }
 
 // --- /config eventlog handlers ---

@@ -47,24 +47,6 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
-func TestFormatDuration(t *testing.T) {
-	tests := []struct {
-		d    time.Duration
-		want string
-	}{
-		{400 * 24 * time.Hour, "1 years, 35 days"},
-		{30 * 24 * time.Hour, "30 days"},
-		{5 * time.Hour, "5 hours"},
-		{15 * time.Minute, "15 minutes"},
-	}
-	for _, tt := range tests {
-		got := formatDuration(tt.d)
-		if got != tt.want {
-			t.Errorf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
-		}
-	}
-}
-
 func TestChannelTypeName(t *testing.T) {
 	tests := []struct {
 		t    discord.ChannelType

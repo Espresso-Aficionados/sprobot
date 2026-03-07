@@ -226,7 +226,7 @@ func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
 				cachedCount++
 			}
 		}
-		age := formatAge(now.Sub(t.CreatedAt))
+		age := botutil.FormatAge(now.Sub(t.CreatedAt))
 		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.MessageCount, memberCount, age)
 		if desc.Len()+len(line) > maxDescLen {
 			break
@@ -328,7 +328,7 @@ func (b *Bot) buildAllThreadsEmbed(guildID snowflake.ID) *discord.Embed {
 				cachedCount++
 			}
 		}
-		age := formatAge(now.Sub(t.CreatedAt))
+		age := botutil.FormatAge(now.Sub(t.CreatedAt))
 		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) in <#%d> — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.ParentID, t.MessageCount, memberCount, age)
 		if desc.Len()+len(line) > maxDescLen {
 			break
@@ -422,47 +422,6 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 	b.mu.Unlock()
 	b.saveRemindersForGuild(r.GuildID)
 	return true
-}
-
-func formatAge(d time.Duration) string {
-	switch {
-	case d >= 365*24*time.Hour:
-		days := int(d.Hours() / 24)
-		years := days / 365
-		rem := days % 365
-		if rem == 0 {
-			if years == 1 {
-				return "1 year"
-			}
-			return fmt.Sprintf("%d years", years)
-		}
-		dayWord := "days"
-		if rem == 1 {
-			dayWord = "day"
-		}
-		if years == 1 {
-			return fmt.Sprintf("1 year %d %s", rem, dayWord)
-		}
-		return fmt.Sprintf("%d years %d %s", years, rem, dayWord)
-	case d >= 24*time.Hour:
-		days := int(d.Hours() / 24)
-		if days == 1 {
-			return "1 day"
-		}
-		return fmt.Sprintf("%d days", days)
-	case d >= time.Hour:
-		hours := int(d.Hours())
-		if hours == 1 {
-			return "1 hour"
-		}
-		return fmt.Sprintf("%d hours", hours)
-	default:
-		mins := int(d.Minutes())
-		if mins <= 1 {
-			return "1 min"
-		}
-		return fmt.Sprintf("%d mins", mins)
-	}
 }
 
 func (b *Bot) loadMemberCounts() {

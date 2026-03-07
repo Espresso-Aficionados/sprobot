@@ -340,9 +340,7 @@ func (c *Client) DeleteProfile(ctx context.Context, tmpl sprobot.Template, guild
 	return nil
 }
 
-func (c *Client) SaveModImage(ctx context.Context, guildID string, fileURL string) (string, error) {
-	c.log.Info("Saving file to mod log", "guild_id", guildID)
-
+func (c *Client) saveRemoteFile(ctx context.Context, guildID, fileURL, s3Prefix string) (string, error) {
 	if err := urlValidator(fileURL); err != nil {
 		c.log.Info("URL validation failed", "url", fileURL, "error", err)
 		return fileURL, nil
@@ -368,7 +366,7 @@ func (c *Client) SaveModImage(ctx context.Context, guildID string, fileURL strin
 		return fileURL, nil
 	}
 	ext := path.Ext(parsed.Path)
-	s3Path := fmt.Sprintf("mod_files/%s/%s%s", guildID, randomID, ext)
+	s3Path := fmt.Sprintf("%s/%s/%s%s", s3Prefix, guildID, randomID, ext)
 
 	_, err = c.s3.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: &c.bucket,
@@ -380,55 +378,33 @@ func (c *Client) SaveModImage(ctx context.Context, guildID string, fileURL strin
 		return fileURL, nil
 	}
 
-	c.log.Info("Mod image saved", "guild_id", guildID, "s3_key", s3Path)
+	return s3Path, nil
+}
+
+func (c *Client) SaveModImage(ctx context.Context, guildID string, fileURL string) (string, error) {
+	c.log.Info("Saving file to mod log", "guild_id", guildID)
+	s3Path, err := c.saveRemoteFile(ctx, guildID, fileURL, "mod_files")
+	if err != nil {
+		return "", err
+	}
+	if s3Path != fileURL {
+		c.log.Info("Mod image saved", "guild_id", guildID, "s3_key", s3Path)
+	}
 	return s3Path, nil
 }
 
 func (c *Client) SaveShortcutImage(ctx context.Context, guildID string, fileURL string) (string, error) {
 	c.log.Info("Saving shortcut image", "guild_id", guildID)
-
 	if strings.HasPrefix(fileURL, c.endpoint) || !strings.HasPrefix(fileURL, "http") {
 		return fileURL, nil
 	}
-
-	if err := urlValidator(fileURL); err != nil {
-		c.log.Info("URL validation failed", "url", fileURL, "error", err)
-		return fileURL, nil
-	}
-
-	resp, err := httpClient.Get(fileURL)
+	s3Path, err := c.saveRemoteFile(ctx, guildID, fileURL, "shortcut_files")
 	if err != nil {
-		c.log.Info("Unable to fetch from the link provided", "url", fileURL, "error", err)
-		return fileURL, nil
+		return "", err
 	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize))
-	if err != nil {
-		c.log.Info("Unable to read response body", "url", fileURL, "error", err)
-		return fileURL, nil
+	if s3Path != fileURL {
+		c.log.Info("Shortcut image saved", "guild_id", guildID, "s3_key", s3Path)
 	}
-
-	randomID := randomString(30)
-	parsed, err := url.Parse(fileURL)
-	if err != nil {
-		c.log.Info("Unable to parse URL for extension", "url", fileURL, "error", err)
-		return fileURL, nil
-	}
-	ext := path.Ext(parsed.Path)
-	s3Path := fmt.Sprintf("shortcut_files/%s/%s%s", guildID, randomID, ext)
-
-	_, err = c.s3.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: &c.bucket,
-		Key:    &s3Path,
-		Body:   bytes.NewReader(data),
-	})
-	if err != nil {
-		c.log.Info("Unable to upload to s3", "error", err)
-		return fileURL, nil
-	}
-
-	c.log.Info("Shortcut image saved", "guild_id", guildID, "s3_key", s3Path)
 	return s3Path, nil
 }
 

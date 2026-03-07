@@ -35,14 +35,7 @@ func (s *starboardSettings) effectiveThreshold() int {
 }
 
 func (s *starboardSettings) isBlacklisted(ids ...snowflake.ID) bool {
-	for _, id := range ids {
-		for _, blID := range s.Blacklist {
-			if id == blID {
-				return true
-			}
-		}
-	}
-	return false
+	return containsAny(s.Blacklist, ids...)
 }
 
 // resolveChannelParents returns the channel ID plus any parent/category IDs,
@@ -109,6 +102,11 @@ type starboardState struct {
 
 	parentCache sync.Map // channelID → channelParents
 }
+
+func (st *starboardState) lock()                          { st.mu.Lock() }
+func (st *starboardState) unlock()                        { st.mu.Unlock() }
+func (st *starboardState) getBlacklist() []snowflake.ID   { return st.Settings.Blacklist }
+func (st *starboardState) setBlacklist(bl []snowflake.ID) { st.Settings.Blacklist = bl }
 
 func intPtr(v int) *int { return &v }
 
@@ -626,119 +624,15 @@ func (b *Bot) handleStarboardBlacklist(e *events.ApplicationCommandInteractionCr
 		return
 	}
 
+	persist := func() error { return b.persistStarboard(*guildID, st) }
 	switch *subCmd {
 	case "add":
-		b.handleSBBlacklistAdd(e, *guildID, st)
+		b.handleBlacklistAdd(e, *guildID, st, persist, "Starboard")
 	case "remove":
-		b.handleSBBlacklistRemove(e, *guildID, st)
+		b.handleBlacklistRemove(e, *guildID, st, persist, "Starboard")
 	case "list":
-		b.handleSBBlacklistList(e, st)
+		b.handleBlacklistList(e, st, "Starboard")
 	case "clear":
-		b.handleSBBlacklistClear(e, *guildID, st)
+		b.handleBlacklistClear(e, *guildID, st, persist, "Starboard")
 	}
-}
-
-func (b *Bot) handleSBBlacklistAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
-	data := e.Data.(discord.SlashCommandInteractionData)
-	ch, ok := data.OptChannel("channel")
-	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a channel.")
-		return
-	}
-
-	b.Log.Info("Starboard blacklist add", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
-
-	st.mu.Lock()
-	if st.Settings.isBlacklisted(ch.ID) {
-		st.mu.Unlock()
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> is already blacklisted.", ch.ID))
-		return
-	}
-	st.Settings.Blacklist = append(st.Settings.Blacklist, ch.ID)
-	st.mu.Unlock()
-
-	if err := b.persistStarboard(guildID, st); err != nil {
-		b.Log.Error("Failed to persist starboard blacklist", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save blacklist.")
-		return
-	}
-
-	botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> added to blacklist.", ch.ID))
-}
-
-func (b *Bot) handleSBBlacklistRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
-	data := e.Data.(discord.SlashCommandInteractionData)
-	ch, ok := data.OptChannel("channel")
-	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a channel.")
-		return
-	}
-
-	b.Log.Info("Starboard blacklist remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
-
-	st.mu.Lock()
-	found := false
-	for i, id := range st.Settings.Blacklist {
-		if id == ch.ID {
-			st.Settings.Blacklist = append(st.Settings.Blacklist[:i], st.Settings.Blacklist[i+1:]...)
-			found = true
-			break
-		}
-	}
-	st.mu.Unlock()
-
-	if !found {
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> is not blacklisted.", ch.ID))
-		return
-	}
-
-	if err := b.persistStarboard(guildID, st); err != nil {
-		b.Log.Error("Failed to persist starboard blacklist", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save blacklist.")
-		return
-	}
-
-	botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> removed from blacklist.", ch.ID))
-}
-
-func (b *Bot) handleSBBlacklistList(e *events.ApplicationCommandInteractionCreate, st *starboardState) {
-	b.Log.Info("Starboard blacklist list", "user_id", e.User().ID, "guild_id", *e.GuildID())
-
-	st.mu.Lock()
-	bl := make([]snowflake.ID, len(st.Settings.Blacklist))
-	copy(bl, st.Settings.Blacklist)
-	st.mu.Unlock()
-
-	if len(bl) == 0 {
-		botutil.RespondEphemeral(e, "No channels are blacklisted.")
-		return
-	}
-
-	var lines []string
-	for _, id := range bl {
-		lines = append(lines, fmt.Sprintf("<#%d>", id))
-	}
-	botutil.RespondEphemeral(e, "**Blacklisted channels:**\n"+strings.Join(lines, "\n"))
-}
-
-func (b *Bot) handleSBBlacklistClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
-	b.Log.Info("Starboard blacklist clear", "user_id", e.User().ID, "guild_id", guildID)
-
-	st.mu.Lock()
-	count := len(st.Settings.Blacklist)
-	st.Settings.Blacklist = nil
-	st.mu.Unlock()
-
-	if count == 0 {
-		botutil.RespondEphemeral(e, "Blacklist is already empty.")
-		return
-	}
-
-	if err := b.persistStarboard(guildID, st); err != nil {
-		b.Log.Error("Failed to persist starboard blacklist", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save blacklist.")
-		return
-	}
-
-	botutil.RespondEphemeral(e, fmt.Sprintf("Cleared %d entries from the blacklist.", count))
 }
