@@ -313,7 +313,7 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	st.mu.Unlock()
 
 	if cfg.RoleID == 0 || cfg.Threshold == 0 {
-		botutil.RespondEphemeral(e, "Poster role is not configured. Use `/marketconfig set` first.")
+		botutil.RespondEphemeral(e, "Poster role is not configured. Use `/config market set` first.")
 		return
 	}
 
@@ -470,7 +470,7 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 	st.mu.Unlock()
 
 	if cfg.RoleID == 0 || cfg.Threshold == 0 {
-		botutil.RespondEphemeral(e, "Poster role is not configured. Use `/marketconfig set` first.")
+		botutil.RespondEphemeral(e, "Poster role is not configured. Use `/config market set` first.")
 		return
 	}
 
@@ -544,7 +544,7 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
 }
 
-// --- /marketconfig handlers ---
+// --- /config market handlers ---
 
 func (b *Bot) handleMarketConfig(e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
@@ -629,7 +629,7 @@ func (b *Bot) handleMarketConfigShow(e *events.ApplicationCommandInteractionCrea
 	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
 }
 
-// --- /marketblacklist handlers ---
+// --- /config market-blacklist handlers ---
 
 func (b *Bot) handleMarketBlacklist(e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)

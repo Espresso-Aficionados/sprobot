@@ -208,7 +208,7 @@ func (b *Bot) handleWelcomeSetModal(e *events.ModalSubmitInteractionCreate) {
 	if enabled {
 		botutil.RespondEphemeral(e, "Welcome message saved.")
 	} else {
-		botutil.RespondEphemeral(e, "Welcome message saved. Use `/welcome enable` to activate it.")
+		botutil.RespondEphemeral(e, "Welcome message saved. Use `/config welcome enable` to activate it.")
 	}
 }
 
@@ -290,7 +290,7 @@ func (b *Bot) handleWelcomeTest(e *events.ApplicationCommandInteractionCreate) {
 	st.mu.Unlock()
 
 	if msg == "" {
-		botutil.RespondEphemeral(e, "No welcome message configured. Use `/welcome set` first.")
+		botutil.RespondEphemeral(e, "No welcome message configured. Use `/config welcome set` first.")
 		return
 	}
 
@@ -349,7 +349,7 @@ func (b *Bot) handleWelcomeEnable(e *events.ApplicationCommandInteractionCreate)
 	st.mu.Unlock()
 
 	if msg == "" {
-		botutil.RespondEphemeral(e, "Welcome DM enabled, but no message is configured. Use `/welcome set` to set one.")
+		botutil.RespondEphemeral(e, "Welcome DM enabled, but no message is configured. Use `/config welcome set` to set one.")
 		return
 	}
 
