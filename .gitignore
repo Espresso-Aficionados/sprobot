@@ -15,6 +15,12 @@
 # vendor/
 #
 
+# Built Go binaries
+/sprobot
+/sprobot-web
+/stickybot
+/threadbot
+
 .DS_Store
 config/*
 !config/example.env
