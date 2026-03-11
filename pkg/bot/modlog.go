@@ -303,9 +303,14 @@ func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author disco
 		}
 	}
 
-	// Search archived threads
-	archivedThreads, err := b.Client.Rest.GetPublicArchivedThreads(forumChannelID, time.Time{}, 0)
-	if err == nil {
+	// Search archived threads (paginated)
+	before := time.Time{}
+	for {
+		archivedThreads, err := b.Client.Rest.GetPublicArchivedThreads(forumChannelID, before, 0)
+		if err != nil {
+			b.Log.Error("Failed to get archived threads", "error", err)
+			break
+		}
 		for _, thread := range archivedThreads.Threads {
 			for _, term := range searchTerms {
 				if strings.Contains(thread.Name(), term) {
@@ -313,6 +318,10 @@ func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author disco
 				}
 			}
 		}
+		if !archivedThreads.HasMore || len(archivedThreads.Threads) == 0 {
+			break
+		}
+		before = archivedThreads.Threads[len(archivedThreads.Threads)-1].ThreadMetadata.ArchiveTimestamp
 	}
 
 	// Create a new thread
