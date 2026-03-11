@@ -160,13 +160,13 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Download amd64 digest
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           name: ${{ matrix.artifact-prefix }}-linux-amd64
           path: /tmp/digests/amd64
 
       - name: Download arm64 digest
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           name: ${{ matrix.artifact-prefix }}-linux-arm64
           path: /tmp/digests/arm64
