@@ -266,12 +266,13 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 }
 
 func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author discord.User) discord.Channel {
-	searchTerms := []string{
-		fmt.Sprintf("- %d", author.ID),
-		author.Username,
-	}
+	idTerm := fmt.Sprintf("- %d", author.ID)
+	nameTerm := author.Username
 
-	// Search active threads - need to get guild ID from channel
+	// Search active and archived threads for user ID match eagerly,
+	// collecting candidates for a username fallback pass if ID isn't found.
+	var candidates []discord.GuildThread
+
 	ch, err := b.Client.Rest.GetChannel(forumChannelID)
 	if err != nil {
 		b.Log.Error("Failed to get mod log channel", "error", err)
@@ -284,26 +285,25 @@ func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author disco
 		return nil
 	}
 
+	// Active threads — check ID immediately, save for username fallback
 	activeThreads, err := b.Client.Rest.GetActiveGuildThreads(forumCh.GuildID())
 	if err != nil {
 		b.Log.Error("Failed to get active threads", "error", err)
 	}
-
 	if activeThreads != nil {
 		for _, thread := range activeThreads.Threads {
 			parentID := thread.ParentID()
 			if parentID == nil || *parentID != forumChannelID {
 				continue
 			}
-			for _, term := range searchTerms {
-				if strings.Contains(thread.Name(), term) {
-					return thread
-				}
+			if strings.Contains(thread.Name(), idTerm) {
+				return thread
 			}
+			candidates = append(candidates, thread)
 		}
 	}
 
-	// Search archived threads (paginated)
+	// Archived threads (paginated) — check ID each page, save for username fallback
 	before := time.Time{}
 	for {
 		archivedThreads, err := b.Client.Rest.GetPublicArchivedThreads(forumChannelID, before, 0)
@@ -312,16 +312,22 @@ func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author disco
 			break
 		}
 		for _, thread := range archivedThreads.Threads {
-			for _, term := range searchTerms {
-				if strings.Contains(thread.Name(), term) {
-					return thread
-				}
+			if strings.Contains(thread.Name(), idTerm) {
+				return thread
 			}
 		}
+		candidates = append(candidates, archivedThreads.Threads...)
 		if !archivedThreads.HasMore || len(archivedThreads.Threads) == 0 {
 			break
 		}
 		before = archivedThreads.Threads[len(archivedThreads.Threads)-1].ThreadMetadata.ArchiveTimestamp
+	}
+
+	// Fallback: match by username across all collected candidates
+	for _, thread := range candidates {
+		if strings.Contains(thread.Name(), nameTerm) {
+			return thread
+		}
 	}
 
 	// Create a new thread
