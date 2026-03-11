@@ -29,6 +29,30 @@ func TestMessageLink(t *testing.T) {
 	}
 }
 
+func TestParseThreadUserID(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"cooluser - 123456789012345678", "123456789012345678"},
+		{"user with spaces - 999", "999"},
+		{"someone - 0", "0"},
+		{"no dash at all", ""},
+		{"trailing text - abc", ""},
+		{"", ""},
+		{"- 12345", "12345"},
+		{"name - 111 - 222", "222"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseThreadUserID(tc.name)
+			if got != tc.want {
+				t.Errorf("parseThreadUserID(%q) = %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSplitContent(t *testing.T) {
 	// splitContent mimics the loop in handleModLogModalSubmit
 	splitContent := func(s string, size int) []string {

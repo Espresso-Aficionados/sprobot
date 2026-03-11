@@ -354,6 +354,10 @@ func (b *Bot) registerAllCommands() error {
 						Name:        "clear",
 						Description: "Disable mod log",
 					},
+					{
+						Name:        "audit",
+						Description: "Check for duplicate or split mod log threads",
+					},
 				},
 			},
 			discord.ApplicationCommandOptionSubCommandGroup{

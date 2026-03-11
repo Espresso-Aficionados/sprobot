@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -381,6 +382,8 @@ func (b *Bot) handleModLogConfig(e *events.ApplicationCommandInteractionCreate) 
 		b.handleModLogConfigShow(e, st)
 	case "clear":
 		b.handleModLogConfigClear(e, *guildID, st)
+	case "audit":
+		b.handleModLogAudit(e, *guildID, st)
 	}
 }
 
@@ -436,4 +439,139 @@ func (b *Bot) handleModLogConfigClear(e *events.ApplicationCommandInteractionCre
 	}
 
 	botutil.RespondEphemeral(e, "Mod log disabled.")
+}
+
+var threadUserIDRegex = regexp.MustCompile(`- (\d+)$`)
+
+func parseThreadUserID(name string) string {
+	m := threadUserIDRegex.FindStringSubmatch(name)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
+func (b *Bot) handleModLogAudit(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *modLogState) {
+	b.Log.Info("Modlog audit", "user_id", e.User().ID, "guild_id", guildID)
+
+	st.mu.Lock()
+	channelID := st.ChannelID
+	st.mu.Unlock()
+
+	if channelID == 0 {
+		botutil.RespondEphemeral(e, "Mod log channel is not configured.")
+		return
+	}
+
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer modlog audit response", "error", err)
+		return
+	}
+
+	ch, err := b.Client.Rest.GetChannel(channelID)
+	if err != nil {
+		b.Log.Error("Failed to get mod log channel for audit", "error", err)
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+			Content: "Failed to access the mod log channel.",
+			Flags:   discord.MessageFlagEphemeral,
+		})
+		return
+	}
+
+	forumCh, ok := ch.(discord.GuildForumChannel)
+	if !ok {
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+			Content: "Mod log channel is not a forum channel.",
+			Flags:   discord.MessageFlagEphemeral,
+		})
+		return
+	}
+
+	type threadInfo struct {
+		Name string
+		ID   snowflake.ID
+	}
+
+	// userID -> threads
+	byUser := map[string][]threadInfo{}
+	var unrecognized []threadInfo
+
+	collect := func(thread discord.GuildThread) {
+		uid := parseThreadUserID(thread.Name())
+		info := threadInfo{Name: thread.Name(), ID: thread.ID()}
+		if uid == "" {
+			unrecognized = append(unrecognized, info)
+		} else {
+			byUser[uid] = append(byUser[uid], info)
+		}
+	}
+
+	// Active threads
+	activeThreads, err := b.Client.Rest.GetActiveGuildThreads(forumCh.GuildID())
+	if err != nil {
+		b.Log.Error("Failed to get active threads for audit", "error", err)
+	}
+	if activeThreads != nil {
+		for _, thread := range activeThreads.Threads {
+			parentID := thread.ParentID()
+			if parentID == nil || *parentID != channelID {
+				continue
+			}
+			collect(thread)
+		}
+	}
+
+	// Archived threads (paginated)
+	before := time.Time{}
+	for {
+		archivedThreads, err := b.Client.Rest.GetPublicArchivedThreads(channelID, before, 0)
+		if err != nil {
+			b.Log.Error("Failed to get archived threads for audit", "error", err)
+			break
+		}
+		for _, thread := range archivedThreads.Threads {
+			collect(thread)
+		}
+		if !archivedThreads.HasMore || len(archivedThreads.Threads) == 0 {
+			break
+		}
+		before = archivedThreads.Threads[len(archivedThreads.Threads)-1].ThreadMetadata.ArchiveTimestamp
+	}
+
+	// Build report
+	totalThreads := len(unrecognized)
+	for _, threads := range byUser {
+		totalThreads += len(threads)
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "**Mod log audit** — %d threads scanned\n", totalThreads)
+
+	hasDuplicates := false
+	for uid, threads := range byUser {
+		if len(threads) <= 1 {
+			continue
+		}
+		hasDuplicates = true
+		fmt.Fprintf(&sb, "\n**User ID %s** — %d threads:\n", uid, len(threads))
+		for _, t := range threads {
+			fmt.Fprintf(&sb, "- `%s` (<#%d>)\n", t.Name, t.ID)
+		}
+	}
+
+	if len(unrecognized) > 0 {
+		sb.WriteString("\n**Unrecognized thread names** (no parseable user ID):\n")
+		for _, t := range unrecognized {
+			fmt.Fprintf(&sb, "- `%s` (<#%d>)\n", t.Name, t.ID)
+		}
+	}
+
+	if !hasDuplicates && len(unrecognized) == 0 {
+		sb.WriteString("\nNo issues found.")
+	}
+
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
+		Content: sb.String(),
+		Flags:   discord.MessageFlagEphemeral,
+	})
 }
