@@ -194,7 +194,19 @@ func (b *Bot) processTempRoleExpiries() {
 		st.Entries = remaining
 		st.mu.Unlock()
 
+		// Check config to skip orphaned timers for roles no longer in the whitelist
+		cfgSt := b.tempRoleConfig[guildID]
+
 		for _, entry := range expired {
+			if cfgSt != nil {
+				cfgSt.mu.Lock()
+				_, configured := cfgSt.find(entry.RoleID)
+				cfgSt.mu.Unlock()
+				if !configured {
+					b.Log.Info("Skipping orphaned temp role timer", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID)
+					continue
+				}
+			}
 			if err := b.Client.Rest.RemoveMemberRole(guildID, entry.UserID, entry.RoleID, rest.WithReason("Temp role expired")); err != nil {
 				b.Log.Error("Failed to remove expired temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "error", err)
 			} else {
@@ -578,7 +590,33 @@ func (b *Bot) handleTempRoleConfigRemove(e *events.ApplicationCommandInteraction
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Removed <@&%d> from temp roles.", role.ID))
+	// Clear active timers for this role
+	cleared := 0
+	if roleSt := b.tempRoles[guildID]; roleSt != nil {
+		roleSt.mu.Lock()
+		filtered := roleSt.Entries[:0]
+		for _, entry := range roleSt.Entries {
+			if entry.RoleID == role.ID {
+				cleared++
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		roleSt.Entries = filtered
+		roleSt.mu.Unlock()
+
+		if cleared > 0 {
+			if err := b.persistTempRoles(guildID, roleSt); err != nil {
+				b.Log.Error("Failed to persist temp roles after config remove", "guild_id", guildID, "error", err)
+			}
+		}
+	}
+
+	if cleared > 0 {
+		botutil.RespondEphemeral(e, fmt.Sprintf("Removed <@&%d> from temp roles and cleared %d active timer(s).", role.ID, cleared))
+	} else {
+		botutil.RespondEphemeral(e, fmt.Sprintf("Removed <@&%d> from temp roles.", role.ID))
+	}
 }
 
 func (b *Bot) handleTempRoleConfigList(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *tempRoleConfigState) {
