@@ -467,45 +467,6 @@ func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guild
 	return "", s3Path
 }
 
-func (c *Client) FetchTopPosters(ctx context.Context, guildID string) (map[string]map[string]int, error) {
-	s3Path := fmt.Sprintf("topposters/%s.json", guildID)
-	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: &c.bucket,
-		Key:    &s3Path,
-	})
-	if err != nil {
-		if isNotFound(err) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("fetching top posters from s3: %w", err)
-	}
-	defer out.Body.Close()
-
-	var data map[string]map[string]int
-	if err := json.NewDecoder(out.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("decoding top posters json: %w", err)
-	}
-	return data, nil
-}
-
-func (c *Client) SaveTopPosters(ctx context.Context, guildID string, data map[string]map[string]int) error {
-	s3Path := fmt.Sprintf("topposters/%s.json", guildID)
-	body, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("marshaling top posters: %w", err)
-	}
-
-	_, err = c.s3.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: &c.bucket,
-		Key:    &s3Path,
-		Body:   bytes.NewReader(body),
-	})
-	if err != nil {
-		return fmt.Errorf("saving top posters to s3: %w", err)
-	}
-	return nil
-}
-
 const maxGuildJSONSize = 100 * 1024 * 1024 // 100 MB
 
 // FetchGuildJSON fetches {prefix}/{guildID}.json from S3.

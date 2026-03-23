@@ -1,9 +1,6 @@
 package bot
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 
@@ -13,7 +10,6 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 type autoRoleState struct {
@@ -28,57 +24,11 @@ func defaultAutoRoleConfig() map[snowflake.ID]snowflake.ID {
 	}
 }
 
-func (b *Bot) loadAutoRole() {
-	ctx := context.Background()
-	defaults := defaultAutoRoleConfig()
-	for _, guildID := range b.GuildIDs() {
-		st := &autoRoleState{}
-
-		data, err := b.S3.FetchGuildJSON(ctx, "autorole", fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			if roleID, ok := defaults[guildID]; ok {
-				st.RoleID = roleID
-			}
-			b.Log.Info("No existing autorole config, using defaults", "guild_id", guildID)
-		} else if err != nil {
-			b.Log.Error("Failed to load autorole config", "guild_id", guildID, "error", err)
-			if roleID, ok := defaults[guildID]; ok {
-				st.RoleID = roleID
-			}
-		} else {
-			if err := json.Unmarshal(data, st); err != nil {
-				b.Log.Error("Failed to decode autorole config", "guild_id", guildID, "error", err)
-			}
-		}
-
-		b.autoRole[guildID] = st
-		b.Log.Info("Loaded autorole config", "guild_id", guildID, "role_id", st.RoleID)
-	}
-}
-
-func (b *Bot) persistAutoRole(guildID snowflake.ID, st *autoRoleState) error {
-	st.mu.Lock()
-	data, err := json.Marshal(st)
-	st.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	return b.S3.SaveGuildJSON(context.Background(), "autorole", fmt.Sprintf("%d", guildID), data)
-}
-
-func (b *Bot) saveAutoRole() {
-	for guildID, st := range b.autoRole {
-		if err := b.persistAutoRole(guildID, st); err != nil {
-			b.Log.Error("Failed to save autorole config", "guild_id", guildID, "error", err)
-		}
-	}
-}
-
 func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
 	b.logMemberJoin(e.GuildID, e.Member)
 	b.sendWelcomeDM(e.GuildID, e.Member.User.ID)
 
-	st := b.autoRole[e.GuildID]
+	st := b.autoRole.get(e.GuildID)
 	if st == nil {
 		return
 	}
@@ -94,7 +44,7 @@ func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
 }
 
 func (b *Bot) ensureAutoRole(guildID snowflake.ID, msg discord.Message) {
-	st := b.autoRole[guildID]
+	st := b.autoRole.get(guildID)
 	if st == nil {
 		return
 	}
@@ -130,10 +80,10 @@ func (b *Bot) handleAutoRoleConfig(e *events.ApplicationCommandInteractionCreate
 		return
 	}
 
-	st := b.autoRole[*guildID]
+	st := b.autoRole.get(*guildID)
 	if st == nil {
 		st = &autoRoleState{}
-		b.autoRole[*guildID] = st
+		b.autoRole.set(*guildID, st)
 	}
 
 	subCmd := data.SubCommandName
@@ -166,7 +116,7 @@ func (b *Bot) handleAutoRoleConfigSet(e *events.ApplicationCommandInteractionCre
 	st.RoleID = role.ID
 	st.mu.Unlock()
 
-	if err := b.persistAutoRole(guildID, st); err != nil {
+	if err := b.autoRole.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist autorole config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return
@@ -196,7 +146,7 @@ func (b *Bot) handleAutoRoleConfigClear(e *events.ApplicationCommandInteractionC
 	st.RoleID = 0
 	st.mu.Unlock()
 
-	if err := b.persistAutoRole(guildID, st); err != nil {
+	if err := b.autoRole.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist autorole config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return

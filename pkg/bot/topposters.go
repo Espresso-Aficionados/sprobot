@@ -1,9 +1,7 @@
 package bot
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,7 +13,6 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 type topPostersConfigState struct {
@@ -30,56 +27,31 @@ func defaultTopPostersConfig() map[snowflake.ID]snowflake.ID {
 	}
 }
 
-func (b *Bot) loadTopPostersConfig() {
-	ctx := context.Background()
-	defaults := defaultTopPostersConfig()
-	for _, guildID := range b.GuildIDs() {
-		st := &topPostersConfigState{}
-
-		data, err := b.S3.FetchGuildJSON(ctx, "toppostersconfig", fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			if roleID, ok := defaults[guildID]; ok {
-				st.TargetRoleID = roleID
-			}
-			b.Log.Info("No existing topposters config, using defaults", "guild_id", guildID)
-		} else if err != nil {
-			b.Log.Error("Failed to load topposters config", "guild_id", guildID, "error", err)
-			if roleID, ok := defaults[guildID]; ok {
-				st.TargetRoleID = roleID
-			}
-		} else {
-			if err := json.Unmarshal(data, st); err != nil {
-				b.Log.Error("Failed to decode topposters config", "guild_id", guildID, "error", err)
-			}
-		}
-
-		b.topPostersConfig[guildID] = st
-		b.Log.Info("Loaded topposters config", "guild_id", guildID, "target_role_id", st.TargetRoleID)
-	}
-}
-
-func (b *Bot) persistTopPostersConfig(guildID snowflake.ID, st *topPostersConfigState) error {
-	st.mu.Lock()
-	data, err := json.Marshal(st)
-	st.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	return b.S3.SaveGuildJSON(context.Background(), "toppostersconfig", fmt.Sprintf("%d", guildID), data)
-}
-
-func (b *Bot) saveTopPostersConfig() {
-	for guildID, st := range b.topPostersConfig {
-		if err := b.persistTopPostersConfig(guildID, st); err != nil {
-			b.Log.Error("Failed to save topposters config", "guild_id", guildID, "error", err)
-		}
-	}
-}
-
 type guildPostCounts struct {
 	mu        sync.Mutex
-	Counts    map[string]map[string]int // date -> userID -> count
-	Usernames map[string]string         // userID -> last known username
+	Counts    map[string]map[string]int `json:"counts"`    // date -> userID -> count
+	Usernames map[string]string         `json:"usernames"` // userID -> last known username
+}
+
+// UnmarshalJSON handles both the new {"counts":…,"usernames":…} format and the
+// legacy bare map[string]map[string]int format (counts only, no wrapper).
+func (g *guildPostCounts) UnmarshalJSON(data []byte) error {
+	// Try new format first.
+	type alias guildPostCounts
+	var a alias
+	if err := json.Unmarshal(data, &a); err == nil && a.Counts != nil {
+		g.Counts = a.Counts
+		g.Usernames = a.Usernames
+		return nil
+	}
+
+	// Fall back to legacy bare counts map.
+	var counts map[string]map[string]int
+	if err := json.Unmarshal(data, &counts); err != nil {
+		return err
+	}
+	g.Counts = counts
+	return nil
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {
@@ -95,13 +67,13 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	b.checkPosterRole(guildID, e.ChannelID, e.Message)
 	b.checkTempRolesOnMessage(guildID, e.Message)
 
-	gc := b.topPosters[guildID]
+	gc := b.topPosters.get(guildID)
 	if gc == nil {
 		return
 	}
 
 	// Filter out users with the target role at recording time
-	if cfgSt := b.topPostersConfig[guildID]; cfgSt != nil && e.Message.Member != nil {
+	if cfgSt := b.topPostersConfig.get(guildID); cfgSt != nil && e.Message.Member != nil {
 		cfgSt.mu.Lock()
 		targetRoleID := cfgSt.TargetRoleID
 		cfgSt.mu.Unlock()
@@ -130,69 +102,14 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	gc.Usernames[userID] = e.Message.Author.Username
 }
 
-func (b *Bot) loadTopPosters() {
-	ctx := context.Background()
-	for _, guildID := range b.GuildIDs() {
-		gc := &guildPostCounts{
-			Counts:    make(map[string]map[string]int),
-			Usernames: make(map[string]string),
-		}
-
-		data, err := b.S3.FetchTopPosters(ctx, fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing top posters data, starting fresh", "guild_id", guildID)
-		} else if err != nil {
-			b.Log.Error("Failed to load top posters data", "guild_id", guildID, "error", err)
-		} else {
-			gc.Counts = data
-		}
-
-		// Load usernames from separate key
-		unData, err := b.S3.FetchGuildJSON(ctx, "topposters_usernames", fmt.Sprintf("%d", guildID))
-		if err == nil {
-			_ = json.Unmarshal(unData, &gc.Usernames)
-		}
-
-		b.topPosters[guildID] = gc
-		b.Log.Info("Loaded top posters", "guild_id", guildID, "days", len(gc.Counts))
-	}
-}
-
 func (b *Bot) saveTopPosters() {
-	ctx := context.Background()
 	cutoff := time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02")
-
-	for guildID, gc := range b.topPosters {
+	b.topPosters.each(func(_ snowflake.ID, gc *guildPostCounts) {
 		gc.mu.Lock()
 		pruneOldDays(gc.Counts, cutoff)
-		// Copy data while holding lock
-		data := make(map[string]map[string]int, len(gc.Counts))
-		for date, users := range gc.Counts {
-			cp := make(map[string]int, len(users))
-			for u, c := range users {
-				cp[u] = c
-			}
-			data[date] = cp
-		}
-		usernames := make(map[string]string, len(gc.Usernames))
-		for u, name := range gc.Usernames {
-			usernames[u] = name
-		}
 		gc.mu.Unlock()
-
-		if err := b.S3.SaveTopPosters(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
-			b.Log.Error("Failed to save top posters", "guild_id", guildID, "error", err)
-		} else {
-			b.Log.Info("Saved top posters", "guild_id", guildID, "days", len(data))
-		}
-
-		// Save usernames
-		if unData, err := json.Marshal(usernames); err == nil {
-			if err := b.S3.SaveGuildJSON(ctx, "topposters_usernames", fmt.Sprintf("%d", guildID), unData); err != nil {
-				b.Log.Error("Failed to save top poster usernames", "guild_id", guildID, "error", err)
-			}
-		}
-	}
+	})
+	b.topPosters.save()
 }
 
 func pruneOldDays(counts map[string]map[string]int, cutoff string) {
@@ -242,7 +159,7 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	gc := b.topPosters[guildID]
+	gc := b.topPosters.get(guildID)
 	if gc == nil {
 		botutil.RespondEphemeral(e, "No data available yet.")
 		return
@@ -320,10 +237,10 @@ func (b *Bot) handleTopPostersConfigCmd(e *events.ApplicationCommandInteractionC
 		return
 	}
 
-	st := b.topPostersConfig[*guildID]
+	st := b.topPostersConfig.get(*guildID)
 	if st == nil {
 		st = &topPostersConfigState{}
-		b.topPostersConfig[*guildID] = st
+		b.topPostersConfig.set(*guildID, st)
 	}
 
 	subCmd := data.SubCommandName
@@ -356,7 +273,7 @@ func (b *Bot) handleTopPostersConfigSet(e *events.ApplicationCommandInteractionC
 	st.TargetRoleID = role.ID
 	st.mu.Unlock()
 
-	if err := b.persistTopPostersConfig(guildID, st); err != nil {
+	if err := b.topPostersConfig.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist topposters config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return
@@ -386,7 +303,7 @@ func (b *Bot) handleTopPostersConfigClear(e *events.ApplicationCommandInteractio
 	st.TargetRoleID = 0
 	st.mu.Unlock()
 
-	if err := b.persistTopPostersConfig(guildID, st); err != nil {
+	if err := b.topPostersConfig.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist topposters config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return

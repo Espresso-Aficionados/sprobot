@@ -1,9 +1,6 @@
 package bot
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -15,7 +12,6 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 type starboardSettings struct {
@@ -132,54 +128,13 @@ func parseEmojiInput(input string) string {
 
 // --- Load / Save / Persist ---
 
-func (b *Bot) loadStarboard() {
-	ctx := context.Background()
-	for _, guildID := range b.GuildIDs() {
-		st := &starboardState{
-			Entries: make(map[snowflake.ID]starboardEntry),
-		}
-
-		data, err := b.S3.FetchGuildJSON(ctx, "starboard", fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing starboard data, starting fresh", "guild_id", guildID)
-		} else if err != nil {
-			b.Log.Error("Failed to load starboard data", "guild_id", guildID, "error", err)
-		} else {
-			if err := json.Unmarshal(data, st); err != nil {
-				b.Log.Error("Failed to decode starboard data", "guild_id", guildID, "error", err)
-			}
-			if st.Entries == nil {
-				st.Entries = make(map[snowflake.ID]starboardEntry)
-			}
-		}
-
-		b.starboard[guildID] = st
-		b.Log.Info("Loaded starboard state", "guild_id", guildID, "entries", len(st.Entries))
-	}
-}
-
-func (b *Bot) persistStarboard(guildID snowflake.ID, st *starboardState) error {
-	st.mu.Lock()
-	data, err := json.Marshal(st)
-	st.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	return b.S3.SaveGuildJSON(context.Background(), "starboard", fmt.Sprintf("%d", guildID), data)
-}
-
 func (b *Bot) saveStarboard() {
-	for guildID, st := range b.starboard {
+	b.starboard.each(func(_ snowflake.ID, st *starboardState) {
 		st.mu.Lock()
 		pruneUnpostedEntries(st, time.Now())
 		st.mu.Unlock()
-
-		if err := b.persistStarboard(guildID, st); err != nil {
-			b.Log.Error("Failed to save starboard data", "guild_id", guildID, "error", err)
-		} else {
-			b.Log.Info("Saved starboard state", "guild_id", guildID)
-		}
-	}
+	})
+	b.starboard.save()
 }
 
 // pruneUnpostedEntries removes unposted entries older than 30 days. Must be called with mu held.
@@ -199,7 +154,7 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 		return
 	}
 
-	st := b.starboard[e.GuildID]
+	st := b.starboard.get(e.GuildID)
 	if st == nil {
 		return
 	}
@@ -257,7 +212,7 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 }
 
 func (b *Bot) onReactionRemove(e *events.GuildMessageReactionRemove) {
-	st := b.starboard[e.GuildID]
+	st := b.starboard.get(e.GuildID)
 	if st == nil {
 		return
 	}
@@ -291,7 +246,7 @@ func (b *Bot) onReactionRemove(e *events.GuildMessageReactionRemove) {
 }
 
 func (b *Bot) onReactionRemoveAll(e *events.GuildMessageReactionRemoveAll) {
-	st := b.starboard[e.GuildID]
+	st := b.starboard.get(e.GuildID)
 	if st == nil {
 		return
 	}
@@ -317,7 +272,7 @@ func (b *Bot) onReactionRemoveAll(e *events.GuildMessageReactionRemoveAll) {
 }
 
 func (b *Bot) onReactionRemoveEmoji(e *events.GuildMessageReactionRemoveEmoji) {
-	st := b.starboard[e.GuildID]
+	st := b.starboard.get(e.GuildID)
 	if st == nil {
 		return
 	}
@@ -438,7 +393,7 @@ func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState
 	st.Entries[msgID] = entry
 	st.mu.Unlock()
 
-	if err := b.persistStarboard(guildID, st); err != nil {
+	if err := b.starboard.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist starboard after post", "guild_id", guildID, "error", err)
 	}
 }
@@ -498,7 +453,7 @@ func (b *Bot) handleStarboardConfig(e *events.ApplicationCommandInteractionCreat
 		return
 	}
 
-	st := b.starboard[*guildID]
+	st := b.starboard.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "Starboard is not configured for this server.")
 		return
@@ -545,7 +500,7 @@ func (b *Bot) handleSBConfigSet(e *events.ApplicationCommandInteractionCreate, g
 	}
 	st.mu.Unlock()
 
-	if err := b.persistStarboard(guildID, st); err != nil {
+	if err := b.starboard.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist starboard config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return
@@ -593,7 +548,7 @@ func (b *Bot) handleSBConfigDisable(e *events.ApplicationCommandInteractionCreat
 	st.Settings.OutputChannelID = 0
 	st.mu.Unlock()
 
-	if err := b.persistStarboard(guildID, st); err != nil {
+	if err := b.starboard.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist starboard config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return
@@ -613,7 +568,7 @@ func (b *Bot) handleStarboardBlacklist(e *events.ApplicationCommandInteractionCr
 		return
 	}
 
-	st := b.starboard[*guildID]
+	st := b.starboard.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "Starboard is not configured for this server.")
 		return
@@ -624,7 +579,7 @@ func (b *Bot) handleStarboardBlacklist(e *events.ApplicationCommandInteractionCr
 		return
 	}
 
-	persist := func() error { return b.persistStarboard(*guildID, st) }
+	persist := func() error { return b.starboard.persist(*guildID) }
 	switch *subCmd {
 	case "add":
 		b.handleBlacklistAdd(e, *guildID, st, persist, "Starboard")

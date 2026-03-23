@@ -1,17 +1,12 @@
 package bot
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
-
-	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 type ticketConfig struct {
@@ -92,53 +87,6 @@ func getTicketConfig() map[snowflake.ID]ticketConfig {
 type ticketState struct {
 	mu      sync.Mutex
 	Counter int `json:"counter"`
-}
-
-func (b *Bot) loadTickets() {
-	ctx := context.Background()
-	for _, guildID := range b.GuildIDs() {
-		if _, ok := b.ticketConfigs[guildID]; !ok {
-			continue
-		}
-		st := &ticketState{Counter: 1}
-
-		data, err := b.S3.FetchGuildJSON(ctx, "tickets", fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing ticket data, starting fresh", "guild_id", guildID)
-		} else if err != nil {
-			b.Log.Error("Failed to load ticket data", "guild_id", guildID, "error", err)
-		} else {
-			if err := json.Unmarshal(data, st); err != nil {
-				b.Log.Error("Failed to decode ticket data", "guild_id", guildID, "error", err)
-			}
-			if st.Counter < 1 {
-				st.Counter = 1
-			}
-		}
-
-		b.tickets[guildID] = st
-		b.Log.Info("Loaded ticket state", "guild_id", guildID, "counter", st.Counter)
-	}
-}
-
-func (b *Bot) saveTickets() {
-	ctx := context.Background()
-	for guildID, st := range b.tickets {
-		st.mu.Lock()
-		data, err := json.Marshal(st)
-		st.mu.Unlock()
-
-		if err != nil {
-			b.Log.Error("Failed to marshal ticket data", "guild_id", guildID, "error", err)
-			continue
-		}
-
-		if err := b.S3.SaveGuildJSON(ctx, "tickets", fmt.Sprintf("%d", guildID), data); err != nil {
-			b.Log.Error("Failed to save ticket data", "guild_id", guildID, "error", err)
-		} else {
-			b.Log.Info("Saved ticket state", "guild_id", guildID)
-		}
-	}
 }
 
 func (b *Bot) ensureTicketPanels() {
@@ -273,7 +221,7 @@ func (b *Bot) handleTicketOpen(e *events.ComponentInteractionCreate) {
 		return
 	}
 
-	st := b.tickets[*guildID]
+	st := b.tickets.get(*guildID)
 	if st == nil {
 		return
 	}
@@ -281,14 +229,10 @@ func (b *Bot) handleTicketOpen(e *events.ComponentInteractionCreate) {
 	st.mu.Lock()
 	ticketNum := st.Counter + cfg.CounterOffset
 	st.Counter++
-	data, err := json.Marshal(st)
 	st.mu.Unlock()
-	if err != nil {
-		b.Log.Error("Failed to marshal ticket data", "guild_id", *guildID, "error", err)
-	} else {
-		if err := b.S3.SaveGuildJSON(context.Background(), "tickets", fmt.Sprintf("%d", *guildID), data); err != nil {
-			b.Log.Error("Failed to save ticket data", "guild_id", *guildID, "error", err)
-		}
+
+	if err := b.tickets.persist(*guildID); err != nil {
+		b.Log.Error("Failed to save ticket data", "guild_id", *guildID, "error", err)
 	}
 
 	threadName := fmt.Sprintf("ticket-%d", ticketNum)

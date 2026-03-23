@@ -23,11 +23,11 @@ type Bot struct {
 	stop                 chan struct{}
 	searchClient         *http.Client
 	skipList             map[snowflake.ID]string // goroutine-confined to forumReminderLoop
-	topPosters           map[snowflake.ID]*guildPostCounts
-	posterRole           map[snowflake.ID]*posterRoleState
-	tickets              map[snowflake.ID]*ticketState
-	shortcuts            map[snowflake.ID]*shortcutState
-	welcome              map[snowflake.ID]*welcomeState
+	topPosters           *guildStateStore[guildPostCounts]
+	posterRole           *guildStateStore[posterRoleState]
+	tickets              *guildStateStore[ticketState]
+	shortcuts            *guildStateStore[shortcutState]
+	welcome              *guildStateStore[welcomeState]
 	welcomeSentMu        sync.Mutex
 	welcomeSent          map[snowflake.ID]time.Time
 	msgCache             *cappedGroupedCache[discord.Message]
@@ -43,17 +43,17 @@ type Bot struct {
 	stageInstanceCache   *cappedGroupedCache[discord.StageInstance]
 	scheduledEventCache  *cappedGroupedCache[discord.GuildScheduledEvent]
 	soundboardSoundCache *cappedGroupedCache[discord.SoundboardSound]
-	starboard            map[snowflake.ID]*starboardState
-	topPostersConfig     map[snowflake.ID]*topPostersConfigState
-	renameLogs           map[snowflake.ID]*renameLogState
+	starboard            *guildStateStore[starboardState]
+	topPostersConfig     *guildStateStore[topPostersConfigState]
+	renameLogs           *guildStateStore[renameLogState]
 	templates            map[snowflake.ID][]sprobot.Template
 	selfroles            map[snowflake.ID][]selfroleConfig
 	ticketConfigs        map[snowflake.ID]ticketConfig
-	autoRole             map[snowflake.ID]*autoRoleState
-	eventLog             map[snowflake.ID]*eventLogState
-	modLog               map[snowflake.ID]*modLogState
-	tempRoleConfig       map[snowflake.ID]*tempRoleConfigState
-	tempRoles            map[snowflake.ID]*tempRoleState
+	autoRole             *guildStateStore[autoRoleState]
+	eventLog             *guildStateStore[eventLogState]
+	modLog               *guildStateStore[modLogState]
+	tempRoleConfig       *guildStateStore[tempRoleConfigState]
+	tempRoles            *guildStateStore[tempRoleState]
 	threadHelpConfig     map[snowflake.ID]threadHelpInfo
 }
 
@@ -78,21 +78,59 @@ func New(token string) (*Bot, error) {
 	soundboardSoundCache := newCappedGroupedCache[discord.SoundboardSound](1000)
 
 	b := &Bot{
-		BaseBot:              base,
-		stop:                 make(chan struct{}),
-		searchClient:         &http.Client{Timeout: 30 * time.Second},
-		skipList:             make(map[snowflake.ID]string),
-		topPosters:           make(map[snowflake.ID]*guildPostCounts),
-		posterRole:           make(map[snowflake.ID]*posterRoleState),
-		tickets:              make(map[snowflake.ID]*ticketState),
-		shortcuts:            make(map[snowflake.ID]*shortcutState),
-		welcome:              make(map[snowflake.ID]*welcomeState),
-		welcomeSent:          make(map[snowflake.ID]time.Time),
-		starboard:            make(map[snowflake.ID]*starboardState),
-		renameLogs:           make(map[snowflake.ID]*renameLogState),
-		templates:            make(map[snowflake.ID][]sprobot.Template),
-		selfroles:            make(map[snowflake.ID][]selfroleConfig),
-		ticketConfigs:        make(map[snowflake.ID]ticketConfig),
+		BaseBot:      base,
+		stop:         make(chan struct{}),
+		searchClient: &http.Client{Timeout: 30 * time.Second},
+		skipList:     make(map[snowflake.ID]string),
+		topPosters: newGuildStateStore(base.S3, base.Log, "topposters",
+			func() *guildPostCounts {
+				return &guildPostCounts{Counts: make(map[string]map[string]int), Usernames: make(map[string]string)}
+			},
+			func(gc *guildPostCounts) *sync.Mutex { return &gc.mu }),
+		posterRole: newGuildStateStore(base.S3, base.Log, "posterroles",
+			func() *posterRoleState {
+				return &posterRoleState{Counts: make(map[string]int), Fetched: make(map[string]bool)}
+			},
+			func(st *posterRoleState) *sync.Mutex { return &st.mu }),
+		tickets: newGuildStateStore(base.S3, base.Log, "tickets",
+			func() *ticketState { return &ticketState{Counter: 1} },
+			func(st *ticketState) *sync.Mutex { return &st.mu }),
+		shortcuts: newGuildStateStore(base.S3, base.Log, "shortcuts",
+			func() *shortcutState {
+				return &shortcutState{Shortcuts: make(map[string]shortcutEntry), indices: make(map[string]int)}
+			},
+			func(st *shortcutState) *sync.Mutex { return &st.mu }),
+		welcome: newGuildStateStore(base.S3, base.Log, "welcome",
+			func() *welcomeState { return &welcomeState{} },
+			func(st *welcomeState) *sync.Mutex { return &st.mu }),
+		welcomeSent: make(map[snowflake.ID]time.Time),
+		starboard: newGuildStateStore(base.S3, base.Log, "starboard",
+			func() *starboardState { return &starboardState{Entries: make(map[snowflake.ID]starboardEntry)} },
+			func(st *starboardState) *sync.Mutex { return &st.mu }),
+		renameLogs: newGuildStateStore(base.S3, base.Log, "renamelogs",
+			func() *renameLogState { return &renameLogState{} },
+			func(st *renameLogState) *sync.Mutex { return &st.mu }),
+		templates:     make(map[snowflake.ID][]sprobot.Template),
+		selfroles:     make(map[snowflake.ID][]selfroleConfig),
+		ticketConfigs: make(map[snowflake.ID]ticketConfig),
+		topPostersConfig: newGuildStateStore(base.S3, base.Log, "toppostersconfig",
+			func() *topPostersConfigState { return &topPostersConfigState{} },
+			func(st *topPostersConfigState) *sync.Mutex { return &st.mu }),
+		autoRole: newGuildStateStore(base.S3, base.Log, "autorole",
+			func() *autoRoleState { return &autoRoleState{} },
+			func(st *autoRoleState) *sync.Mutex { return &st.mu }),
+		eventLog: newGuildStateStore(base.S3, base.Log, "eventlog",
+			func() *eventLogState { return &eventLogState{} },
+			func(st *eventLogState) *sync.Mutex { return &st.mu }),
+		modLog: newGuildStateStore(base.S3, base.Log, "modlog",
+			func() *modLogState { return &modLogState{} },
+			func(st *modLogState) *sync.Mutex { return &st.mu }),
+		tempRoleConfig: newGuildStateStore(base.S3, base.Log, "temproleconfig",
+			func() *tempRoleConfigState { return &tempRoleConfigState{} },
+			func(st *tempRoleConfigState) *sync.Mutex { return &st.mu }),
+		tempRoles: newGuildStateStore(base.S3, base.Log, "temproles",
+			func() *tempRoleState { return &tempRoleState{} },
+			func(st *tempRoleState) *sync.Mutex { return &st.mu }),
 		msgCache:             msgCache,
 		memberCache:          memberCache,
 		guildCache:           guildCache,
@@ -106,13 +144,67 @@ func New(token string) (*Bot, error) {
 		stageInstanceCache:   stageInstanceCache,
 		scheduledEventCache:  scheduledEventCache,
 		soundboardSoundCache: soundboardSoundCache,
-		topPostersConfig:     make(map[snowflake.ID]*topPostersConfigState),
-		autoRole:             make(map[snowflake.ID]*autoRoleState),
-		eventLog:             make(map[snowflake.ID]*eventLogState),
-		modLog:               make(map[snowflake.ID]*modLogState),
-		tempRoleConfig:       make(map[snowflake.ID]*tempRoleConfigState),
-		tempRoles:            make(map[snowflake.ID]*tempRoleState),
 		threadHelpConfig:     getThreadHelpConfig(),
+	}
+
+	// Set up default-fallback hooks for features with hardcoded defaults.
+	defaults := defaultEventLogConfig()
+	b.eventLog.onMissing = func(guildID snowflake.ID, st *eventLogState) {
+		if chID, ok := defaults[guildID]; ok {
+			st.ChannelID = chID
+		}
+	}
+	modDefaults := defaultModLogConfig()
+	b.modLog.onMissing = func(guildID snowflake.ID, st *modLogState) {
+		if chID, ok := modDefaults[guildID]; ok {
+			st.ChannelID = chID
+		}
+	}
+	autoRoleDefaults := defaultAutoRoleConfig()
+	b.autoRole.onMissing = func(guildID snowflake.ID, st *autoRoleState) {
+		if roleID, ok := autoRoleDefaults[guildID]; ok {
+			st.RoleID = roleID
+		}
+	}
+	tpDefaults := defaultTopPostersConfig()
+	b.topPostersConfig.onMissing = func(guildID snowflake.ID, st *topPostersConfigState) {
+		if roleID, ok := tpDefaults[guildID]; ok {
+			st.TargetRoleID = roleID
+		}
+	}
+
+	// Set up post-load hooks for features that need nil-map initialization.
+	b.shortcuts.postLoad = func(st *shortcutState) {
+		if st.Shortcuts == nil {
+			st.Shortcuts = make(map[string]shortcutEntry)
+		}
+		st.indices = make(map[string]int)
+	}
+	b.posterRole.postLoad = func(st *posterRoleState) {
+		if st.Counts == nil {
+			st.Counts = make(map[string]int)
+		}
+		if st.Fetched == nil {
+			st.Fetched = make(map[string]bool)
+		}
+	}
+	b.starboard.postLoad = func(st *starboardState) {
+		if st.Entries == nil {
+			st.Entries = make(map[snowflake.ID]starboardEntry)
+		}
+	}
+	b.topPosters.postLoad = func(gc *guildPostCounts) {
+		if gc.Counts == nil {
+			gc.Counts = make(map[string]map[string]int)
+		}
+		if gc.Usernames == nil {
+			gc.Usernames = make(map[string]string)
+		}
+	}
+	b.tickets.postLoad = func(st *ticketState) {
+		if st.Counter < 1 {
+			st.Counter = 1
+		}
 	}
 
 	b.loadMessageCache()
@@ -219,22 +311,23 @@ func (b *Bot) Run() error {
 
 	b.WaitForGuilds(30 * time.Second)
 
+	guildIDs := b.GuildIDs()
 	b.loadTemplates()
 	b.loadSelfroles()
 	b.loadTicketConfigs()
-	b.loadAutoRole()
-	b.loadEventLog()
-	b.loadModLog()
-	b.loadTopPostersConfig()
-	b.loadTopPosters()
-	b.loadPosterRole()
-	b.loadTickets()
-	b.loadShortcuts()
-	b.loadWelcome()
-	b.loadStarboard()
-	b.loadRenameLogs()
-	b.loadTempRoleConfig()
-	b.loadTempRoles()
+	b.autoRole.load(guildIDs)
+	b.eventLog.load(guildIDs)
+	b.modLog.load(guildIDs)
+	b.topPostersConfig.load(guildIDs)
+	b.topPosters.load(guildIDs)
+	b.posterRole.load(guildIDs)
+	b.tickets.load(guildIDs)
+	b.shortcuts.load(guildIDs)
+	b.welcome.load(guildIDs)
+	b.starboard.load(guildIDs)
+	b.renameLogs.load(guildIDs)
+	b.tempRoleConfig.load(guildIDs)
+	b.tempRoles.load(guildIDs)
 	b.ensureTicketPanels()
 	b.ensureSelfrolePanels()
 	if err := b.registerAllCommands(); err != nil {
@@ -243,10 +336,10 @@ func (b *Bot) Run() error {
 	go b.forumReminderLoop()
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTopPosters)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.savePosterRole)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveShortcuts)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTickets)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveWelcome)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.posterRole.save)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.shortcuts.save)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.tickets.save)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.welcome.save)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMessageCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveGuildCache)
@@ -261,25 +354,25 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveScheduledEventCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveSoundboardSoundCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveStarboard)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveRenameLogs)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTempRoles)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.renameLogs.save)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.tempRoles.save)
 	go botutil.RunSaveLoop(&b.Ready, 1*time.Minute, b.stop, b.processTempRoleExpiries)
 
 	botutil.WaitForShutdown(b.Log, "Bot")
 	close(b.stop)
-	b.saveAutoRole()
-	b.saveEventLog()
-	b.saveModLog()
-	b.saveTopPostersConfig()
+	b.autoRole.save()
+	b.eventLog.save()
+	b.modLog.save()
+	b.topPostersConfig.save()
 	b.saveTopPosters()
-	b.savePosterRole()
-	b.saveTickets()
-	b.saveShortcuts()
-	b.saveWelcome()
+	b.posterRole.save()
+	b.tickets.save()
+	b.shortcuts.save()
+	b.welcome.save()
 	b.saveStarboard()
-	b.saveRenameLogs()
-	b.saveTempRoleConfig()
-	b.saveTempRoles()
+	b.renameLogs.save()
+	b.tempRoleConfig.save()
+	b.tempRoles.save()
 	b.saveMessageCache()
 	b.saveMemberCache()
 	b.saveGuildCache()

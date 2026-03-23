@@ -2,8 +2,6 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -14,7 +12,6 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 const shortcutResponseSlots = 5
@@ -28,55 +25,6 @@ type shortcutState struct {
 	mu        sync.Mutex
 	Shortcuts map[string]shortcutEntry `json:"shortcuts"`
 	indices   map[string]int
-}
-
-func (b *Bot) loadShortcuts() {
-	ctx := context.Background()
-	for _, guildID := range b.GuildIDs() {
-		st := &shortcutState{
-			Shortcuts: make(map[string]shortcutEntry),
-			indices:   make(map[string]int),
-		}
-
-		data, err := b.S3.FetchGuildJSON(ctx, "shortcuts", fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing shortcut data, starting fresh", "guild_id", guildID)
-		} else if err != nil {
-			b.Log.Error("Failed to load shortcut data", "guild_id", guildID, "error", err)
-		} else {
-			if err := json.Unmarshal(data, st); err != nil {
-				b.Log.Error("Failed to decode shortcut data", "guild_id", guildID, "error", err)
-			}
-			if st.Shortcuts == nil {
-				st.Shortcuts = make(map[string]shortcutEntry)
-			}
-			st.indices = make(map[string]int)
-		}
-
-		b.shortcuts[guildID] = st
-		b.Log.Info("Loaded shortcut state", "guild_id", guildID, "count", len(st.Shortcuts))
-	}
-}
-
-// persistShortcuts marshals the shortcut state under the lock and saves to S3.
-func (b *Bot) persistShortcuts(guildID snowflake.ID, st *shortcutState) error {
-	st.mu.Lock()
-	data, err := json.Marshal(st)
-	st.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	return b.S3.SaveGuildJSON(context.Background(), "shortcuts", fmt.Sprintf("%d", guildID), data)
-}
-
-func (b *Bot) saveShortcuts() {
-	for guildID, st := range b.shortcuts {
-		if err := b.persistShortcuts(guildID, st); err != nil {
-			b.Log.Error("Failed to save shortcut data", "guild_id", guildID, "error", err)
-		} else {
-			b.Log.Info("Saved shortcut state", "guild_id", guildID)
-		}
-	}
 }
 
 func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
@@ -96,7 +44,7 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	st := b.shortcuts[*guildID]
+	st := b.shortcuts.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "No shortcuts configured.")
 		return
@@ -178,7 +126,7 @@ func (b *Bot) handleShortcutAutocomplete(e *events.AutocompleteInteractionCreate
 
 	current := strings.ToLower(e.Data.String("shortcut"))
 
-	st := b.shortcuts[*guildID]
+	st := b.shortcuts.get(*guildID)
 	if st == nil {
 		e.AutocompleteResult(nil)
 		return
@@ -244,7 +192,7 @@ func (b *Bot) handleShortcutConfigSet(e *events.ApplicationCommandInteractionCre
 
 	// Pre-fill with existing responses if the shortcut already exists
 	var prefills [shortcutResponseSlots]string
-	st := b.shortcuts[*guildID]
+	st := b.shortcuts.get(*guildID)
 	if st != nil {
 		st.mu.Lock()
 		if entry, ok := st.Shortcuts[name]; ok {
@@ -318,7 +266,7 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 		}
 	}
 
-	st := b.shortcuts[*guildID]
+	st := b.shortcuts.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "Something went wrong.")
 		return
@@ -334,7 +282,7 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 	st.indices[name] = 0
 	st.mu.Unlock()
 
-	if err := b.persistShortcuts(*guildID, st); err != nil {
+	if err := b.shortcuts.persist(*guildID); err != nil {
 		b.Log.Error("Failed to save shortcut data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save shortcut.")
 		return
@@ -364,7 +312,7 @@ func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteraction
 
 	b.Log.Info("Shortcut config remove", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
 
-	st := b.shortcuts[*guildID]
+	st := b.shortcuts.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "No shortcuts configured.")
 		return
@@ -380,7 +328,7 @@ func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteraction
 	delete(st.indices, name)
 	st.mu.Unlock()
 
-	if err := b.persistShortcuts(*guildID, st); err != nil {
+	if err := b.shortcuts.persist(*guildID); err != nil {
 		b.Log.Error("Failed to save shortcut data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save shortcut.")
 		return
@@ -397,7 +345,7 @@ func (b *Bot) handleShortcutConfigList(e *events.ApplicationCommandInteractionCr
 
 	b.Log.Info("Shortcut config list", "user_id", e.User().ID, "guild_id", *guildID)
 
-	st := b.shortcuts[*guildID]
+	st := b.shortcuts.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "No shortcuts configured.")
 		return

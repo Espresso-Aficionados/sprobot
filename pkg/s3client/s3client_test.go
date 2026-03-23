@@ -771,47 +771,6 @@ func TestIsNotFound(t *testing.T) {
 	}
 }
 
-func TestFetchTopPostersRoundTrip(t *testing.T) {
-	fake := newFakeS3()
-	server := httptest.NewServer(fake)
-	defer server.Close()
-
-	c := newTestClient(t, server)
-
-	data := map[string]map[string]int{
-		"123": {"456": 10, "789": 20},
-	}
-
-	if err := c.SaveTopPosters(context.Background(), "guild1", data); err != nil {
-		t.Fatalf("SaveTopPosters: %v", err)
-	}
-
-	got, err := c.FetchTopPosters(context.Background(), "guild1")
-	if err != nil {
-		t.Fatalf("FetchTopPosters: %v", err)
-	}
-
-	if got["123"]["456"] != 10 {
-		t.Errorf("got[123][456] = %d, want 10", got["123"]["456"])
-	}
-	if got["123"]["789"] != 20 {
-		t.Errorf("got[123][789] = %d, want 20", got["123"]["789"])
-	}
-}
-
-func TestFetchTopPostersNotFound(t *testing.T) {
-	fake := newFakeS3()
-	server := httptest.NewServer(fake)
-	defer server.Close()
-
-	c := newTestClient(t, server)
-
-	_, err := c.FetchTopPosters(context.Background(), "nonexistent")
-	if err != ErrNotFound {
-		t.Errorf("expected ErrNotFound, got %v", err)
-	}
-}
-
 func TestValidateImageURLFileScheme(t *testing.T) {
 	err := validateImageURL("file:///etc/passwd")
 	if err == nil {

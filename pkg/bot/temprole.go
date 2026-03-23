@@ -1,9 +1,6 @@
 package bot
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,7 +12,6 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 // --- Config: which roles can be temp-assigned and for how long ---
@@ -90,45 +86,6 @@ func formatDuration(d time.Duration) string {
 	}
 }
 
-func (b *Bot) loadTempRoleConfig() {
-	ctx := context.Background()
-	for _, guildID := range b.GuildIDs() {
-		st := &tempRoleConfigState{}
-
-		data, err := b.S3.FetchGuildJSON(ctx, "temproleconfig", fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing temp role config", "guild_id", guildID)
-		} else if err != nil {
-			b.Log.Error("Failed to load temp role config", "guild_id", guildID, "error", err)
-		} else {
-			if err := json.Unmarshal(data, st); err != nil {
-				b.Log.Error("Failed to decode temp role config", "guild_id", guildID, "error", err)
-			}
-		}
-
-		b.tempRoleConfig[guildID] = st
-		b.Log.Info("Loaded temp role config", "guild_id", guildID, "roles", len(st.Roles))
-	}
-}
-
-func (b *Bot) persistTempRoleConfig(guildID snowflake.ID, st *tempRoleConfigState) error {
-	st.mu.Lock()
-	data, err := json.Marshal(st)
-	st.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	return b.S3.SaveGuildJSON(context.Background(), "temproleconfig", fmt.Sprintf("%d", guildID), data)
-}
-
-func (b *Bot) saveTempRoleConfig() {
-	for guildID, st := range b.tempRoleConfig {
-		if err := b.persistTempRoleConfig(guildID, st); err != nil {
-			b.Log.Error("Failed to save temp role config", "guild_id", guildID, "error", err)
-		}
-	}
-}
-
 // --- Active assignments ---
 
 type tempRoleEntry struct {
@@ -143,50 +100,11 @@ type tempRoleState struct {
 	Entries []tempRoleEntry `json:"entries"`
 }
 
-func (b *Bot) loadTempRoles() {
-	ctx := context.Background()
-	for _, guildID := range b.GuildIDs() {
-		st := &tempRoleState{}
-
-		data, err := b.S3.FetchGuildJSON(ctx, "temproles", fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing temp roles, starting fresh", "guild_id", guildID)
-		} else if err != nil {
-			b.Log.Error("Failed to load temp roles", "guild_id", guildID, "error", err)
-		} else {
-			if err := json.Unmarshal(data, st); err != nil {
-				b.Log.Error("Failed to decode temp roles", "guild_id", guildID, "error", err)
-			}
-		}
-
-		b.tempRoles[guildID] = st
-		b.Log.Info("Loaded temp roles", "guild_id", guildID, "count", len(st.Entries))
-	}
-}
-
-func (b *Bot) persistTempRoles(guildID snowflake.ID, st *tempRoleState) error {
-	st.mu.Lock()
-	data, err := json.Marshal(st)
-	st.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	return b.S3.SaveGuildJSON(context.Background(), "temproles", fmt.Sprintf("%d", guildID), data)
-}
-
-func (b *Bot) saveTempRoles() {
-	for guildID, st := range b.tempRoles {
-		if err := b.persistTempRoles(guildID, st); err != nil {
-			b.Log.Error("Failed to save temp roles", "guild_id", guildID, "error", err)
-		}
-	}
-}
-
 // --- Expiry loop ---
 
 func (b *Bot) processTempRoleExpiries() {
 	now := time.Now()
-	for guildID, st := range b.tempRoles {
+	b.tempRoles.each(func(guildID snowflake.ID, st *tempRoleState) {
 		st.mu.Lock()
 		var remaining []tempRoleEntry
 		var expired []tempRoleEntry
@@ -199,13 +117,13 @@ func (b *Bot) processTempRoleExpiries() {
 		}
 		if len(expired) == 0 {
 			st.mu.Unlock()
-			continue
+			return
 		}
 		st.Entries = remaining
 		st.mu.Unlock()
 
 		// Check config to skip orphaned timers for roles no longer in the whitelist
-		cfgSt := b.tempRoleConfig[guildID]
+		cfgSt := b.tempRoleConfig.get(guildID)
 
 		for _, entry := range expired {
 			if cfgSt != nil {
@@ -224,10 +142,10 @@ func (b *Bot) processTempRoleExpiries() {
 			}
 		}
 
-		if err := b.persistTempRoles(guildID, st); err != nil {
+		if err := b.tempRoles.persist(guildID); err != nil {
 			b.Log.Error("Failed to persist temp roles after expiry", "guild_id", guildID, "error", err)
 		}
-	}
+	})
 }
 
 // --- Automatic tracking ---
@@ -237,7 +155,7 @@ func (b *Bot) processTempRoleExpiries() {
 // If resetTimer is true, any existing timer is replaced with a fresh one.
 // Returns the expiry time and true if a timer was created or reset.
 func (b *Bot) ensureTempRoleTimer(guildID snowflake.ID, userID snowflake.ID, roleID snowflake.ID, resetTimer bool) (time.Time, bool) {
-	cfgSt := b.tempRoleConfig[guildID]
+	cfgSt := b.tempRoleConfig.get(guildID)
 	if cfgSt == nil {
 		return time.Time{}, false
 	}
@@ -253,10 +171,10 @@ func (b *Bot) ensureTempRoleTimer(guildID snowflake.ID, userID snowflake.ID, rol
 		return time.Time{}, false
 	}
 
-	st := b.tempRoles[guildID]
+	st := b.tempRoles.get(guildID)
 	if st == nil {
 		st = &tempRoleState{}
-		b.tempRoles[guildID] = st
+		b.tempRoles.set(guildID, st)
 	}
 
 	expiry := time.Now().Add(cfgEntry.Duration)
@@ -290,7 +208,7 @@ func (b *Bot) ensureTempRoleTimer(guildID snowflake.ID, userID snowflake.ID, rol
 
 	b.Log.Info("Temp role timer set", "guild_id", guildID, "user_id", userID, "role_id", roleID, "reset", resetTimer, "expires", expiry.Format(time.RFC3339))
 
-	if err := b.persistTempRoles(guildID, st); err != nil {
+	if err := b.tempRoles.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist temp role timer", "guild_id", guildID, "error", err)
 	}
 	return expiry, true
@@ -302,7 +220,7 @@ func (b *Bot) checkTempRolesOnMessage(guildID snowflake.ID, msg discord.Message)
 	if msg.Member == nil {
 		return
 	}
-	cfgSt := b.tempRoleConfig[guildID]
+	cfgSt := b.tempRoleConfig.get(guildID)
 	if cfgSt == nil {
 		return
 	}
@@ -321,7 +239,7 @@ func (b *Bot) checkTempRolesOnMessage(guildID snowflake.ID, msg discord.Message)
 // checkTempRolesOnMemberUpdate checks if any newly added roles are configured
 // temp roles and creates timers for them.
 func (b *Bot) checkTempRolesOnMemberUpdate(e *events.GuildMemberUpdate) {
-	cfgSt := b.tempRoleConfig[e.GuildID]
+	cfgSt := b.tempRoleConfig.get(e.GuildID)
 	if cfgSt == nil {
 		return
 	}
@@ -378,7 +296,7 @@ func (b *Bot) handleTempRole(e *events.ApplicationCommandInteractionCreate) {
 	}
 
 	// Look up the role in the config whitelist
-	cfgSt := b.tempRoleConfig[*guildID]
+	cfgSt := b.tempRoleConfig.get(*guildID)
 	if cfgSt == nil {
 		botutil.RespondEphemeral(e, "No temp roles are configured. Use `/config temprole add` first.")
 		return
@@ -421,7 +339,7 @@ func (b *Bot) handleTempRoleAutocomplete(e *events.AutocompleteInteractionCreate
 		return
 	}
 
-	cfgSt := b.tempRoleConfig[*guildID]
+	cfgSt := b.tempRoleConfig.get(*guildID)
 	if cfgSt == nil {
 		e.AutocompleteResult(nil)
 		return
@@ -469,10 +387,10 @@ func (b *Bot) handleTempRoleConfig(e *events.ApplicationCommandInteractionCreate
 		return
 	}
 
-	st := b.tempRoleConfig[*guildID]
+	st := b.tempRoleConfig.get(*guildID)
 	if st == nil {
 		st = &tempRoleConfigState{}
-		b.tempRoleConfig[*guildID] = st
+		b.tempRoleConfig.set(*guildID, st)
 	}
 
 	subCmd := data.SubCommandName
@@ -533,7 +451,7 @@ func (b *Bot) handleTempRoleConfigAdd(e *events.ApplicationCommandInteractionCre
 	}
 	st.mu.Unlock()
 
-	if err := b.persistTempRoleConfig(guildID, st); err != nil {
+	if err := b.tempRoleConfig.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist temp role config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return
@@ -571,7 +489,7 @@ func (b *Bot) handleTempRoleConfigRemove(e *events.ApplicationCommandInteraction
 		return
 	}
 
-	if err := b.persistTempRoleConfig(guildID, st); err != nil {
+	if err := b.tempRoleConfig.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist temp role config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return
@@ -579,21 +497,21 @@ func (b *Bot) handleTempRoleConfigRemove(e *events.ApplicationCommandInteraction
 
 	// Clear active timers for this role
 	cleared := 0
-	if roleSt := b.tempRoles[guildID]; roleSt != nil {
+	if roleSt := b.tempRoles.get(guildID); roleSt != nil {
 		roleSt.mu.Lock()
-		filtered := roleSt.Entries[:0]
+		filteredEntries := roleSt.Entries[:0]
 		for _, entry := range roleSt.Entries {
 			if entry.RoleID == role.ID {
 				cleared++
 				continue
 			}
-			filtered = append(filtered, entry)
+			filteredEntries = append(filteredEntries, entry)
 		}
-		roleSt.Entries = filtered
+		roleSt.Entries = filteredEntries
 		roleSt.mu.Unlock()
 
 		if cleared > 0 {
-			if err := b.persistTempRoles(guildID, roleSt); err != nil {
+			if err := b.tempRoles.persist(guildID); err != nil {
 				b.Log.Error("Failed to persist temp roles after config remove", "guild_id", guildID, "error", err)
 			}
 		}

@@ -1,9 +1,6 @@
 package bot
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,56 +11,12 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 type welcomeState struct {
 	mu      sync.Mutex
 	Message string `json:"message"`
 	Enabled bool   `json:"enabled"`
-}
-
-func (b *Bot) loadWelcome() {
-	ctx := context.Background()
-	for _, guildID := range b.GuildIDs() {
-		st := &welcomeState{}
-
-		data, err := b.S3.FetchGuildJSON(ctx, "welcome", fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing welcome data, starting fresh", "guild_id", guildID)
-		} else if err != nil {
-			b.Log.Error("Failed to load welcome data", "guild_id", guildID, "error", err)
-		} else {
-			if err := json.Unmarshal(data, st); err != nil {
-				b.Log.Error("Failed to decode welcome data", "guild_id", guildID, "error", err)
-			}
-		}
-
-		b.welcome[guildID] = st
-		b.Log.Info("Loaded welcome state", "guild_id", guildID, "message_set", st.Message != "")
-	}
-}
-
-func (b *Bot) persistWelcome(guildID snowflake.ID, st *welcomeState) error {
-	st.mu.Lock()
-	data, err := json.Marshal(st)
-	st.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return b.S3.SaveGuildJSON(ctx, "welcome", fmt.Sprintf("%d", guildID), data)
-}
-
-func (b *Bot) saveWelcome() {
-	for guildID, st := range b.welcome {
-		if err := b.persistWelcome(guildID, st); err != nil {
-			b.Log.Error("Failed to save welcome data", "guild_id", guildID, "error", err)
-		} else {
-			b.Log.Info("Saved welcome state", "guild_id", guildID)
-		}
-	}
 }
 
 func (b *Bot) sendWelcomeDM(guildID, userID snowflake.ID) {
@@ -80,7 +33,7 @@ func (b *Bot) sendWelcomeDM(guildID, userID snowflake.ID) {
 		return
 	}
 
-	st := b.welcome[guildID]
+	st := b.welcome.get(guildID)
 	if st == nil {
 		b.welcomeSentMu.Unlock()
 		return
@@ -147,7 +100,7 @@ func (b *Bot) handleWelcomeSet(e *events.ApplicationCommandInteractionCreate) {
 
 	// Pre-fill with existing message
 	var prefill string
-	st := b.welcome[*guildID]
+	st := b.welcome.get(*guildID)
 	if st != nil {
 		st.mu.Lock()
 		prefill = st.Message
@@ -188,7 +141,7 @@ func (b *Bot) handleWelcomeSetModal(e *events.ModalSubmitInteractionCreate) {
 		return
 	}
 
-	st := b.welcome[*guildID]
+	st := b.welcome.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "Something went wrong.")
 		return
@@ -199,7 +152,7 @@ func (b *Bot) handleWelcomeSetModal(e *events.ModalSubmitInteractionCreate) {
 	enabled := st.Enabled
 	st.mu.Unlock()
 
-	if err := b.persistWelcome(*guildID, st); err != nil {
+	if err := b.welcome.persist(*guildID); err != nil {
 		b.Log.Error("Failed to save welcome data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save welcome message.")
 		return
@@ -220,7 +173,7 @@ func (b *Bot) handleWelcomeClear(e *events.ApplicationCommandInteractionCreate) 
 
 	b.Log.Info("Welcome clear", "user_id", e.User().ID, "guild_id", *guildID)
 
-	st := b.welcome[*guildID]
+	st := b.welcome.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "Something went wrong.")
 		return
@@ -230,7 +183,7 @@ func (b *Bot) handleWelcomeClear(e *events.ApplicationCommandInteractionCreate) 
 	st.Message = ""
 	st.mu.Unlock()
 
-	if err := b.persistWelcome(*guildID, st); err != nil {
+	if err := b.welcome.persist(*guildID); err != nil {
 		b.Log.Error("Failed to save welcome data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to clear welcome message.")
 		return
@@ -247,7 +200,7 @@ func (b *Bot) handleWelcomeShow(e *events.ApplicationCommandInteractionCreate) {
 
 	b.Log.Info("Welcome show", "user_id", e.User().ID, "guild_id", *guildID)
 
-	st := b.welcome[*guildID]
+	st := b.welcome.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "No welcome message configured.")
 		return
@@ -278,7 +231,7 @@ func (b *Bot) handleWelcomeTest(e *events.ApplicationCommandInteractionCreate) {
 
 	b.Log.Info("Welcome test", "user_id", e.User().ID, "guild_id", *guildID)
 
-	st := b.welcome[*guildID]
+	st := b.welcome.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "No welcome message configured.")
 		return
@@ -337,7 +290,7 @@ func (b *Bot) handleWelcomeEnable(e *events.ApplicationCommandInteractionCreate)
 
 	b.Log.Info("Welcome enable", "user_id", e.User().ID, "guild_id", *guildID)
 
-	st := b.welcome[*guildID]
+	st := b.welcome.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "Something went wrong.")
 		return
@@ -353,7 +306,7 @@ func (b *Bot) handleWelcomeEnable(e *events.ApplicationCommandInteractionCreate)
 		return
 	}
 
-	if err := b.persistWelcome(*guildID, st); err != nil {
+	if err := b.welcome.persist(*guildID); err != nil {
 		b.Log.Error("Failed to save welcome data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to enable welcome DM.")
 		return
@@ -370,7 +323,7 @@ func (b *Bot) handleWelcomeDisable(e *events.ApplicationCommandInteractionCreate
 
 	b.Log.Info("Welcome disable", "user_id", e.User().ID, "guild_id", *guildID)
 
-	st := b.welcome[*guildID]
+	st := b.welcome.get(*guildID)
 	if st == nil {
 		botutil.RespondEphemeral(e, "Something went wrong.")
 		return
@@ -380,7 +333,7 @@ func (b *Bot) handleWelcomeDisable(e *events.ApplicationCommandInteractionCreate
 	st.Enabled = false
 	st.mu.Unlock()
 
-	if err := b.persistWelcome(*guildID, st); err != nil {
+	if err := b.welcome.persist(*guildID); err != nil {
 		b.Log.Error("Failed to save welcome data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to disable welcome DM.")
 		return

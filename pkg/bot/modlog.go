@@ -2,8 +2,6 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -15,7 +13,6 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 const embedSplitSize = 1024
@@ -29,52 +26,6 @@ func defaultModLogConfig() map[snowflake.ID]snowflake.ID {
 	return map[snowflake.ID]snowflake.ID{
 		726985544038612993:  1141477354129080361,
 		1013566342345019512: 1142519200682876938,
-	}
-}
-
-func (b *Bot) loadModLog() {
-	ctx := context.Background()
-	defaults := defaultModLogConfig()
-	for _, guildID := range b.GuildIDs() {
-		st := &modLogState{}
-
-		data, err := b.S3.FetchGuildJSON(ctx, "modlog", fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			if chID, ok := defaults[guildID]; ok {
-				st.ChannelID = chID
-			}
-			b.Log.Info("No existing modlog config, using defaults", "guild_id", guildID)
-		} else if err != nil {
-			b.Log.Error("Failed to load modlog config", "guild_id", guildID, "error", err)
-			if chID, ok := defaults[guildID]; ok {
-				st.ChannelID = chID
-			}
-		} else {
-			if err := json.Unmarshal(data, st); err != nil {
-				b.Log.Error("Failed to decode modlog config", "guild_id", guildID, "error", err)
-			}
-		}
-
-		b.modLog[guildID] = st
-		b.Log.Info("Loaded modlog config", "guild_id", guildID, "channel_id", st.ChannelID)
-	}
-}
-
-func (b *Bot) persistModLog(guildID snowflake.ID, st *modLogState) error {
-	st.mu.Lock()
-	data, err := json.Marshal(st)
-	st.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	return b.S3.SaveGuildJSON(context.Background(), "modlog", fmt.Sprintf("%d", guildID), data)
-}
-
-func (b *Bot) saveModLog() {
-	for guildID, st := range b.modLog {
-		if err := b.persistModLog(guildID, st); err != nil {
-			b.Log.Error("Failed to save modlog config", "guild_id", guildID, "error", err)
-		}
 	}
 }
 
@@ -214,7 +165,7 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		})
 	}
 
-	st := b.modLog[*e.GuildID()]
+	st := b.modLog.get(*e.GuildID())
 	if st == nil {
 		b.Log.Info("No mod log config found")
 		return
@@ -364,10 +315,10 @@ func (b *Bot) handleModLogConfig(e *events.ApplicationCommandInteractionCreate) 
 		return
 	}
 
-	st := b.modLog[*guildID]
+	st := b.modLog.get(*guildID)
 	if st == nil {
 		st = &modLogState{}
-		b.modLog[*guildID] = st
+		b.modLog.set(*guildID, st)
 	}
 
 	subCmd := data.SubCommandName
@@ -402,7 +353,7 @@ func (b *Bot) handleModLogConfigSet(e *events.ApplicationCommandInteractionCreat
 	st.ChannelID = ch.ID
 	st.mu.Unlock()
 
-	if err := b.persistModLog(guildID, st); err != nil {
+	if err := b.modLog.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist modlog config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return
@@ -432,7 +383,7 @@ func (b *Bot) handleModLogConfigClear(e *events.ApplicationCommandInteractionCre
 	st.ChannelID = 0
 	st.mu.Unlock()
 
-	if err := b.persistModLog(guildID, st); err != nil {
+	if err := b.modLog.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist modlog config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save configuration.")
 		return
