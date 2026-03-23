@@ -263,7 +263,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveStarboard)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveRenameLogs)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTempRoles)
-	go b.tempRoleLoop()
+	go botutil.RunSaveLoop(&b.Ready, 1*time.Minute, b.stop, b.processTempRoleExpiries)
 
 	botutil.WaitForShutdown(b.Log, "Bot")
 	close(b.stop)

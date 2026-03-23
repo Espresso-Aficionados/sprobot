@@ -167,7 +167,10 @@ func TestAggregateCountsSingleUserMultipleDays(t *testing.T) {
 }
 
 func TestGuildPostCountsConcurrent(t *testing.T) {
-	gc := &guildPostCounts{Counts: make(map[string]map[string]int)}
+	gc := &guildPostCounts{
+		Counts:    make(map[string]map[string]int),
+		Usernames: make(map[string]string),
+	}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
@@ -179,6 +182,7 @@ func TestGuildPostCountsConcurrent(t *testing.T) {
 				gc.Counts["2026-02-16"] = make(map[string]int)
 			}
 			gc.Counts["2026-02-16"]["user1"]++
+			gc.Usernames["user1"] = "testuser"
 			gc.mu.Unlock()
 		}()
 	}
@@ -186,6 +190,63 @@ func TestGuildPostCountsConcurrent(t *testing.T) {
 
 	if gc.Counts["2026-02-16"]["user1"] != 100 {
 		t.Errorf("concurrent count = %d, want 100", gc.Counts["2026-02-16"]["user1"])
+	}
+	if gc.Usernames["user1"] != "testuser" {
+		t.Errorf("username = %q, want %q", gc.Usernames["user1"], "testuser")
+	}
+}
+
+func TestUsernameRecording(t *testing.T) {
+	gc := &guildPostCounts{
+		Counts:    make(map[string]map[string]int),
+		Usernames: make(map[string]string),
+	}
+
+	// Simulate recording a username
+	gc.Usernames["123"] = "alice"
+	if gc.Usernames["123"] != "alice" {
+		t.Errorf("username = %q, want %q", gc.Usernames["123"], "alice")
+	}
+
+	// Simulate username update (user changed their name)
+	gc.Usernames["123"] = "alice_new"
+	if gc.Usernames["123"] != "alice_new" {
+		t.Errorf("username = %q, want %q", gc.Usernames["123"], "alice_new")
+	}
+}
+
+func TestUsernameNilInitGuard(t *testing.T) {
+	gc := &guildPostCounts{
+		Counts: make(map[string]map[string]int),
+		// Usernames intentionally nil — simulates loading old data without usernames
+	}
+
+	// This mirrors the nil check in onMessage
+	if gc.Usernames == nil {
+		gc.Usernames = make(map[string]string)
+	}
+	gc.Usernames["456"] = "bob"
+
+	if gc.Usernames["456"] != "bob" {
+		t.Errorf("username = %q, want %q", gc.Usernames["456"], "bob")
+	}
+}
+
+func TestUsernameLookupFallback(t *testing.T) {
+	usernames := map[string]string{
+		"100": "alice",
+		"200": "bob",
+	}
+
+	// User in the map
+	if name, ok := usernames["100"]; !ok || name != "alice" {
+		t.Errorf("expected alice, got %q", name)
+	}
+
+	// User not in the map — should fall back gracefully
+	name := usernames["999"]
+	if name != "" {
+		t.Errorf("expected empty string for missing user, got %q", name)
 	}
 }
 

@@ -39,6 +39,29 @@ func (st *tempRoleConfigState) find(roleID snowflake.ID) (tempRoleConfigEntry, b
 	return tempRoleConfigEntry{}, false
 }
 
+// configuredTempRoleIDs returns a set of role IDs from the config, or nil if
+// no roles are configured. Caller must NOT hold cfgSt.mu.
+func (st *tempRoleConfigState) configuredRoleIDs() map[snowflake.ID]struct{} {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.Roles) == 0 {
+		return nil
+	}
+	m := make(map[snowflake.ID]struct{}, len(st.Roles))
+	for _, r := range st.Roles {
+		m[r.RoleID] = struct{}{}
+	}
+	return m
+}
+
+// isTempRoleBlocked returns true if the role has Manage Messages permission.
+func (b *Bot) isTempRoleBlocked(guildID snowflake.ID, roleID snowflake.ID) bool {
+	if role, ok := b.Client.Caches.Role(guildID, roleID); ok {
+		return role.Permissions&discord.PermissionManageMessages != 0
+	}
+	return false
+}
+
 var tempRoleDurations = map[string]time.Duration{
 	"1h":  time.Hour,
 	"6h":  6 * time.Hour,
@@ -161,19 +184,6 @@ func (b *Bot) saveTempRoles() {
 
 // --- Expiry loop ---
 
-func (b *Bot) tempRoleLoop() {
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-b.stop:
-			return
-		case <-ticker.C:
-			b.processTempRoleExpiries()
-		}
-	}
-}
-
 func (b *Bot) processTempRoleExpiries() {
 	now := time.Now()
 	for guildID, st := range b.tempRoles {
@@ -239,11 +249,8 @@ func (b *Bot) ensureTempRoleTimer(guildID snowflake.ID, userID snowflake.ID, rol
 		return time.Time{}, false
 	}
 
-	// Block roles with Manage Messages
-	if role, ok := b.Client.Caches.Role(guildID, roleID); ok {
-		if role.Permissions&discord.PermissionManageMessages != 0 {
-			return time.Time{}, false
-		}
+	if b.isTempRoleBlocked(guildID, roleID) {
+		return time.Time{}, false
 	}
 
 	st := b.tempRoles[guildID]
@@ -299,18 +306,9 @@ func (b *Bot) checkTempRolesOnMessage(guildID snowflake.ID, msg discord.Message)
 	if cfgSt == nil {
 		return
 	}
-	cfgSt.mu.Lock()
-	roles := make([]tempRoleConfigEntry, len(cfgSt.Roles))
-	copy(roles, cfgSt.Roles)
-	cfgSt.mu.Unlock()
-	if len(roles) == 0 {
+	configuredRoles := cfgSt.configuredRoleIDs()
+	if configuredRoles == nil {
 		return
-	}
-
-	// Build a set of configured role IDs for fast lookup
-	configuredRoles := make(map[snowflake.ID]struct{}, len(roles))
-	for _, r := range roles {
-		configuredRoles[r.RoleID] = struct{}{}
 	}
 
 	for _, memberRoleID := range msg.Member.RoleIDs {
@@ -327,17 +325,9 @@ func (b *Bot) checkTempRolesOnMemberUpdate(e *events.GuildMemberUpdate) {
 	if cfgSt == nil {
 		return
 	}
-	cfgSt.mu.Lock()
-	roles := make([]tempRoleConfigEntry, len(cfgSt.Roles))
-	copy(roles, cfgSt.Roles)
-	cfgSt.mu.Unlock()
-	if len(roles) == 0 {
+	configuredRoles := cfgSt.configuredRoleIDs()
+	if configuredRoles == nil {
 		return
-	}
-
-	configuredRoles := make(map[snowflake.ID]struct{}, len(roles))
-	for _, r := range roles {
-		configuredRoles[r.RoleID] = struct{}{}
 	}
 
 	// Build set of old role IDs
@@ -403,12 +393,9 @@ func (b *Bot) handleTempRole(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	// Block roles with Manage Messages
-	if role, ok := b.Client.Caches.Role(*guildID, roleID); ok {
-		if role.Permissions&discord.PermissionManageMessages != 0 {
-			botutil.RespondEphemeral(e, "Cannot assign a role with Manage Messages as a temp role.")
-			return
-		}
+	if b.isTempRoleBlocked(*guildID, roleID) {
+		botutil.RespondEphemeral(e, "Cannot assign a role with Manage Messages as a temp role.")
+		return
 	}
 
 	b.Log.Info("Temp role", "user_id", e.User().ID, "guild_id", *guildID, "target_user_id", targetUser.ID, "role_id", roleID)
