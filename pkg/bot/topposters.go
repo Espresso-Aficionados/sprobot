@@ -242,7 +242,18 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 		if rank >= 20 {
 			break
 		}
-		lines = append(lines, fmt.Sprintf("%d. <@%s> — %d messages", rank+1, entry.UserID, entry.Count))
+		username := ""
+		userID, err := snowflake.Parse(entry.UserID)
+		if err == nil {
+			if member, err := b.Client.Rest.GetMember(guildID, userID); err == nil {
+				username = member.User.Username
+			}
+		}
+		if username != "" {
+			lines = append(lines, fmt.Sprintf("%d. <@%s> (%s) — %d messages", rank+1, entry.UserID, username, entry.Count))
+		} else {
+			lines = append(lines, fmt.Sprintf("%d. <@%s> — %d messages", rank+1, entry.UserID, entry.Count))
+		}
 	}
 
 	description := "No messages tracked yet."
