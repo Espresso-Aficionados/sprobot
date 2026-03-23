@@ -344,7 +344,9 @@ func (b *Bot) handleTempRole(e *events.ApplicationCommandInteractionCreate) {
 		Description: fmt.Sprintf("%s gave <@&%d> to %s for %s (expires <t:%d:R>)", userMention(e.User().ID), roleID, userMention(targetUser.ID), formatDuration(cfgEntry.Duration), expiry.Unix()),
 	})
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Gave <@&%d> to %s for %s (expires <t:%d:R>).", roleID, userMention(targetUser.ID), formatDuration(cfgEntry.Duration), expiry.Unix()))
+	e.CreateMessage(discord.MessageCreate{
+		Content: fmt.Sprintf("Gave <@&%d> to %s for %s (expires <t:%d:R>).", roleID, userMention(targetUser.ID), formatDuration(cfgEntry.Duration), expiry.Unix()),
+	})
 }
 
 // --- /temprole autocomplete ---
