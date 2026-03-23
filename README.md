@@ -15,11 +15,13 @@ Profile bot. Members create and view profiles using slash commands that are dyna
 - `/config shortcuts set|remove|list` — manage shortcuts (requires Manage Messages)
 - `/config welcome set|clear|show|test|enable|disable` — manage welcome DMs for new members (requires Manage Messages)
 - `/warn` — issue a warning to a member (requires Manage Messages)
+- `/temprole user role` — assign a whitelisted temporary role to a member (requires Manage Messages)
+- `/config temprole add|remove|list` — manage temporary role configuration (requires Manage Messages)
 - `/market progress` — check a member's poster role progress (requires Manage Messages)
 - `/topposters` — show top posters for the guild (requires Manage Messages)
 - Context menus for saving messages to the mod log and viewing profiles
 
-**Features:** ticket system, self-assign role panels, event logging (join/leave/ban/kick/timeout/message edit and delete/channel and role changes/emoji, sticker, stage instance, scheduled event, and soundboard sound changes), auto-role on join, poster role tracking, forum helper reminders, message cache for edit/delete logging.
+**Features:** ticket system, self-assign role panels, temporary role assignment with auto-expiry, event logging (join/leave/ban/kick/timeout/message edit and delete/channel and role changes/emoji, sticker, stage instance, scheduled event, and soundboard sound changes), auto-role on join, poster role tracking, forum helper reminders, message cache for edit/delete logging.
 
 ### stickybot
 
