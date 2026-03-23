@@ -227,6 +227,13 @@ func (b *Bot) ensureTempRoleTimer(guildID snowflake.ID, userID snowflake.ID, rol
 		return time.Time{}, false
 	}
 
+	// Block roles with Manage Messages
+	if role, ok := b.Client.Caches.Role(guildID, roleID); ok {
+		if role.Permissions&discord.PermissionManageMessages != 0 {
+			return time.Time{}, false
+		}
+	}
+
 	st := b.tempRoles[guildID]
 	if st == nil {
 		st = &tempRoleState{}
@@ -384,6 +391,14 @@ func (b *Bot) handleTempRole(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
+	// Block roles with Manage Messages
+	if role, ok := b.Client.Caches.Role(*guildID, roleID); ok {
+		if role.Permissions&discord.PermissionManageMessages != 0 {
+			botutil.RespondEphemeral(e, "Cannot assign a role with Manage Messages as a temp role.")
+			return
+		}
+	}
+
 	b.Log.Info("Temp role", "user_id", e.User().ID, "guild_id", *guildID, "target_user_id", targetUser.ID, "role_id", roleID)
 
 	// Add the role
@@ -482,6 +497,11 @@ func (b *Bot) handleTempRoleConfigAdd(e *events.ApplicationCommandInteractionCre
 	role, ok := data.OptRole("role")
 	if !ok {
 		botutil.RespondEphemeral(e, "Please provide a role.")
+		return
+	}
+
+	if role.Permissions&discord.PermissionManageMessages != 0 {
+		botutil.RespondEphemeral(e, "Cannot configure a role with Manage Messages as a temp role.")
 		return
 	}
 
