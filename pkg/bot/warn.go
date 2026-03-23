@@ -43,7 +43,23 @@ func (b *Bot) handleWarn(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
+	// Fetch the sent message to build a link for the mod log
+	var warnLink string
+	if msg, err := b.Client.Rest.GetInteractionResponse(e.ApplicationID(), e.Token()); err == nil {
+		warnLink = messageLink(*guildID, msg.ChannelID, msg.ID)
+	}
+
 	// Build embed for event log + mod log
+	logFields := []discord.EmbedField{
+		{Name: "User", Value: fmt.Sprintf("%s (`%d`)", userMention(targetUser.ID), targetUser.ID)},
+		{Name: "Moderator", Value: userMention(e.User().ID), Inline: boolPtr(true)},
+		{Name: "Channel", Value: channelMention(e.Channel().ID()), Inline: boolPtr(true)},
+		{Name: "Reason", Value: reason},
+	}
+	if warnLink != "" {
+		logFields = append(logFields, discord.EmbedField{Name: "Warning Message", Value: fmt.Sprintf("[Jump to message](%s)", warnLink)})
+	}
+
 	logEmbed := discord.Embed{
 		Title: "Member Warned",
 		Color: colorOrange,
@@ -51,12 +67,7 @@ func (b *Bot) handleWarn(e *events.ApplicationCommandInteractionCreate) {
 			Name:    targetUser.Username,
 			IconURL: targetUser.EffectiveAvatarURL(),
 		},
-		Fields: []discord.EmbedField{
-			{Name: "User", Value: fmt.Sprintf("%s (`%d`)", userMention(targetUser.ID), targetUser.ID)},
-			{Name: "Moderator", Value: userMention(e.User().ID), Inline: boolPtr(true)},
-			{Name: "Channel", Value: channelMention(e.Channel().ID()), Inline: boolPtr(true)},
-			{Name: "Reason", Value: reason},
-		},
+		Fields: logFields,
 	}
 
 	b.postEventLog(*guildID, logEmbed)
