@@ -42,6 +42,9 @@ func (b *Bot) handleAutocomplete(e *events.AutocompleteInteractionCreate) {
 	case "s":
 		b.handleShortcutAutocomplete(e)
 		return
+	case "temprole":
+		b.handleTempRoleAutocomplete(e)
+		return
 	case "config":
 		if e.Data.SubCommandGroupName != nil && *e.Data.SubCommandGroupName == "shortcuts" {
 			b.handleShortcutAutocomplete(e)

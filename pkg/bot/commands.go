@@ -361,6 +361,53 @@ func (b *Bot) registerAllCommands() error {
 				},
 			},
 			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "temprole",
+				Description: "Configure temp role whitelist",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "add",
+						Description: "Add a role to the temp role whitelist",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionRole{
+								Name:        "role",
+								Description: "Role to allow as a temp role",
+								Required:    true,
+							},
+							discord.ApplicationCommandOptionString{
+								Name:        "duration",
+								Description: "How long the role should last",
+								Required:    true,
+								Choices: []discord.ApplicationCommandOptionChoiceString{
+									{Name: "1 hour", Value: "1h"},
+									{Name: "6 hours", Value: "6h"},
+									{Name: "12 hours", Value: "12h"},
+									{Name: "1 day", Value: "1d"},
+									{Name: "3 days", Value: "3d"},
+									{Name: "7 days", Value: "7d"},
+									{Name: "14 days", Value: "14d"},
+									{Name: "30 days", Value: "30d"},
+								},
+							},
+						},
+					},
+					{
+						Name:        "remove",
+						Description: "Remove a role from the temp role whitelist",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionRole{
+								Name:        "role",
+								Description: "Role to remove",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "list",
+						Description: "List configured temp roles",
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
 				Name:        "topposters",
 				Description: "Configure top posters tracking",
 				Options: []discord.ApplicationCommandOptionSubCommand{
@@ -463,6 +510,26 @@ func (b *Bot) registerAllCommands() error {
 			Description:              "Configure bot settings",
 			DefaultMemberPermissions: omit.NewPtr(perm),
 			Options:                  configOpts,
+		})
+
+		// /temprole
+		commands = append(commands, discord.SlashCommandCreate{
+			Name:                     "temprole",
+			Description:              "Temporarily assign a configured role to a user",
+			DefaultMemberPermissions: omit.NewPtr(perm),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionUser{
+					Name:        "user",
+					Description: "User to assign the role to",
+					Required:    true,
+				},
+				discord.ApplicationCommandOptionString{
+					Name:         "role",
+					Description:  "Role to assign (from configured temp roles)",
+					Required:     true,
+					Autocomplete: true,
+				},
+			},
 		})
 
 		// /warn
@@ -585,6 +652,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		b.handleShortcut(e)
 	case "warn":
 		b.handleWarn(e)
+	case "temprole":
+		b.handleTempRole(e)
 	case "config":
 		data, ok := e.Data.(discord.SlashCommandInteractionData)
 		if !ok || data.SubCommandGroupName == nil {
@@ -611,6 +680,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			b.handleEventLogConfig(e)
 		case "modlog":
 			b.handleModLogConfig(e)
+		case "temprole":
+			b.handleTempRoleConfig(e)
 		case "topposters":
 			b.handleTopPostersConfigCmd(e)
 		}

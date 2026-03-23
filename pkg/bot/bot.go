@@ -52,6 +52,8 @@ type Bot struct {
 	autoRole             map[snowflake.ID]*autoRoleState
 	eventLog             map[snowflake.ID]*eventLogState
 	modLog               map[snowflake.ID]*modLogState
+	tempRoleConfig       map[snowflake.ID]*tempRoleConfigState
+	tempRoles            map[snowflake.ID]*tempRoleState
 	threadHelpConfig     map[snowflake.ID]threadHelpInfo
 }
 
@@ -108,6 +110,8 @@ func New(token string) (*Bot, error) {
 		autoRole:             make(map[snowflake.ID]*autoRoleState),
 		eventLog:             make(map[snowflake.ID]*eventLogState),
 		modLog:               make(map[snowflake.ID]*modLogState),
+		tempRoleConfig:       make(map[snowflake.ID]*tempRoleConfigState),
+		tempRoles:            make(map[snowflake.ID]*tempRoleState),
 		threadHelpConfig:     getThreadHelpConfig(),
 	}
 
@@ -229,6 +233,8 @@ func (b *Bot) Run() error {
 	b.loadWelcome()
 	b.loadStarboard()
 	b.loadRenameLogs()
+	b.loadTempRoleConfig()
+	b.loadTempRoles()
 	b.ensureTicketPanels()
 	b.ensureSelfrolePanels()
 	if err := b.registerAllCommands(); err != nil {
@@ -256,6 +262,8 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveSoundboardSoundCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveStarboard)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveRenameLogs)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTempRoles)
+	go b.tempRoleLoop()
 
 	botutil.WaitForShutdown(b.Log, "Bot")
 	close(b.stop)
@@ -270,6 +278,8 @@ func (b *Bot) Run() error {
 	b.saveWelcome()
 	b.saveStarboard()
 	b.saveRenameLogs()
+	b.saveTempRoleConfig()
+	b.saveTempRoles()
 	b.saveMessageCache()
 	b.saveMemberCache()
 	b.saveGuildCache()
