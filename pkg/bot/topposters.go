@@ -77,8 +77,9 @@ func (b *Bot) saveTopPostersConfig() {
 }
 
 type guildPostCounts struct {
-	mu     sync.Mutex
-	Counts map[string]map[string]int // date -> userID -> count
+	mu        sync.Mutex
+	Counts    map[string]map[string]int // date -> userID -> count
+	Usernames map[string]string         // userID -> last known username
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {
@@ -123,12 +124,19 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 		gc.Counts[today] = make(map[string]int)
 	}
 	gc.Counts[today][userID]++
+	if gc.Usernames == nil {
+		gc.Usernames = make(map[string]string)
+	}
+	gc.Usernames[userID] = e.Message.Author.Username
 }
 
 func (b *Bot) loadTopPosters() {
 	ctx := context.Background()
 	for _, guildID := range b.GuildIDs() {
-		gc := &guildPostCounts{Counts: make(map[string]map[string]int)}
+		gc := &guildPostCounts{
+			Counts:    make(map[string]map[string]int),
+			Usernames: make(map[string]string),
+		}
 
 		data, err := b.S3.FetchTopPosters(ctx, fmt.Sprintf("%d", guildID))
 		if errors.Is(err, s3client.ErrNotFound) {
@@ -137,6 +145,12 @@ func (b *Bot) loadTopPosters() {
 			b.Log.Error("Failed to load top posters data", "guild_id", guildID, "error", err)
 		} else {
 			gc.Counts = data
+		}
+
+		// Load usernames from separate key
+		unData, err := b.S3.FetchGuildJSON(ctx, "topposters_usernames", fmt.Sprintf("%d", guildID))
+		if err == nil {
+			_ = json.Unmarshal(unData, &gc.Usernames)
 		}
 
 		b.topPosters[guildID] = gc
@@ -160,12 +174,23 @@ func (b *Bot) saveTopPosters() {
 			}
 			data[date] = cp
 		}
+		usernames := make(map[string]string, len(gc.Usernames))
+		for u, name := range gc.Usernames {
+			usernames[u] = name
+		}
 		gc.mu.Unlock()
 
 		if err := b.S3.SaveTopPosters(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
 			b.Log.Error("Failed to save top posters", "guild_id", guildID, "error", err)
 		} else {
 			b.Log.Info("Saved top posters", "guild_id", guildID, "days", len(data))
+		}
+
+		// Save usernames
+		if unData, err := json.Marshal(usernames); err == nil {
+			if err := b.S3.SaveGuildJSON(ctx, "topposters_usernames", fmt.Sprintf("%d", guildID), unData); err != nil {
+				b.Log.Error("Failed to save top poster usernames", "guild_id", guildID, "error", err)
+			}
 		}
 	}
 }
@@ -226,6 +251,10 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 	gc.mu.Lock()
 	totals := aggregateCounts(gc.Counts)
 	since := oldestDate(gc.Counts)
+	usernames := make(map[string]string, len(gc.Usernames))
+	for u, name := range gc.Usernames {
+		usernames[u] = name
+	}
 	gc.mu.Unlock()
 
 	// Sort by count descending
@@ -243,10 +272,9 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 		if rank >= 20 {
 			break
 		}
-		username := ""
-		userID, err := snowflake.Parse(entry.UserID)
-		if err == nil {
-			if member, err := b.Client.Rest.GetMember(guildID, userID); err == nil {
+		username := usernames[entry.UserID]
+		if uid, err := snowflake.Parse(entry.UserID); err == nil {
+			if member, ok := b.Client.Caches.Member(guildID, uid); ok {
 				username = member.User.Username
 			}
 		}
