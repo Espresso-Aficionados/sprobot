@@ -139,6 +139,12 @@ func (b *Bot) processTempRoleExpiries() {
 				b.Log.Error("Failed to remove expired temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "error", err)
 			} else {
 				b.Log.Info("Removed expired temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID)
+				if member, ok := b.Client.Caches.Member(guildID, entry.UserID); ok {
+					b.crossPostToModLog(guildID, member.User, discord.Embed{
+						Title:       "Temp Role Expired",
+						Description: fmt.Sprintf("<@&%d> expired for %s", entry.RoleID, userMention(entry.UserID)),
+					})
+				}
 			}
 		}
 
@@ -260,7 +266,12 @@ func (b *Bot) checkTempRolesOnMemberUpdate(e *events.GuildMemberUpdate) {
 			continue
 		}
 		if _, configured := configuredRoles[newRoleID]; configured {
-			b.ensureTempRoleTimer(e.GuildID, e.Member.User.ID, newRoleID, false)
+			if expiry, created := b.ensureTempRoleTimer(e.GuildID, e.Member.User.ID, newRoleID, false); created {
+				b.crossPostToModLog(e.GuildID, e.Member.User, discord.Embed{
+					Title:       "Temp Role Detected",
+					Description: fmt.Sprintf("<@&%d> detected on %s, timer started (expires <t:%d:R>)", newRoleID, userMention(e.Member.User.ID), expiry.Unix()),
+				})
+			}
 		}
 	}
 }
@@ -327,6 +338,11 @@ func (b *Bot) handleTempRole(e *events.ApplicationCommandInteractionCreate) {
 
 	// Record the expiry (reset timer if one already exists)
 	expiry, _ := b.ensureTempRoleTimer(*guildID, targetUser.ID, roleID, true)
+
+	b.crossPostToModLog(*guildID, targetUser, discord.Embed{
+		Title:       "Temp Role Added",
+		Description: fmt.Sprintf("%s gave <@&%d> to %s for %s (expires <t:%d:R>)", userMention(e.User().ID), roleID, userMention(targetUser.ID), formatDuration(cfgEntry.Duration), expiry.Unix()),
+	})
 
 	botutil.RespondEphemeral(e, fmt.Sprintf("Gave <@&%d> to %s for %s (expires <t:%d:R>).", roleID, userMention(targetUser.ID), formatDuration(cfgEntry.Duration), expiry.Unix()))
 }
