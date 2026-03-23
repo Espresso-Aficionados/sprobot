@@ -92,6 +92,7 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	guildID := *e.GuildID
 	b.ensureAutoRole(guildID, e.Message)
 	b.checkPosterRole(guildID, e.ChannelID, e.Message)
+	b.checkTempRolesOnMessage(guildID, e.Message)
 
 	gc := b.topPosters[guildID]
 	if gc == nil {

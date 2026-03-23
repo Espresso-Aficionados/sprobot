@@ -256,6 +256,8 @@ func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
 		return
 	}
 
+	b.checkTempRolesOnMemberUpdate(e)
+
 	var fields []discord.EmbedField
 	title := "Member Updated"
 

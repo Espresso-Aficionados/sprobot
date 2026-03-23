@@ -208,6 +208,136 @@ func (b *Bot) processTempRoleExpiries() {
 	}
 }
 
+// --- Automatic tracking ---
+
+// ensureTempRoleTimer creates a timer for a user+role if the role is in the
+// config whitelist. If resetTimer is false, existing timers are left alone.
+// If resetTimer is true, any existing timer is replaced with a fresh one.
+// Returns the expiry time and true if a timer was created or reset.
+func (b *Bot) ensureTempRoleTimer(guildID snowflake.ID, userID snowflake.ID, roleID snowflake.ID, resetTimer bool) (time.Time, bool) {
+	cfgSt := b.tempRoleConfig[guildID]
+	if cfgSt == nil {
+		return time.Time{}, false
+	}
+
+	cfgSt.mu.Lock()
+	cfgEntry, found := cfgSt.find(roleID)
+	cfgSt.mu.Unlock()
+	if !found {
+		return time.Time{}, false
+	}
+
+	st := b.tempRoles[guildID]
+	if st == nil {
+		st = &tempRoleState{}
+		b.tempRoles[guildID] = st
+	}
+
+	expiry := time.Now().Add(cfgEntry.Duration)
+
+	st.mu.Lock()
+	if resetTimer {
+		// Remove existing entry for this user+role so we can replace it
+		filtered := st.Entries[:0]
+		for _, entry := range st.Entries {
+			if !(entry.UserID == userID && entry.RoleID == roleID) {
+				filtered = append(filtered, entry)
+			}
+		}
+		st.Entries = filtered
+	} else {
+		// Check if a timer already exists
+		for _, entry := range st.Entries {
+			if entry.UserID == userID && entry.RoleID == roleID {
+				st.mu.Unlock()
+				return time.Time{}, false
+			}
+		}
+	}
+	st.Entries = append(st.Entries, tempRoleEntry{
+		GuildID:  guildID,
+		UserID:   userID,
+		RoleID:   roleID,
+		ExpiryAt: expiry,
+	})
+	st.mu.Unlock()
+
+	b.Log.Info("Temp role timer set", "guild_id", guildID, "user_id", userID, "role_id", roleID, "reset", resetTimer, "expires", expiry.Format(time.RFC3339))
+
+	if err := b.persistTempRoles(guildID, st); err != nil {
+		b.Log.Error("Failed to persist temp role timer", "guild_id", guildID, "error", err)
+	}
+	return expiry, true
+}
+
+// checkTempRolesOnMessage checks if a message author has any configured temp
+// roles and creates timers for any that are untracked.
+func (b *Bot) checkTempRolesOnMessage(guildID snowflake.ID, msg discord.Message) {
+	if msg.Member == nil {
+		return
+	}
+	cfgSt := b.tempRoleConfig[guildID]
+	if cfgSt == nil {
+		return
+	}
+	cfgSt.mu.Lock()
+	roles := make([]tempRoleConfigEntry, len(cfgSt.Roles))
+	copy(roles, cfgSt.Roles)
+	cfgSt.mu.Unlock()
+	if len(roles) == 0 {
+		return
+	}
+
+	// Build a set of configured role IDs for fast lookup
+	configuredRoles := make(map[snowflake.ID]struct{}, len(roles))
+	for _, r := range roles {
+		configuredRoles[r.RoleID] = struct{}{}
+	}
+
+	for _, memberRoleID := range msg.Member.RoleIDs {
+		if _, ok := configuredRoles[memberRoleID]; ok {
+			b.ensureTempRoleTimer(guildID, msg.Author.ID, memberRoleID, false)
+		}
+	}
+}
+
+// checkTempRolesOnMemberUpdate checks if any newly added roles are configured
+// temp roles and creates timers for them.
+func (b *Bot) checkTempRolesOnMemberUpdate(e *events.GuildMemberUpdate) {
+	cfgSt := b.tempRoleConfig[e.GuildID]
+	if cfgSt == nil {
+		return
+	}
+	cfgSt.mu.Lock()
+	roles := make([]tempRoleConfigEntry, len(cfgSt.Roles))
+	copy(roles, cfgSt.Roles)
+	cfgSt.mu.Unlock()
+	if len(roles) == 0 {
+		return
+	}
+
+	configuredRoles := make(map[snowflake.ID]struct{}, len(roles))
+	for _, r := range roles {
+		configuredRoles[r.RoleID] = struct{}{}
+	}
+
+	// Build set of old role IDs
+	oldRoles := make(map[snowflake.ID]struct{}, len(e.OldMember.RoleIDs))
+	for _, id := range e.OldMember.RoleIDs {
+		oldRoles[id] = struct{}{}
+	}
+
+	// Check each new role — if it's configured and wasn't there before, start timer
+	for _, newRoleID := range e.Member.RoleIDs {
+		if _, wasOld := oldRoles[newRoleID]; wasOld {
+			continue
+		}
+		if _, configured := configuredRoles[newRoleID]; configured {
+			b.ensureTempRoleTimer(e.GuildID, e.Member.User.ID, newRoleID, false)
+		}
+	}
+}
+
 // --- /temprole command ---
 
 func (b *Bot) handleTempRole(e *events.ApplicationCommandInteractionCreate) {
@@ -263,33 +393,8 @@ func (b *Bot) handleTempRole(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	// Record the expiry
-	st := b.tempRoles[*guildID]
-	if st == nil {
-		st = &tempRoleState{}
-		b.tempRoles[*guildID] = st
-	}
-
-	expiry := time.Now().Add(cfgEntry.Duration)
-	st.mu.Lock()
-	// Remove any existing entry for the same user+role (reset timer)
-	filtered := st.Entries[:0]
-	for _, entry := range st.Entries {
-		if !(entry.UserID == targetUser.ID && entry.RoleID == roleID) {
-			filtered = append(filtered, entry)
-		}
-	}
-	st.Entries = append(filtered, tempRoleEntry{
-		GuildID:  *guildID,
-		UserID:   targetUser.ID,
-		RoleID:   roleID,
-		ExpiryAt: expiry,
-	})
-	st.mu.Unlock()
-
-	if err := b.persistTempRoles(*guildID, st); err != nil {
-		b.Log.Error("Failed to persist temp role", "guild_id", *guildID, "error", err)
-	}
+	// Record the expiry (reset timer if one already exists)
+	expiry, _ := b.ensureTempRoleTimer(*guildID, targetUser.ID, roleID, true)
 
 	botutil.RespondEphemeral(e, fmt.Sprintf("Gave <@&%d> to %s for %s (expires <t:%d:R>).", roleID, userMention(targetUser.ID), formatDuration(cfgEntry.Duration), expiry.Unix()))
 }
