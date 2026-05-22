@@ -220,6 +220,27 @@ func (b *Bot) ensureTempRoleTimer(guildID snowflake.ID, userID snowflake.ID, rol
 	return expiry, true
 }
 
+// removeTempRoleEntry removes a specific user+role timer entry. Used to roll
+// back a timer if the role assignment fails after the timer was created.
+func (b *Bot) removeTempRoleEntry(guildID snowflake.ID, userID snowflake.ID, roleID snowflake.ID) {
+	st := b.tempRoles.get(guildID)
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	filtered := st.Entries[:0]
+	for _, entry := range st.Entries {
+		if !(entry.UserID == userID && entry.RoleID == roleID) {
+			filtered = append(filtered, entry)
+		}
+	}
+	st.Entries = filtered
+	st.mu.Unlock()
+	if err := b.tempRoles.persist(guildID); err != nil {
+		b.Log.Error("Failed to persist temp role rollback", "guild_id", guildID, "error", err)
+	}
+}
+
 // checkTempRolesOnMessage checks if a message author has any configured temp
 // roles and creates timers for any that are untracked.
 func (b *Bot) checkTempRolesOnMessage(guildID snowflake.ID, msg discord.Message) {
@@ -329,15 +350,18 @@ func (b *Bot) handleTempRole(e *events.ApplicationCommandInteractionCreate) {
 
 	b.Log.Info("Temp role", "user_id", e.User().ID, "guild_id", *guildID, "target_user_id", targetUser.ID, "role_id", roleID)
 
+	// Record the expiry BEFORE adding the role so the GuildMemberUpdate
+	// event handler sees the existing timer and skips its mod-log post.
+	expiry, _ := b.ensureTempRoleTimer(*guildID, targetUser.ID, roleID, true)
+
 	// Add the role
 	if err := b.Client.Rest.AddMemberRole(*guildID, targetUser.ID, roleID, rest.WithReason(fmt.Sprintf("Temp role for %s by %s", formatDuration(cfgEntry.Duration), e.User().Username))); err != nil {
 		b.Log.Error("Failed to add temp role", "guild_id", *guildID, "user_id", targetUser.ID, "role_id", roleID, "error", err)
+		// Roll back the timer we just created since the role was never added.
+		b.removeTempRoleEntry(*guildID, targetUser.ID, roleID)
 		botutil.RespondEphemeral(e, "Failed to add role.")
 		return
 	}
-
-	// Record the expiry (reset timer if one already exists)
-	expiry, _ := b.ensureTempRoleTimer(*guildID, targetUser.ID, roleID, true)
 
 	b.crossPostToModLog(*guildID, targetUser, discord.Embed{
 		Title:       "Temp Role Added",
