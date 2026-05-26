@@ -243,6 +243,43 @@ func (b *Bot) registerAllCommands() error {
 				},
 			},
 			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "market-ban",
+				Description: "Manage marketplace user bans",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "add",
+						Description: "Ban a user from marketplace access",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionUser{
+								Name:        "user",
+								Description: "User to ban",
+								Required:    true,
+							},
+							discord.ApplicationCommandOptionString{
+								Name:        "reason",
+								Description: "Reason for the ban",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "remove",
+						Description: "Unban a user from marketplace access",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionUser{
+								Name:        "user",
+								Description: "User to unban",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "list",
+						Description: "List all banned users",
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
 				Name:        "market-blacklist",
 				Description: "Manage marketplace channel blacklist",
 				Options: []discord.ApplicationCommandOptionSubCommand{
@@ -672,6 +709,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			b.handleRenameLog(e)
 		case "market":
 			b.handleMarketConfig(e)
+		case "market-ban":
+			b.handleMarketBan(e)
 		case "market-blacklist":
 			b.handleMarketBlacklist(e)
 		case "autorole":

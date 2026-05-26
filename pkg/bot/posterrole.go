@@ -18,13 +18,23 @@ import (
 )
 
 type posterRoleSettings struct {
-	RoleID       snowflake.ID   `json:"role_id"`
-	Threshold    int            `json:"threshold"`
-	SkipChannels []snowflake.ID `json:"skip_channels"`
+	RoleID           snowflake.ID   `json:"role_id"`
+	Threshold        int            `json:"threshold"`
+	SkipChannels     []snowflake.ID `json:"skip_channels"`
+	BlacklistedUsers []snowflake.ID `json:"blacklisted_users,omitempty"`
 }
 
 func (s *posterRoleSettings) isSkipped(ids ...snowflake.ID) bool {
 	return containsAny(s.SkipChannels, ids...)
+}
+
+func (s *posterRoleSettings) isUserBlacklisted(userID snowflake.ID) bool {
+	for _, id := range s.BlacklistedUsers {
+		if id == userID {
+			return true
+		}
+	}
+	return false
 }
 
 type posterRoleState struct {
@@ -56,6 +66,10 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg 
 	}
 
 	if cfg.isSkipped(b.resolveChannelParents(channelID, &st.parentCache)...) {
+		return
+	}
+
+	if cfg.isUserBlacklisted(msg.Author.ID) {
 		return
 	}
 
@@ -325,6 +339,13 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 
 	// Build embed fields
 	var fields []discord.EmbedField
+	if cfg.isUserBlacklisted(user.ID) {
+		fields = append(fields, discord.EmbedField{
+			Name:   "Banned",
+			Value:  "Yes",
+			Inline: boolPtr(true),
+		})
+	}
 	if memberErr == nil {
 		hasRoleStr := "No"
 		if hasRole {
@@ -570,6 +591,7 @@ func (b *Bot) handleMarketConfigShow(e *events.ApplicationCommandInteractionCrea
 		fmt.Sprintf("**Role:** %s", roleStr),
 		fmt.Sprintf("**Threshold:** %s", thresholdStr),
 		fmt.Sprintf("**Blacklisted Channels:** %d", len(s.SkipChannels)),
+		fmt.Sprintf("**Banned Users:** %d", len(s.BlacklistedUsers)),
 	}
 
 	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
@@ -610,4 +632,143 @@ func (b *Bot) handleMarketBlacklist(e *events.ApplicationCommandInteractionCreat
 	case "clear":
 		b.handleBlacklistClear(e, *guildID, st, persist, "Market")
 	}
+}
+
+// --- /config market-ban handlers ---
+
+func (b *Bot) handleMarketBan(e *events.ApplicationCommandInteractionCreate) {
+	data, ok := e.Data.(discord.SlashCommandInteractionData)
+	if !ok {
+		return
+	}
+
+	guildID := e.GuildID()
+	if guildID == nil {
+		return
+	}
+
+	st := b.posterRole.get(*guildID)
+	if st == nil {
+		botutil.RespondEphemeral(e, "Marketplace feature is not available for this server.")
+		return
+	}
+
+	subCmd := data.SubCommandName
+	if subCmd == nil {
+		return
+	}
+
+	switch *subCmd {
+	case "add":
+		b.handleMarketBanAdd(e, *guildID, st)
+	case "remove":
+		b.handleMarketBanRemove(e, *guildID, st)
+	case "list":
+		b.handleMarketBanList(e, st)
+	}
+}
+
+func (b *Bot) handleMarketBanAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
+	data := e.Data.(discord.SlashCommandInteractionData)
+	user, ok := data.OptUser("user")
+	if !ok {
+		botutil.RespondEphemeral(e, "Please provide a user.")
+		return
+	}
+	reason := data.String("reason")
+
+	b.Log.Info("Market ban add", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID, "reason", reason)
+
+	st.mu.Lock()
+	if st.Settings.isUserBlacklisted(user.ID) {
+		st.mu.Unlock()
+		botutil.RespondEphemeral(e, fmt.Sprintf("%s is already banned from the marketplace.", userMention(user.ID)))
+		return
+	}
+	st.Settings.BlacklistedUsers = append(st.Settings.BlacklistedUsers, user.ID)
+	roleID := st.Settings.RoleID
+	st.mu.Unlock()
+
+	if err := b.posterRole.persist(guildID); err != nil {
+		b.Log.Error("Failed to persist market ban", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save ban.")
+		return
+	}
+
+	// Clear any tracking data for the user.
+	b.clearPosterRoleTracking(guildID, fmt.Sprintf("%d", user.ID))
+
+	// Remove the poster role if they have it.
+	if roleID != 0 {
+		if err := b.Client.Rest.RemoveMemberRole(guildID, user.ID, roleID, rest.WithReason(fmt.Sprintf("Marketplace ban by %s: %s", e.User().Username, reason))); err != nil {
+			b.Log.Error("Failed to remove poster role during market ban", "guild_id", guildID, "user_id", user.ID, "role_id", roleID, "error", err)
+		}
+	}
+
+	b.crossPostToModLog(guildID, user, discord.Embed{
+		Title:       "Marketplace Ban",
+		Description: fmt.Sprintf("%s banned %s from the marketplace.\n\n**Reason:** %s", userMention(e.User().ID), userMention(user.ID), reason),
+	})
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("%s has been banned from the marketplace.", userMention(user.ID)))
+}
+
+func (b *Bot) handleMarketBanRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
+	data := e.Data.(discord.SlashCommandInteractionData)
+	user, ok := data.OptUser("user")
+	if !ok {
+		botutil.RespondEphemeral(e, "Please provide a user.")
+		return
+	}
+
+	b.Log.Info("Market ban remove", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID)
+
+	st.mu.Lock()
+	found := false
+	for i, id := range st.Settings.BlacklistedUsers {
+		if id == user.ID {
+			st.Settings.BlacklistedUsers = append(st.Settings.BlacklistedUsers[:i], st.Settings.BlacklistedUsers[i+1:]...)
+			found = true
+			break
+		}
+	}
+	st.mu.Unlock()
+
+	if !found {
+		botutil.RespondEphemeral(e, fmt.Sprintf("%s is not banned from the marketplace.", userMention(user.ID)))
+		return
+	}
+
+	if err := b.posterRole.persist(guildID); err != nil {
+		b.Log.Error("Failed to persist market ban removal", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save changes.")
+		return
+	}
+
+	b.crossPostToModLog(guildID, user, discord.Embed{
+		Title:       "Marketplace Unban",
+		Description: fmt.Sprintf("%s unbanned %s from the marketplace.", userMention(e.User().ID), userMention(user.ID)),
+	})
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("%s has been unbanned from the marketplace.", userMention(user.ID)))
+}
+
+func (b *Bot) handleMarketBanList(e *events.ApplicationCommandInteractionCreate, st *posterRoleState) {
+	b.Log.Info("Market ban list", "user_id", e.User().ID, "guild_id", *e.GuildID())
+
+	st.mu.Lock()
+	list := make([]snowflake.ID, len(st.Settings.BlacklistedUsers))
+	copy(list, st.Settings.BlacklistedUsers)
+	st.mu.Unlock()
+
+	if len(list) == 0 {
+		botutil.RespondEphemeral(e, "No users are banned from the marketplace.")
+		return
+	}
+
+	var lines []string
+	for _, id := range list {
+		lines = append(lines, fmt.Sprintf("- %s", userMention(id)))
+	}
+	botutil.RespondEphemeral(e, "**Banned users:**\n"+strings.Join(lines, "\n"))
 }
