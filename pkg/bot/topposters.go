@@ -16,18 +16,50 @@ import (
 )
 
 type topPostersConfigState struct {
-	mu               sync.Mutex
-	TargetRoleID     snowflake.ID   `json:"target_role_id"` // Role to filter OUT (0 = no filtering)
+	mu sync.Mutex
+
+	// Legacy fields — migrated to Filtered* on load, kept for JSON compat.
+	TargetRoleID     snowflake.ID   `json:"target_role_id,omitempty"`
 	BlacklistedUsers []snowflake.ID `json:"blacklisted_users,omitempty"`
+
+	// Unified filter lists.
+	FilteredUsers    []snowflake.ID `json:"filtered_users,omitempty"`
+	FilteredRoles    []snowflake.ID `json:"filtered_roles,omitempty"`
+	FilteredChannels []snowflake.ID `json:"filtered_channels,omitempty"`
 }
 
-func (st *topPostersConfigState) isUserBlacklisted(userID snowflake.ID) bool {
-	for _, id := range st.BlacklistedUsers {
-		if id == userID {
+// migrateLegacy moves TargetRoleID and BlacklistedUsers into the unified
+// filter slices. Called via postLoad after unmarshal.
+func (st *topPostersConfigState) migrateLegacy() {
+	if st.TargetRoleID != 0 {
+		if !containsAny(st.FilteredRoles, st.TargetRoleID) {
+			st.FilteredRoles = append(st.FilteredRoles, st.TargetRoleID)
+		}
+		st.TargetRoleID = 0
+	}
+	for _, uid := range st.BlacklistedUsers {
+		if !containsAny(st.FilteredUsers, uid) {
+			st.FilteredUsers = append(st.FilteredUsers, uid)
+		}
+	}
+	st.BlacklistedUsers = nil
+}
+
+func (st *topPostersConfigState) isUserFiltered(userID snowflake.ID) bool {
+	return containsAny(st.FilteredUsers, userID)
+}
+
+func (st *topPostersConfigState) hasFilteredRole(roleIDs []snowflake.ID) bool {
+	for _, rid := range roleIDs {
+		if containsAny(st.FilteredRoles, rid) {
 			return true
 		}
 	}
 	return false
+}
+
+func (st *topPostersConfigState) isChannelFiltered(ids ...snowflake.ID) bool {
+	return containsAny(st.FilteredChannels, ids...)
 }
 
 func defaultTopPostersConfig() map[snowflake.ID]snowflake.ID {
@@ -82,21 +114,15 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 		return
 	}
 
-	// Filter out blacklisted users and users with the target role at recording time
+	// Apply unified filters: user, role, channel
 	if cfgSt := b.topPostersConfig.get(guildID); cfgSt != nil {
 		cfgSt.mu.Lock()
-		targetRoleID := cfgSt.TargetRoleID
-		blocked := cfgSt.isUserBlacklisted(e.Message.Author.ID)
+		userBlocked := cfgSt.isUserFiltered(e.Message.Author.ID)
+		roleBlocked := e.Message.Member != nil && cfgSt.hasFilteredRole(e.Message.Member.RoleIDs)
+		channelBlocked := cfgSt.isChannelFiltered(e.ChannelID)
 		cfgSt.mu.Unlock()
-		if blocked {
+		if userBlocked || roleBlocked || channelBlocked {
 			return
-		}
-		if targetRoleID != 0 && e.Message.Member != nil {
-			for _, roleID := range e.Message.Member.RoleIDs {
-				if roleID == targetRoleID {
-					return
-				}
-			}
 		}
 	}
 
@@ -179,16 +205,19 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	// Snapshot blacklist
-	var blacklisted map[snowflake.ID]struct{}
+	// Snapshot filters for display
+	var filteredUsers map[snowflake.ID]struct{}
+	var filteredRoles []snowflake.ID
 	if cfgSt := b.topPostersConfig.get(guildID); cfgSt != nil {
 		cfgSt.mu.Lock()
-		if len(cfgSt.BlacklistedUsers) > 0 {
-			blacklisted = make(map[snowflake.ID]struct{}, len(cfgSt.BlacklistedUsers))
-			for _, id := range cfgSt.BlacklistedUsers {
-				blacklisted[id] = struct{}{}
+		if len(cfgSt.FilteredUsers) > 0 {
+			filteredUsers = make(map[snowflake.ID]struct{}, len(cfgSt.FilteredUsers))
+			for _, id := range cfgSt.FilteredUsers {
+				filteredUsers[id] = struct{}{}
 			}
 		}
+		filteredRoles = make([]snowflake.ID, len(cfgSt.FilteredRoles))
+		copy(filteredRoles, cfgSt.FilteredRoles)
 		cfgSt.mu.Unlock()
 	}
 
@@ -201,12 +230,34 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 	}
 	gc.mu.Unlock()
 
-	// Sort by count descending, excluding blacklisted users
+	// Sort by count descending, excluding filtered users and roles
 	entries := make([]posterEntry, 0, len(totals))
 	for userID, count := range totals {
-		if uid, err := snowflake.Parse(userID); err == nil {
-			if _, blocked := blacklisted[uid]; blocked {
-				continue
+		uid, err := snowflake.Parse(userID)
+		if err != nil {
+			entries = append(entries, posterEntry{UserID: userID, Count: count})
+			continue
+		}
+		if _, blocked := filteredUsers[uid]; blocked {
+			continue
+		}
+		if len(filteredRoles) > 0 {
+			if member, ok := b.Client.Caches.Member(guildID, uid); ok {
+				skip := false
+				for _, rid := range filteredRoles {
+					for _, mrid := range member.RoleIDs {
+						if rid == mrid {
+							skip = true
+							break
+						}
+					}
+					if skip {
+						break
+					}
+				}
+				if skip {
+					continue
+				}
 			}
 		}
 		entries = append(entries, posterEntry{UserID: userID, Count: count})
@@ -281,158 +332,182 @@ func (b *Bot) handleTopPostersConfigCmd(e *events.ApplicationCommandInteractionC
 	}
 
 	switch *subCmd {
-	case "config":
-		b.handleTopPostersConfigSet(e, *guildID, st)
-	case "show-config":
-		b.handleTopPostersConfigShow(e, st)
-	case "clear":
-		b.handleTopPostersConfigClear(e, *guildID, st)
 	case "filter-add":
-		b.handleTopPostersBlacklistAdd(e, *guildID, st)
+		b.handleTopPostersFilterAdd(e, *guildID, st)
 	case "filter-remove":
-		b.handleTopPostersBlacklistRemove(e, *guildID, st)
+		b.handleTopPostersFilterRemove(e, *guildID, st)
 	case "filter-list":
-		b.handleTopPostersBlacklistList(e, st)
+		b.handleTopPostersFilterList(e, st)
+	case "filter-clear":
+		b.handleTopPostersFilterClear(e, *guildID, st)
 	}
 }
 
-func (b *Bot) handleTopPostersConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
+func (b *Bot) handleTopPostersFilterAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
-	role, ok := data.OptRole("role")
-	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a role.")
+	user, hasUser := data.OptUser("user")
+	role, hasRole := data.OptRole("role")
+	ch, hasCh := data.OptChannel("channel")
+
+	if !hasUser && !hasRole && !hasCh {
+		botutil.RespondEphemeral(e, "Please provide at least one of: user, role, or channel.")
 		return
 	}
 
-	b.Log.Info("Top posters config set", "user_id", e.User().ID, "guild_id", guildID, "role_id", role.ID)
+	b.Log.Info("Top posters filter add", "user_id", e.User().ID, "guild_id", guildID)
 
+	var added []string
 	st.mu.Lock()
-	st.TargetRoleID = role.ID
+	if hasUser && !containsAny(st.FilteredUsers, user.ID) {
+		st.FilteredUsers = append(st.FilteredUsers, user.ID)
+		added = append(added, fmt.Sprintf("user %s", userMention(user.ID)))
+	}
+	if hasRole && !containsAny(st.FilteredRoles, role.ID) {
+		st.FilteredRoles = append(st.FilteredRoles, role.ID)
+		added = append(added, fmt.Sprintf("role <@&%d>", role.ID))
+	}
+	if hasCh && !containsAny(st.FilteredChannels, ch.ID) {
+		st.FilteredChannels = append(st.FilteredChannels, ch.ID)
+		added = append(added, fmt.Sprintf("channel <#%d>", ch.ID))
+	}
 	st.mu.Unlock()
+
+	if len(added) == 0 {
+		botutil.RespondEphemeral(e, "All specified items are already filtered.")
+		return
+	}
 
 	if err := b.topPostersConfig.persist(guildID); err != nil {
-		b.Log.Error("Failed to persist topposters config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		b.Log.Error("Failed to persist topposters filter", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save filter.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Top posters exclude role set to <@&%d>.", role.ID))
+	botutil.RespondEphemeral(e, "Added to filter: "+strings.Join(added, ", "))
 }
 
-func (b *Bot) handleTopPostersConfigShow(e *events.ApplicationCommandInteractionCreate, st *topPostersConfigState) {
-	b.Log.Info("Top posters config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
-
-	st.mu.Lock()
-	roleID := st.TargetRoleID
-	filterCount := len(st.BlacklistedUsers)
-	st.mu.Unlock()
-
-	var lines []string
-	if roleID == 0 {
-		lines = append(lines, "**Exclude role:** Not set")
-	} else {
-		lines = append(lines, fmt.Sprintf("**Exclude role:** <@&%d>", roleID))
-	}
-	lines = append(lines, fmt.Sprintf("**Filtered users:** %d", filterCount))
-	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
-}
-
-func (b *Bot) handleTopPostersConfigClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
-	b.Log.Info("Top posters config clear", "user_id", e.User().ID, "guild_id", guildID)
-
-	st.mu.Lock()
-	st.TargetRoleID = 0
-	st.mu.Unlock()
-
-	if err := b.topPostersConfig.persist(guildID); err != nil {
-		b.Log.Error("Failed to persist topposters config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
-		return
-	}
-
-	botutil.RespondEphemeral(e, "Top posters role exclusion cleared.")
-}
-
-func (b *Bot) handleTopPostersBlacklistAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
+func (b *Bot) handleTopPostersFilterRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
-	user, ok := data.OptUser("user")
-	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a user.")
+
+	user, hasUser := data.OptUser("user")
+	role, hasRole := data.OptRole("role")
+	ch, hasCh := data.OptChannel("channel")
+
+	if !hasUser && !hasRole && !hasCh {
+		botutil.RespondEphemeral(e, "Please provide at least one of: user, role, or channel.")
 		return
 	}
 
-	b.Log.Info("Top posters blacklist add", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID)
+	b.Log.Info("Top posters filter remove", "user_id", e.User().ID, "guild_id", guildID)
 
+	var removed []string
 	st.mu.Lock()
-	if st.isUserBlacklisted(user.ID) {
-		st.mu.Unlock()
-		botutil.RespondEphemeral(e, fmt.Sprintf("%s is already blacklisted.", userMention(user.ID)))
-		return
+	if hasUser {
+		if removeID(&st.FilteredUsers, user.ID) {
+			removed = append(removed, fmt.Sprintf("user %s", userMention(user.ID)))
+		}
 	}
-	st.BlacklistedUsers = append(st.BlacklistedUsers, user.ID)
-	st.mu.Unlock()
-
-	if err := b.topPostersConfig.persist(guildID); err != nil {
-		b.Log.Error("Failed to persist topposters blacklist", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save blacklist.")
-		return
+	if hasRole {
+		if removeID(&st.FilteredRoles, role.ID) {
+			removed = append(removed, fmt.Sprintf("role <@&%d>", role.ID))
+		}
 	}
-
-	botutil.RespondEphemeral(e, fmt.Sprintf("%s has been blacklisted from top posters.", userMention(user.ID)))
-}
-
-func (b *Bot) handleTopPostersBlacklistRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
-	data := e.Data.(discord.SlashCommandInteractionData)
-	user, ok := data.OptUser("user")
-	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a user.")
-		return
-	}
-
-	b.Log.Info("Top posters blacklist remove", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID)
-
-	st.mu.Lock()
-	found := false
-	for i, id := range st.BlacklistedUsers {
-		if id == user.ID {
-			st.BlacklistedUsers = append(st.BlacklistedUsers[:i], st.BlacklistedUsers[i+1:]...)
-			found = true
-			break
+	if hasCh {
+		if removeID(&st.FilteredChannels, ch.ID) {
+			removed = append(removed, fmt.Sprintf("channel <#%d>", ch.ID))
 		}
 	}
 	st.mu.Unlock()
 
-	if !found {
-		botutil.RespondEphemeral(e, fmt.Sprintf("%s is not blacklisted.", userMention(user.ID)))
+	if len(removed) == 0 {
+		botutil.RespondEphemeral(e, "None of the specified items were in the filter.")
 		return
 	}
 
 	if err := b.topPostersConfig.persist(guildID); err != nil {
-		b.Log.Error("Failed to persist topposters blacklist removal", "guild_id", guildID, "error", err)
+		b.Log.Error("Failed to persist topposters filter removal", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(e, "Failed to save changes.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("%s has been removed from the top posters blacklist.", userMention(user.ID)))
+	botutil.RespondEphemeral(e, "Removed from filter: "+strings.Join(removed, ", "))
 }
 
-func (b *Bot) handleTopPostersBlacklistList(e *events.ApplicationCommandInteractionCreate, st *topPostersConfigState) {
-	b.Log.Info("Top posters blacklist list", "user_id", e.User().ID, "guild_id", *e.GuildID())
+func (b *Bot) handleTopPostersFilterList(e *events.ApplicationCommandInteractionCreate, st *topPostersConfigState) {
+	b.Log.Info("Top posters filter list", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
-	list := make([]snowflake.ID, len(st.BlacklistedUsers))
-	copy(list, st.BlacklistedUsers)
+	users := make([]snowflake.ID, len(st.FilteredUsers))
+	copy(users, st.FilteredUsers)
+	roles := make([]snowflake.ID, len(st.FilteredRoles))
+	copy(roles, st.FilteredRoles)
+	channels := make([]snowflake.ID, len(st.FilteredChannels))
+	copy(channels, st.FilteredChannels)
 	st.mu.Unlock()
 
-	if len(list) == 0 {
-		botutil.RespondEphemeral(e, "No users are blacklisted from top posters.")
+	if len(users) == 0 && len(roles) == 0 && len(channels) == 0 {
+		botutil.RespondEphemeral(e, "No filters configured.")
 		return
 	}
 
-	var lines []string
-	for _, id := range list {
-		lines = append(lines, fmt.Sprintf("- %s", userMention(id)))
+	var sections []string
+	if len(users) > 0 {
+		var lines []string
+		for _, id := range users {
+			lines = append(lines, fmt.Sprintf("- %s", userMention(id)))
+		}
+		sections = append(sections, "**Users:**\n"+strings.Join(lines, "\n"))
 	}
-	botutil.RespondEphemeral(e, "**Blacklisted users:**\n"+strings.Join(lines, "\n"))
+	if len(roles) > 0 {
+		var lines []string
+		for _, id := range roles {
+			lines = append(lines, fmt.Sprintf("- <@&%d>", id))
+		}
+		sections = append(sections, "**Roles:**\n"+strings.Join(lines, "\n"))
+	}
+	if len(channels) > 0 {
+		var lines []string
+		for _, id := range channels {
+			lines = append(lines, fmt.Sprintf("- <#%d>", id))
+		}
+		sections = append(sections, "**Channels:**\n"+strings.Join(lines, "\n"))
+	}
+
+	botutil.RespondEphemeral(e, strings.Join(sections, "\n\n"))
+}
+
+func (b *Bot) handleTopPostersFilterClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
+	b.Log.Info("Top posters filter clear", "user_id", e.User().ID, "guild_id", guildID)
+
+	st.mu.Lock()
+	count := len(st.FilteredUsers) + len(st.FilteredRoles) + len(st.FilteredChannels)
+	st.FilteredUsers = nil
+	st.FilteredRoles = nil
+	st.FilteredChannels = nil
+	st.mu.Unlock()
+
+	if count == 0 {
+		botutil.RespondEphemeral(e, "No filters to clear.")
+		return
+	}
+
+	if err := b.topPostersConfig.persist(guildID); err != nil {
+		b.Log.Error("Failed to persist topposters filter clear", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save changes.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("Cleared %d filter entries.", count))
+}
+
+// removeID removes the first occurrence of id from the slice. Returns true if found.
+func removeID(slice *[]snowflake.ID, id snowflake.ID) bool {
+	for i, v := range *slice {
+		if v == id {
+			*slice = append((*slice)[:i], (*slice)[i+1:]...)
+			return true
+		}
+	}
+	return false
 }

@@ -169,8 +169,11 @@ func New(token string) (*Bot, error) {
 	tpDefaults := defaultTopPostersConfig()
 	b.topPostersConfig.onMissing = func(guildID snowflake.ID, st *topPostersConfigState) {
 		if roleID, ok := tpDefaults[guildID]; ok {
-			st.TargetRoleID = roleID
+			st.FilteredRoles = append(st.FilteredRoles, roleID)
 		}
+	}
+	b.topPostersConfig.postLoad = func(st *topPostersConfigState) {
+		st.migrateLegacy()
 	}
 
 	// Set up post-load hooks for features that need nil-map initialization.

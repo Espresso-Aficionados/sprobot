@@ -437,49 +437,48 @@ func (b *Bot) registerAllCommands() error {
 				Description: "Configure top posters tracking",
 				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Name:        "config",
-						Description: "Set role to exclude from top posters",
-						Options: []discord.ApplicationCommandOption{
-							discord.ApplicationCommandOptionRole{
-								Name:        "role",
-								Description: "Role to exclude from tracking",
-								Required:    true,
-							},
-						},
-					},
-					{
-						Name:        "show-config",
-						Description: "Show current top posters configuration",
-					},
-					{
-						Name:        "clear",
-						Description: "Clear role exclusion filter",
-					},
-					{
 						Name:        "filter-add",
-						Description: "Add a user to the filter",
+						Description: "Add a user, role, or channel to the filter",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionUser{
 								Name:        "user",
 								Description: "User to filter",
-								Required:    true,
+							},
+							discord.ApplicationCommandOptionRole{
+								Name:        "role",
+								Description: "Role to filter",
+							},
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to filter",
 							},
 						},
 					},
 					{
 						Name:        "filter-remove",
-						Description: "Remove a user from the filter",
+						Description: "Remove a user, role, or channel from the filter",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionUser{
 								Name:        "user",
 								Description: "User to remove",
-								Required:    true,
+							},
+							discord.ApplicationCommandOptionRole{
+								Name:        "role",
+								Description: "Role to remove",
+							},
+							discord.ApplicationCommandOptionChannel{
+								Name:        "channel",
+								Description: "Channel to remove",
 							},
 						},
 					},
 					{
 						Name:        "filter-list",
-						Description: "List all filtered users",
+						Description: "List all filters",
+					},
+					{
+						Name:        "filter-clear",
+						Description: "Remove all filters",
 					},
 				},
 			},
