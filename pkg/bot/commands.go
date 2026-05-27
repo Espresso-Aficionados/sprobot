@@ -221,7 +221,7 @@ func (b *Bot) registerAllCommands() error {
 				Description: "Configure marketplace poster role",
 				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Name:        "set",
+						Name:        "config",
 						Description: "Update marketplace settings",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionRole{
@@ -237,17 +237,11 @@ func (b *Bot) registerAllCommands() error {
 						},
 					},
 					{
-						Name:        "show",
+						Name:        "show-config",
 						Description: "Show current marketplace configuration",
 					},
-				},
-			},
-			discord.ApplicationCommandOptionSubCommandGroup{
-				Name:        "market-ban",
-				Description: "Manage marketplace user bans",
-				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Name:        "add",
+						Name:        "ban",
 						Description: "Ban a user from marketplace access",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionUser{
@@ -263,7 +257,7 @@ func (b *Bot) registerAllCommands() error {
 						},
 					},
 					{
-						Name:        "remove",
+						Name:        "unban",
 						Description: "Unban a user from marketplace access",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionUser{
@@ -274,44 +268,38 @@ func (b *Bot) registerAllCommands() error {
 						},
 					},
 					{
-						Name:        "list",
+						Name:        "banlist",
 						Description: "List all banned users",
 					},
-				},
-			},
-			discord.ApplicationCommandOptionSubCommandGroup{
-				Name:        "market-blacklist",
-				Description: "Manage marketplace channel blacklist",
-				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Name:        "add",
-						Description: "Add a channel to the blacklist",
+						Name:        "filter-add",
+						Description: "Add a channel to the filter",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
 								Name:        "channel",
-								Description: "Channel to blacklist",
+								Description: "Channel to filter",
 								Required:    true,
 							},
 						},
 					},
 					{
-						Name:        "remove",
-						Description: "Remove a channel from the blacklist",
+						Name:        "filter-remove",
+						Description: "Remove a channel from the filter",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
 								Name:        "channel",
-								Description: "Channel to remove from blacklist",
+								Description: "Channel to remove from filter",
 								Required:    true,
 							},
 						},
 					},
 					{
-						Name:        "list",
-						Description: "List all blacklisted channels",
+						Name:        "filter-list",
+						Description: "List all filtered channels",
 					},
 					{
-						Name:        "clear",
-						Description: "Remove all channels from the blacklist",
+						Name:        "filter-clear",
+						Description: "Remove all channels from the filter",
 					},
 				},
 			},
@@ -449,7 +437,7 @@ func (b *Bot) registerAllCommands() error {
 				Description: "Configure top posters tracking",
 				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Name:        "set",
+						Name:        "config",
 						Description: "Set role to exclude from top posters",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionRole{
@@ -460,33 +448,27 @@ func (b *Bot) registerAllCommands() error {
 						},
 					},
 					{
-						Name:        "show",
+						Name:        "show-config",
 						Description: "Show current top posters configuration",
 					},
 					{
 						Name:        "clear",
 						Description: "Clear role exclusion filter",
 					},
-				},
-			},
-			discord.ApplicationCommandOptionSubCommandGroup{
-				Name:        "topposters-blacklist",
-				Description: "Manage top posters user blacklist",
-				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Name:        "add",
-						Description: "Blacklist a user from top posters",
+						Name:        "filter-add",
+						Description: "Add a user to the filter",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionUser{
 								Name:        "user",
-								Description: "User to blacklist",
+								Description: "User to filter",
 								Required:    true,
 							},
 						},
 					},
 					{
-						Name:        "remove",
-						Description: "Remove a user from the blacklist",
+						Name:        "filter-remove",
+						Description: "Remove a user from the filter",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionUser{
 								Name:        "user",
@@ -496,8 +478,8 @@ func (b *Bot) registerAllCommands() error {
 						},
 					},
 					{
-						Name:        "list",
-						Description: "List all blacklisted users",
+						Name:        "filter-list",
+						Description: "List all filtered users",
 					},
 				},
 			},
@@ -506,7 +488,7 @@ func (b *Bot) registerAllCommands() error {
 				Description: "Configure starboard",
 				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Name:        "set",
+						Name:        "config",
 						Description: "Update starboard settings",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
@@ -527,48 +509,42 @@ func (b *Bot) registerAllCommands() error {
 						},
 					},
 					{
-						Name:        "show",
+						Name:        "show-config",
 						Description: "Show current starboard configuration",
 					},
 					{
 						Name:        "disable",
 						Description: "Disable starboard posting",
 					},
-				},
-			},
-			discord.ApplicationCommandOptionSubCommandGroup{
-				Name:        "starboard-blacklist",
-				Description: "Manage starboard channel blacklist",
-				Options: []discord.ApplicationCommandOptionSubCommand{
 					{
-						Name:        "add",
-						Description: "Add a channel to the blacklist",
+						Name:        "filter-add",
+						Description: "Add a channel to the filter",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
 								Name:        "channel",
-								Description: "Channel to blacklist",
+								Description: "Channel to filter",
 								Required:    true,
 							},
 						},
 					},
 					{
-						Name:        "remove",
-						Description: "Remove a channel from the blacklist",
+						Name:        "filter-remove",
+						Description: "Remove a channel from the filter",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
 								Name:        "channel",
-								Description: "Channel to remove from blacklist",
+								Description: "Channel to remove from filter",
 								Required:    true,
 							},
 						},
 					},
 					{
-						Name:        "list",
-						Description: "List all blacklisted channels",
+						Name:        "filter-list",
+						Description: "List all filtered channels",
 					},
 					{
-						Name:        "clear",
-						Description: "Remove all channels from the blacklist",
+						Name:        "filter-clear",
+						Description: "Remove all channels from the filter",
 					},
 				},
 			},
@@ -735,16 +711,10 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			b.handleWelcome(e)
 		case "starboard":
 			b.handleStarboardConfig(e)
-		case "starboard-blacklist":
-			b.handleStarboardBlacklist(e)
 		case "renamelog":
 			b.handleRenameLog(e)
 		case "market":
 			b.handleMarketConfig(e)
-		case "market-ban":
-			b.handleMarketBan(e)
-		case "market-blacklist":
-			b.handleMarketBlacklist(e)
 		case "autorole":
 			b.handleAutoRoleConfig(e)
 		case "eventlog":
@@ -755,8 +725,6 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			b.handleTempRoleConfig(e)
 		case "topposters":
 			b.handleTopPostersConfigCmd(e)
-		case "topposters-blacklist":
-			b.handleTopPostersBlacklist(e)
 		}
 	}
 }

@@ -535,11 +535,26 @@ func (b *Bot) handleMarketConfig(e *events.ApplicationCommandInteractionCreate) 
 		return
 	}
 
+	persist := func() error { return b.posterRole.persist(*guildID) }
 	switch *subCmd {
-	case "set":
+	case "config":
 		b.handleMarketConfigSet(e, *guildID, st)
-	case "show":
+	case "show-config":
 		b.handleMarketConfigShow(e, st)
+	case "ban":
+		b.handleMarketBanAdd(e, *guildID, st)
+	case "unban":
+		b.handleMarketBanRemove(e, *guildID, st)
+	case "banlist":
+		b.handleMarketBanList(e, st)
+	case "filter-add":
+		b.handleBlacklistAdd(e, *guildID, st, persist, "Market")
+	case "filter-remove":
+		b.handleBlacklistRemove(e, *guildID, st, persist, "Market")
+	case "filter-list":
+		b.handleBlacklistList(e, st, "Market")
+	case "filter-clear":
+		b.handleBlacklistClear(e, *guildID, st, persist, "Market")
 	}
 }
 
@@ -590,82 +605,11 @@ func (b *Bot) handleMarketConfigShow(e *events.ApplicationCommandInteractionCrea
 	lines := []string{
 		fmt.Sprintf("**Role:** %s", roleStr),
 		fmt.Sprintf("**Threshold:** %s", thresholdStr),
-		fmt.Sprintf("**Blacklisted Channels:** %d", len(s.SkipChannels)),
+		fmt.Sprintf("**Filtered Channels:** %d", len(s.SkipChannels)),
 		fmt.Sprintf("**Banned Users:** %d", len(s.BlacklistedUsers)),
 	}
 
 	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
-}
-
-// --- /config market-blacklist handlers ---
-
-func (b *Bot) handleMarketBlacklist(e *events.ApplicationCommandInteractionCreate) {
-	data, ok := e.Data.(discord.SlashCommandInteractionData)
-	if !ok {
-		return
-	}
-
-	guildID := e.GuildID()
-	if guildID == nil {
-		return
-	}
-
-	st := b.posterRole.get(*guildID)
-	if st == nil {
-		botutil.RespondEphemeral(e, "Marketplace feature is not available for this server.")
-		return
-	}
-
-	subCmd := data.SubCommandName
-	if subCmd == nil {
-		return
-	}
-
-	persist := func() error { return b.posterRole.persist(*guildID) }
-	switch *subCmd {
-	case "add":
-		b.handleBlacklistAdd(e, *guildID, st, persist, "Market")
-	case "remove":
-		b.handleBlacklistRemove(e, *guildID, st, persist, "Market")
-	case "list":
-		b.handleBlacklistList(e, st, "Market")
-	case "clear":
-		b.handleBlacklistClear(e, *guildID, st, persist, "Market")
-	}
-}
-
-// --- /config market-ban handlers ---
-
-func (b *Bot) handleMarketBan(e *events.ApplicationCommandInteractionCreate) {
-	data, ok := e.Data.(discord.SlashCommandInteractionData)
-	if !ok {
-		return
-	}
-
-	guildID := e.GuildID()
-	if guildID == nil {
-		return
-	}
-
-	st := b.posterRole.get(*guildID)
-	if st == nil {
-		botutil.RespondEphemeral(e, "Marketplace feature is not available for this server.")
-		return
-	}
-
-	subCmd := data.SubCommandName
-	if subCmd == nil {
-		return
-	}
-
-	switch *subCmd {
-	case "add":
-		b.handleMarketBanAdd(e, *guildID, st)
-	case "remove":
-		b.handleMarketBanRemove(e, *guildID, st)
-	case "list":
-		b.handleMarketBanList(e, st)
-	}
 }
 
 func (b *Bot) handleMarketBanAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {

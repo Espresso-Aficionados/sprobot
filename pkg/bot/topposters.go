@@ -281,12 +281,18 @@ func (b *Bot) handleTopPostersConfigCmd(e *events.ApplicationCommandInteractionC
 	}
 
 	switch *subCmd {
-	case "set":
+	case "config":
 		b.handleTopPostersConfigSet(e, *guildID, st)
-	case "show":
+	case "show-config":
 		b.handleTopPostersConfigShow(e, st)
 	case "clear":
 		b.handleTopPostersConfigClear(e, *guildID, st)
+	case "filter-add":
+		b.handleTopPostersBlacklistAdd(e, *guildID, st)
+	case "filter-remove":
+		b.handleTopPostersBlacklistRemove(e, *guildID, st)
+	case "filter-list":
+		b.handleTopPostersBlacklistList(e, st)
 	}
 }
 
@@ -319,7 +325,7 @@ func (b *Bot) handleTopPostersConfigShow(e *events.ApplicationCommandInteraction
 
 	st.mu.Lock()
 	roleID := st.TargetRoleID
-	blacklistCount := len(st.BlacklistedUsers)
+	filterCount := len(st.BlacklistedUsers)
 	st.mu.Unlock()
 
 	var lines []string
@@ -328,7 +334,7 @@ func (b *Bot) handleTopPostersConfigShow(e *events.ApplicationCommandInteraction
 	} else {
 		lines = append(lines, fmt.Sprintf("**Exclude role:** <@&%d>", roleID))
 	}
-	lines = append(lines, fmt.Sprintf("**Blacklisted users:** %d", blacklistCount))
+	lines = append(lines, fmt.Sprintf("**Filtered users:** %d", filterCount))
 	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
 }
 
@@ -346,40 +352,6 @@ func (b *Bot) handleTopPostersConfigClear(e *events.ApplicationCommandInteractio
 	}
 
 	botutil.RespondEphemeral(e, "Top posters role exclusion cleared.")
-}
-
-// --- /config topposters-blacklist handlers ---
-
-func (b *Bot) handleTopPostersBlacklist(e *events.ApplicationCommandInteractionCreate) {
-	data, ok := e.Data.(discord.SlashCommandInteractionData)
-	if !ok {
-		return
-	}
-
-	guildID := e.GuildID()
-	if guildID == nil {
-		return
-	}
-
-	st := b.topPostersConfig.get(*guildID)
-	if st == nil {
-		st = &topPostersConfigState{}
-		b.topPostersConfig.set(*guildID, st)
-	}
-
-	subCmd := data.SubCommandName
-	if subCmd == nil {
-		return
-	}
-
-	switch *subCmd {
-	case "add":
-		b.handleTopPostersBlacklistAdd(e, *guildID, st)
-	case "remove":
-		b.handleTopPostersBlacklistRemove(e, *guildID, st)
-	case "list":
-		b.handleTopPostersBlacklistList(e, st)
-	}
 }
 
 func (b *Bot) handleTopPostersBlacklistAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {

@@ -464,13 +464,22 @@ func (b *Bot) handleStarboardConfig(e *events.ApplicationCommandInteractionCreat
 		return
 	}
 
+	persist := func() error { return b.starboard.persist(*guildID) }
 	switch *subCmd {
-	case "set":
+	case "config":
 		b.handleSBConfigSet(e, *guildID, st)
-	case "show":
+	case "show-config":
 		b.handleSBConfigShow(e, st)
 	case "disable":
 		b.handleSBConfigDisable(e, *guildID, st)
+	case "filter-add":
+		b.handleBlacklistAdd(e, *guildID, st, persist, "Starboard")
+	case "filter-remove":
+		b.handleBlacklistRemove(e, *guildID, st, persist, "Starboard")
+	case "filter-list":
+		b.handleBlacklistList(e, st, "Starboard")
+	case "filter-clear":
+		b.handleBlacklistClear(e, *guildID, st, persist, "Starboard")
 	}
 }
 
@@ -555,39 +564,4 @@ func (b *Bot) handleSBConfigDisable(e *events.ApplicationCommandInteractionCreat
 	}
 
 	botutil.RespondEphemeral(e, "Starboard disabled. Settings preserved.")
-}
-
-func (b *Bot) handleStarboardBlacklist(e *events.ApplicationCommandInteractionCreate) {
-	data, ok := e.Data.(discord.SlashCommandInteractionData)
-	if !ok {
-		return
-	}
-
-	guildID := e.GuildID()
-	if guildID == nil {
-		return
-	}
-
-	st := b.starboard.get(*guildID)
-	if st == nil {
-		botutil.RespondEphemeral(e, "Starboard is not configured for this server.")
-		return
-	}
-
-	subCmd := data.SubCommandName
-	if subCmd == nil {
-		return
-	}
-
-	persist := func() error { return b.starboard.persist(*guildID) }
-	switch *subCmd {
-	case "add":
-		b.handleBlacklistAdd(e, *guildID, st, persist, "Starboard")
-	case "remove":
-		b.handleBlacklistRemove(e, *guildID, st, persist, "Starboard")
-	case "list":
-		b.handleBlacklistList(e, st, "Starboard")
-	case "clear":
-		b.handleBlacklistClear(e, *guildID, st, persist, "Starboard")
-	}
 }
