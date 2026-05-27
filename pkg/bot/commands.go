@@ -470,6 +470,38 @@ func (b *Bot) registerAllCommands() error {
 				},
 			},
 			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "topposters-blacklist",
+				Description: "Manage top posters user blacklist",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "add",
+						Description: "Blacklist a user from top posters",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionUser{
+								Name:        "user",
+								Description: "User to blacklist",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "remove",
+						Description: "Remove a user from the blacklist",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionUser{
+								Name:        "user",
+								Description: "User to remove",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Name:        "list",
+						Description: "List all blacklisted users",
+					},
+				},
+			},
+			discord.ApplicationCommandOptionSubCommandGroup{
 				Name:        "starboard",
 				Description: "Configure starboard",
 				Options: []discord.ApplicationCommandOptionSubCommand{
@@ -723,6 +755,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			b.handleTempRoleConfig(e)
 		case "topposters":
 			b.handleTopPostersConfigCmd(e)
+		case "topposters-blacklist":
+			b.handleTopPostersBlacklist(e)
 		}
 	}
 }

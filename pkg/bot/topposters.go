@@ -16,8 +16,18 @@ import (
 )
 
 type topPostersConfigState struct {
-	mu           sync.Mutex
-	TargetRoleID snowflake.ID `json:"target_role_id"` // Role to filter OUT (0 = no filtering)
+	mu               sync.Mutex
+	TargetRoleID     snowflake.ID   `json:"target_role_id"` // Role to filter OUT (0 = no filtering)
+	BlacklistedUsers []snowflake.ID `json:"blacklisted_users,omitempty"`
+}
+
+func (st *topPostersConfigState) isUserBlacklisted(userID snowflake.ID) bool {
+	for _, id := range st.BlacklistedUsers {
+		if id == userID {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultTopPostersConfig() map[snowflake.ID]snowflake.ID {
@@ -72,12 +82,16 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 		return
 	}
 
-	// Filter out users with the target role at recording time
-	if cfgSt := b.topPostersConfig.get(guildID); cfgSt != nil && e.Message.Member != nil {
+	// Filter out blacklisted users and users with the target role at recording time
+	if cfgSt := b.topPostersConfig.get(guildID); cfgSt != nil {
 		cfgSt.mu.Lock()
 		targetRoleID := cfgSt.TargetRoleID
+		blocked := cfgSt.isUserBlacklisted(e.Message.Author.ID)
 		cfgSt.mu.Unlock()
-		if targetRoleID != 0 {
+		if blocked {
+			return
+		}
+		if targetRoleID != 0 && e.Message.Member != nil {
 			for _, roleID := range e.Message.Member.RoleIDs {
 				if roleID == targetRoleID {
 					return
@@ -165,6 +179,19 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
+	// Snapshot blacklist
+	var blacklisted map[snowflake.ID]struct{}
+	if cfgSt := b.topPostersConfig.get(guildID); cfgSt != nil {
+		cfgSt.mu.Lock()
+		if len(cfgSt.BlacklistedUsers) > 0 {
+			blacklisted = make(map[snowflake.ID]struct{}, len(cfgSt.BlacklistedUsers))
+			for _, id := range cfgSt.BlacklistedUsers {
+				blacklisted[id] = struct{}{}
+			}
+		}
+		cfgSt.mu.Unlock()
+	}
+
 	gc.mu.Lock()
 	totals := aggregateCounts(gc.Counts)
 	since := oldestDate(gc.Counts)
@@ -174,9 +201,14 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 	}
 	gc.mu.Unlock()
 
-	// Sort by count descending
+	// Sort by count descending, excluding blacklisted users
 	entries := make([]posterEntry, 0, len(totals))
 	for userID, count := range totals {
+		if uid, err := snowflake.Parse(userID); err == nil {
+			if _, blocked := blacklisted[uid]; blocked {
+				continue
+			}
+		}
 		entries = append(entries, posterEntry{UserID: userID, Count: count})
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -287,13 +319,17 @@ func (b *Bot) handleTopPostersConfigShow(e *events.ApplicationCommandInteraction
 
 	st.mu.Lock()
 	roleID := st.TargetRoleID
+	blacklistCount := len(st.BlacklistedUsers)
 	st.mu.Unlock()
 
+	var lines []string
 	if roleID == 0 {
-		botutil.RespondEphemeral(e, "**Exclude role:** Not set")
-		return
+		lines = append(lines, "**Exclude role:** Not set")
+	} else {
+		lines = append(lines, fmt.Sprintf("**Exclude role:** <@&%d>", roleID))
 	}
-	botutil.RespondEphemeral(e, fmt.Sprintf("**Exclude role:** <@&%d>", roleID))
+	lines = append(lines, fmt.Sprintf("**Blacklisted users:** %d", blacklistCount))
+	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
 }
 
 func (b *Bot) handleTopPostersConfigClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
@@ -310,4 +346,121 @@ func (b *Bot) handleTopPostersConfigClear(e *events.ApplicationCommandInteractio
 	}
 
 	botutil.RespondEphemeral(e, "Top posters role exclusion cleared.")
+}
+
+// --- /config topposters-blacklist handlers ---
+
+func (b *Bot) handleTopPostersBlacklist(e *events.ApplicationCommandInteractionCreate) {
+	data, ok := e.Data.(discord.SlashCommandInteractionData)
+	if !ok {
+		return
+	}
+
+	guildID := e.GuildID()
+	if guildID == nil {
+		return
+	}
+
+	st := b.topPostersConfig.get(*guildID)
+	if st == nil {
+		st = &topPostersConfigState{}
+		b.topPostersConfig.set(*guildID, st)
+	}
+
+	subCmd := data.SubCommandName
+	if subCmd == nil {
+		return
+	}
+
+	switch *subCmd {
+	case "add":
+		b.handleTopPostersBlacklistAdd(e, *guildID, st)
+	case "remove":
+		b.handleTopPostersBlacklistRemove(e, *guildID, st)
+	case "list":
+		b.handleTopPostersBlacklistList(e, st)
+	}
+}
+
+func (b *Bot) handleTopPostersBlacklistAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
+	data := e.Data.(discord.SlashCommandInteractionData)
+	user, ok := data.OptUser("user")
+	if !ok {
+		botutil.RespondEphemeral(e, "Please provide a user.")
+		return
+	}
+
+	b.Log.Info("Top posters blacklist add", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID)
+
+	st.mu.Lock()
+	if st.isUserBlacklisted(user.ID) {
+		st.mu.Unlock()
+		botutil.RespondEphemeral(e, fmt.Sprintf("%s is already blacklisted.", userMention(user.ID)))
+		return
+	}
+	st.BlacklistedUsers = append(st.BlacklistedUsers, user.ID)
+	st.mu.Unlock()
+
+	if err := b.topPostersConfig.persist(guildID); err != nil {
+		b.Log.Error("Failed to persist topposters blacklist", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save blacklist.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("%s has been blacklisted from top posters.", userMention(user.ID)))
+}
+
+func (b *Bot) handleTopPostersBlacklistRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
+	data := e.Data.(discord.SlashCommandInteractionData)
+	user, ok := data.OptUser("user")
+	if !ok {
+		botutil.RespondEphemeral(e, "Please provide a user.")
+		return
+	}
+
+	b.Log.Info("Top posters blacklist remove", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID)
+
+	st.mu.Lock()
+	found := false
+	for i, id := range st.BlacklistedUsers {
+		if id == user.ID {
+			st.BlacklistedUsers = append(st.BlacklistedUsers[:i], st.BlacklistedUsers[i+1:]...)
+			found = true
+			break
+		}
+	}
+	st.mu.Unlock()
+
+	if !found {
+		botutil.RespondEphemeral(e, fmt.Sprintf("%s is not blacklisted.", userMention(user.ID)))
+		return
+	}
+
+	if err := b.topPostersConfig.persist(guildID); err != nil {
+		b.Log.Error("Failed to persist topposters blacklist removal", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Failed to save changes.")
+		return
+	}
+
+	botutil.RespondEphemeral(e, fmt.Sprintf("%s has been removed from the top posters blacklist.", userMention(user.ID)))
+}
+
+func (b *Bot) handleTopPostersBlacklistList(e *events.ApplicationCommandInteractionCreate, st *topPostersConfigState) {
+	b.Log.Info("Top posters blacklist list", "user_id", e.User().ID, "guild_id", *e.GuildID())
+
+	st.mu.Lock()
+	list := make([]snowflake.ID, len(st.BlacklistedUsers))
+	copy(list, st.BlacklistedUsers)
+	st.mu.Unlock()
+
+	if len(list) == 0 {
+		botutil.RespondEphemeral(e, "No users are blacklisted from top posters.")
+		return
+	}
+
+	var lines []string
+	for _, id := range list {
+		lines = append(lines, fmt.Sprintf("- %s", userMention(id)))
+	}
+	botutil.RespondEphemeral(e, "**Blacklisted users:**\n"+strings.Join(lines, "\n"))
 }
