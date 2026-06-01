@@ -160,7 +160,7 @@ func TestGetSelfroleConfig(t *testing.T) {
 	if !ok {
 		t.Fatal("missing prod guild")
 	}
-	if len(cfgs) != 2 {
-		t.Errorf("expected 2 panel configs for prod, got %d", len(cfgs))
+	if len(cfgs) != 3 {
+		t.Errorf("expected 3 panel configs for prod, got %d", len(cfgs))
 	}
 }

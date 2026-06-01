@@ -11,15 +11,17 @@ import (
 )
 
 type selfroleButton struct {
-	Label  string       `json:"label"`
-	Emoji  string       `json:"emoji"`
-	RoleID snowflake.ID `json:"role_id"`
+	Label  string              `json:"label"`
+	Emoji  string              `json:"emoji"`
+	RoleID snowflake.ID        `json:"role_id"`
+	Style  discord.ButtonStyle `json:"style,omitempty"` // 0 = default (Secondary)
 }
 
 type selfroleConfig struct {
 	ChannelID snowflake.ID     `json:"channel_id"`
 	Message   string           `json:"message"`
 	Buttons   []selfroleButton `json:"buttons"`
+	GrantOnly bool             `json:"grant_only,omitempty"` // If true, clicking only adds the role — no toggle off
 }
 
 func getSelfroleConfig() map[snowflake.ID][]selfroleConfig {
@@ -55,6 +57,14 @@ Made a mistake? Hate pings? Just click again to remove the role.`,
 					{Label: "Helper", Emoji: "🔧", RoleID: 1020401507121774722},
 				},
 			},
+			{
+				ChannelID: 727325278820368456,
+				GrantOnly: true,
+				Message:   "Tired of pride month celebrations? Want to get rid of the rainbow emoji? Just click below!",
+				Buttons: []selfroleButton{
+					{Label: "Opt Out", Emoji: "❌", RoleID: 1390810271886479420, Style: discord.ButtonStyleDanger},
+				},
+			},
 		},
 		1013566342345019512: {
 			{
@@ -75,8 +85,12 @@ func selfrolePanelEmbed(cfg selfroleConfig) discord.Embed {
 func selfrolePanelButtons(cfg selfroleConfig) []discord.LayoutComponent {
 	var btns []discord.InteractiveComponent
 	for _, b := range cfg.Buttons {
+		style := b.Style
+		if style == 0 {
+			style = discord.ButtonStyleSecondary
+		}
 		btns = append(btns, discord.ButtonComponent{
-			Style:    discord.ButtonStyleSecondary,
+			Style:    style,
 			Label:    b.Label,
 			CustomID: fmt.Sprintf("selfrole_%d", b.RoleID),
 			Emoji:    &discord.ComponentEmoji{Name: b.Emoji},
@@ -191,19 +205,19 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 		return
 	}
 
-	valid := false
-	for _, cfg := range b.selfroles[*guildID] {
+	var matchedCfg *selfroleConfig
+	for i, cfg := range b.selfroles[*guildID] {
 		for _, btn := range cfg.Buttons {
 			if btn.RoleID == roleID {
-				valid = true
+				matchedCfg = &b.selfroles[*guildID][i]
 				break
 			}
 		}
-		if valid {
+		if matchedCfg != nil {
 			break
 		}
 	}
-	if !valid {
+	if matchedCfg == nil {
 		return
 	}
 
@@ -220,6 +234,14 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 	}
 
 	link := messageLink(*guildID, e.Channel().ID(), e.Message.ID)
+
+	if hasRole && matchedCfg.GrantOnly {
+		e.CreateMessage(discord.MessageCreate{
+			Content: fmt.Sprintf("You already have **%s**.", label),
+			Flags:   discord.MessageFlagEphemeral,
+		})
+		return
+	}
 
 	if hasRole {
 		if err := b.Client.Rest.RemoveMemberRole(*guildID, e.User().ID, roleID, rest.WithReason(fmt.Sprintf("Self-role removal %s", link))); err != nil {
