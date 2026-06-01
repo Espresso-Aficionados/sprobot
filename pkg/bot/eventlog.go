@@ -302,7 +302,7 @@ func (b *Bot) handleBanEntry(guildID snowflake.ID, entry discord.AuditLogEntry) 
 	if isBan {
 		b.postModAction(guildID, entry, "Member Banned", colorDarkRed, true)
 	} else {
-		b.postModAction(guildID, entry, "Member Unbanned", colorTeal, false)
+		b.postModAction(guildID, entry, "Member Unbanned", colorTeal, true)
 	}
 }
 
