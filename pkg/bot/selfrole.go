@@ -62,7 +62,7 @@ Made a mistake? Hate pings? Just click again to remove the role.`,
 				GrantOnly: true,
 				Message:   "Tired of pride month celebrations? Want to get rid of the rainbow emoji? Just click below!",
 				Buttons: []selfroleButton{
-					{Label: "Opt Out", Emoji: "❌", RoleID: 1390810271886479420, Style: discord.ButtonStyleDanger},
+					{Label: "Opt Out", Emoji: "✖️", RoleID: 1390810271886479420, Style: discord.ButtonStyleDanger},
 				},
 			},
 		},
