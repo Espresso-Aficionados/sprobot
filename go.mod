@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.17
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.101.0
-	github.com/disgoorg/disgo v0.19.3
+	github.com/disgoorg/disgo v0.19.4
 	github.com/disgoorg/omit v1.0.0
 	github.com/disgoorg/snowflake/v2 v2.0.3
 	github.com/hashicorp/golang-lru/v2 v2.0.7
