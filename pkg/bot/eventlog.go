@@ -60,6 +60,16 @@ func timePtr(t time.Time) *time.Time { return &t }
 func channelMention(id snowflake.ID) string { return fmt.Sprintf("<#%d>", id) }
 func userMention(id snowflake.ID) string    { return fmt.Sprintf("<@%d>", id) }
 
+// messageMetaFields returns "Message ID" and "Sent" fields derived from a
+// message snowflake. The sent time is decoded from the snowflake's embedded
+// timestamp, so it's available even when the message itself was never cached.
+func messageMetaFields(id snowflake.ID) []discord.EmbedField {
+	return []discord.EmbedField{
+		{Name: "Message ID", Value: fmt.Sprintf("`%d`", id), Inline: boolPtr(true)},
+		{Name: "Sent", Value: fmt.Sprintf("<t:%d:F>", id.Time().Unix()), Inline: boolPtr(true)},
+	}
+}
+
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
@@ -86,7 +96,12 @@ func (b *Bot) onMessageDelete(e *events.GuildMessageDelete) {
 		return
 	}
 	msg := e.Message
-	if msg.Author.Bot {
+	// We can only identify the author — and thus skip bot/webhook messages —
+	// when the message was cached. For uncached deletes msg is the zero value,
+	// so msg.Author.Bot is always false and the bot can't be filtered out here.
+	// Those still post, but now carry the Message ID + Sent time below so a mod
+	// can identify the message via Discord even with no author or content.
+	if msg.Author.ID != 0 && msg.Author.Bot {
 		return
 	}
 
@@ -106,6 +121,7 @@ func (b *Bot) onMessageDelete(e *events.GuildMessageDelete) {
 			Name: "Author", Value: userMention(msg.Author.ID), Inline: boolPtr(true),
 		})
 	}
+	embed.Fields = append(embed.Fields, messageMetaFields(e.MessageID)...)
 	if msg.Content != "" {
 		embed.Description = truncate(msg.Content, 4000)
 	} else {
@@ -152,6 +168,7 @@ func (b *Bot) onMessageUpdate(e *events.GuildMessageUpdate) {
 	embed.Fields = append(embed.Fields, discord.EmbedField{
 		Name: "Link", Value: fmt.Sprintf("[Jump to message](%s)", link), Inline: boolPtr(true),
 	})
+	embed.Fields = append(embed.Fields, messageMetaFields(e.MessageID)...)
 	if e.OldMessage.Content != "" {
 		embed.Fields = append(embed.Fields, discord.EmbedField{
 			Name: "Before", Value: "```\n" + truncate(e.OldMessage.Content, 1016) + "\n```",
