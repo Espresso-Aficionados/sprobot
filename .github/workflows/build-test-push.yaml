@@ -17,7 +17,7 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
       fail-fast: true
@@ -53,7 +53,7 @@ jobs:
           - image: sadbox/sprobot
             target: prod
             platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             cache-scope: publish-bot-amd64
           - image: sadbox/sprobot
             target: prod
@@ -63,7 +63,7 @@ jobs:
           - image: sadbox/sprobot-web
             target: prodweb
             platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             cache-scope: publish-web-amd64
           - image: sadbox/sprobot-web
             target: prodweb
@@ -73,7 +73,7 @@ jobs:
           - image: sadbox/stickybot
             target: prodstickybot
             platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             cache-scope: publish-stickybot-amd64
           - image: sadbox/stickybot
             target: prodstickybot
@@ -83,7 +83,7 @@ jobs:
           - image: sadbox/threadbot
             target: prodthreadbot
             platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             cache-scope: publish-threadbot-amd64
           - image: sadbox/threadbot
             target: prodthreadbot
@@ -137,7 +137,7 @@ jobs:
 
   publish-merge:
     needs: [publish-build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         include:
