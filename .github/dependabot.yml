@@ -3,12 +3,12 @@ updates:
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
 
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     groups:
       # AWS SDK + smithy-go bump in lockstep and rewrite the same go.mod
       # lines. github.com/aws/* covers aws-sdk-go-v2* and smithy-go.
@@ -28,7 +28,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     groups:
       # Collapse the routine minor/patch action bumps into one PR.
       actions:
