@@ -3,8 +3,8 @@ module github.com/sadbox/sprobot
 go 1.25.0
 
 require (
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.26
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.104.2
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.28
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.0
 	github.com/disgoorg/disgo v0.19.6
 	github.com/disgoorg/omit v1.0.0
 	github.com/disgoorg/snowflake/v2 v2.0.3
