@@ -1,6 +1,6 @@
 ARG TARGET_DIST="gcr.io/distroless/static-debian12"
 
-FROM golang:1.26 AS base
+FROM golang:1.27 AS base
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
