@@ -44,8 +44,9 @@ plus the **sprobot-web** profile page server.
 
 ## Storage and security
 
-Persistent data lives in a private S3 bucket accessible only to the bot
-infrastructure. Profile pages served by sprobot-web are public URLs by design — do not
+Persistent data lives in a private S3 bucket, encrypted at rest and accessible
+only to the bot infrastructure. Time-bounded records (such as temporary-role
+assignments) are removed automatically when they expire. Profile pages served by sprobot-web are public URLs by design — do not
 put anything in a profile you do not want visible outside Discord.
 
 ## Data removal
