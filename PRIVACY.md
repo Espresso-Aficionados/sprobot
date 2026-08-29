@@ -57,3 +57,7 @@ data, contact the server staff or open an issue at
 ## Changes
 
 Changes to this policy are tracked in this repository's git history.
+
+## Terms
+
+Use of the services is also governed by the [Terms of Service](TERMS.md).
