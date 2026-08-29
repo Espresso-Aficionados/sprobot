@@ -14,6 +14,10 @@ import (
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
+// PrivacyPolicyStatus is the custom status shown by all bots, pointing at the
+// privacy policy required for Discord's privileged-intent review.
+const PrivacyPolicyStatus = "Privacy: github.com/Espresso-Aficionados/sprobot/blob/main/PRIVACY.md"
+
 // BaseBot holds the fields shared by all three bots.
 type BaseBot struct {
 	Client               *bot.Client

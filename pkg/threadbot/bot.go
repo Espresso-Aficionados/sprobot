@@ -44,6 +44,7 @@ func New(token string) (*Bot, error) {
 				gateway.IntentGuilds,
 				gateway.IntentGuildMessages,
 			),
+			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.onCommand),

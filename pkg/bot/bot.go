@@ -254,6 +254,7 @@ func New(token string) (*Bot, error) {
 				gateway.IntentGuildVoiceStates,
 				gateway.IntentGuildScheduledEvents,
 			),
+			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.onCommand),
