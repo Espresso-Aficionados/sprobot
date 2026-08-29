@@ -6,11 +6,17 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 )
+
+// messageRetention bounds how long cached message content is kept, per the
+// data-retention practices disclosed in PRIVACY.md and Discord's
+// message-content intent requirements.
+const messageRetention = 30 * 24 * time.Hour
 
 const cacheDir = "/sprobot-cache"
 const messageCacheFile = "messagecache.json"
@@ -391,6 +397,20 @@ func (b *Bot) loadMessageCache() {
 		return msg.ChannelID, msg.ID
 	})
 	b.Log.Info("Loaded message cache", "count", len(msgs))
+	b.pruneMessageCache()
+}
+
+// pruneMessageCache removes cached messages older than messageRetention,
+// using the creation time embedded in the message snowflake.
+func (b *Bot) pruneMessageCache() {
+	cutoff := time.Now().Add(-messageRetention)
+	before := b.msgCache.Len()
+	b.msgCache.RemoveIf(func(_ snowflake.ID, msg discord.Message) bool {
+		return msg.ID.Time().Before(cutoff)
+	})
+	if removed := before - b.msgCache.Len(); removed > 0 {
+		b.Log.Info("Pruned expired messages from cache", "removed", removed, "remaining", b.msgCache.Len())
+	}
 }
 
 // saveMessageCache writes the message cache to disk.

@@ -345,6 +345,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.tickets.save)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.welcome.save)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMessageCache)
+	go botutil.RunSaveLoop(&b.Ready, 1*time.Hour, b.stop, b.pruneMessageCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveGuildCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveChannelCache)

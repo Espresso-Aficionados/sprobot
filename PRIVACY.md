@@ -18,8 +18,10 @@ plus the **sprobot-web** profile page server.
 - **Moderation event log** — message edits and deletions, member joins and leaves, and
   moderation actions (bans, kicks, timeouts, warnings) are posted to a staff-only
   channel **on Discord**. To show the content of an edited or deleted message, the bot
-  keeps a bounded, in-memory cache of recent messages. This cache is never written to
-  storage outside Discord and is discarded whenever the bot restarts.
+  keeps a size-bounded cache of recent messages on its own infrastructure (in memory,
+  with an encrypted-at-rest on-disk copy so the log survives restarts). Cached
+  messages are deleted automatically after at most 30 days, and the cache is used for
+  nothing except the moderation log.
 - **Temporary roles** — the user ID, role ID, and expiry time of staff-assigned
   temporary roles.
 - **Server configuration** — channel/role IDs and staff-authored text (welcome
@@ -37,7 +39,8 @@ plus the **sprobot-web** profile page server.
 
 ## What we do not do
 
-- We do not store regular message content outside Discord.
+- We do not retain message content beyond the 30-day moderation cache described
+  above, and we do not share it with anyone.
 - We do not sell or share any data with third parties.
 - We do not use any data to train machine-learning or AI models.
 - We do not track presence/online status.
