@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -13,6 +14,45 @@ import (
 
 	"github.com/sadbox/sprobot/pkg/botutil"
 )
+
+// pendingSticky holds a context-menu target message between modal open and
+// submit. Resolved interaction data includes message content without the
+// privileged message content intent; a REST re-fetch would not.
+type pendingSticky struct {
+	msg      discord.Message
+	storedAt time.Time
+}
+
+// pendingStickyTTL is how long a stashed target message is kept. Modal
+// interaction tokens expire after 15 minutes, so no valid submit can arrive
+// for an entry older than this.
+const pendingStickyTTL = 20 * time.Minute
+
+func (b *Bot) stashPendingSticky(msg discord.Message) {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	b.prunePendingLocked()
+	b.pending[msg.ID] = pendingSticky{msg: msg, storedAt: time.Now()}
+}
+
+// getPendingSticky returns the stashed target message, if fresh. Entries are
+// read non-destructively so concurrent modals for the same message and
+// duplicate submits all resolve; pruning handles cleanup.
+func (b *Bot) getPendingSticky(messageID snowflake.ID) (discord.Message, bool) {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	b.prunePendingLocked()
+	p, ok := b.pending[messageID]
+	return p.msg, ok
+}
+
+func (b *Bot) prunePendingLocked() {
+	for id, p := range b.pending {
+		if time.Since(p.storedAt) > pendingStickyTTL {
+			delete(b.pending, id)
+		}
+	}
+}
 
 const (
 	cmdContextMenu     = "Sticky this message"
@@ -111,6 +151,7 @@ func (b *Bot) handleStickyMenu(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 	msg := data.TargetMessage()
+	b.stashPendingSticky(msg)
 
 	b.Log.Info("Sticky menu opened", "user_id", e.User().ID, "guild_id", *e.GuildID(), "channel_id", msg.ChannelID, "message_id", msg.ID)
 
@@ -233,11 +274,28 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		return
 	}
 
-	// Fetch the original message
-	msg, err := b.Client.Rest.GetMessage(channelID, messageID)
-	if err != nil {
-		b.Log.Error("Failed to fetch target message", "error", err)
-		b.followup(e, "Failed to fetch the target message.")
+	// Use the message captured at context-menu time (resolved interaction data
+	// includes content without the message content intent; it is a snapshot —
+	// edits made while the modal is open are not picked up). Fall back to REST
+	// for modals submitted across a bot restart.
+	msg, ok := b.getPendingSticky(messageID)
+	if !ok {
+		fetched, err := b.Client.Rest.GetMessage(channelID, messageID)
+		if err != nil {
+			b.Log.Error("Failed to fetch target message", "error", err)
+			b.followup(e, "Failed to fetch the target message.")
+			return
+		}
+		msg = *fetched
+	}
+	if msg.Content == "" && len(msg.Embeds) == 0 && len(msg.Attachments) == 0 {
+		if ok {
+			b.followup(e, "This message has no text, embeds, or attachments to sticky.")
+		} else {
+			// REST strips content fields without the message content intent;
+			// the context-menu resolved data is exempt.
+			b.followup(e, "Couldn't read the target message — please run \"Sticky this message\" again.")
+		}
 		return
 	}
 
