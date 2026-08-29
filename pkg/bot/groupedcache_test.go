@@ -1,14 +1,38 @@
 package bot
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/botutil"
 )
+
+func TestPruneMessageCache(t *testing.T) {
+	b := &Bot{
+		BaseBot:  &botutil.BaseBot{Log: slog.Default()},
+		msgCache: newCappedGroupedCache[discord.Message](100),
+	}
+	oldID := snowflake.New(time.Now().Add(-messageRetention - time.Hour))
+	freshID := snowflake.New(time.Now().Add(-time.Hour))
+	b.msgCache.Put(1, oldID, makeMessage(1, oldID))
+	b.msgCache.Put(1, freshID, makeMessage(1, freshID))
+
+	b.pruneMessageCache()
+
+	if _, ok := b.msgCache.Get(1, oldID); ok {
+		t.Error("expected message older than retention to be pruned")
+	}
+	if _, ok := b.msgCache.Get(1, freshID); !ok {
+		t.Error("expected fresh message to be retained")
+	}
+}
 
 func makeMessage(channelID, messageID snowflake.ID) discord.Message {
 	return discord.Message{
