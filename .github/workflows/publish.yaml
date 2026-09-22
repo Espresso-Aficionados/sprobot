@@ -22,42 +22,42 @@ jobs:
           - image: sadbox/sprobot
             target: prod
             platform: linux/amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
             cache-scope: publish-bot-amd64
           - image: sadbox/sprobot
             target: prod
             platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
             cache-scope: publish-bot-arm64
           - image: sadbox/sprobot-web
             target: prodweb
             platform: linux/amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
             cache-scope: publish-web-amd64
           - image: sadbox/sprobot-web
             target: prodweb
             platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
             cache-scope: publish-web-arm64
           - image: sadbox/stickybot
             target: prodstickybot
             platform: linux/amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
             cache-scope: publish-stickybot-amd64
           - image: sadbox/stickybot
             target: prodstickybot
             platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
             cache-scope: publish-stickybot-arm64
           - image: sadbox/threadbot
             target: prodthreadbot
             platform: linux/amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
             cache-scope: publish-threadbot-amd64
           - image: sadbox/threadbot
             target: prodthreadbot
             platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
             cache-scope: publish-threadbot-arm64
     runs-on: ${{ matrix.runner }}
     steps:
@@ -106,7 +106,7 @@ jobs:
 
   publish-merge:
     needs: [publish-build]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       matrix:
         include:

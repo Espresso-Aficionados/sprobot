@@ -17,9 +17,9 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
       fail-fast: true
     runs-on: ${{ matrix.runner }}
     steps:
