@@ -477,7 +477,8 @@ func TestProfilePageLinkPreview(t *testing.T) {
 	checks := []string{
 		`<meta property="og:site_name" content="sprobot">`,
 		`<meta property="og:title" content="Coffee Setup for alice">`,
-		`<meta property="og:description" content="Machine: Decent DE1` + "\n" + `Grinder: Niche Zero">`,
+		`<meta property="og:type" content="rich">`,
+		`<meta property="og:description" content="**Machine**` + "\n" + `Decent DE1` + "\n\n" + `**Grinder**` + "\n" + `Niche Zero">`,
 		`<meta name="theme-color" content="#674736">`,
 		`<meta property="og:image" content="https://bot.espressoaf.com/profiles/1/Coffee%20Setup/2/image.png?v=abc">`,
 		`<meta property="og:image:alt" content="Gear Picture">`,
@@ -498,6 +499,58 @@ func TestProfilePageLinkPreview(t *testing.T) {
 	}
 	if strings.Index(body, ">Machine<") > strings.Index(body, ">Grinder<") {
 		t.Error("fields should render in template order (Machine before Grinder)")
+	}
+	// Discord uses the last layout tag; twitter:card must follow og:type=rich
+	// so the large-image layout wins while the description stays markdown.
+	if strings.Index(body, `og:type`) > strings.Index(body, `twitter:card`) {
+		t.Error("og:type must come before twitter:card")
+	}
+}
+
+func TestEscapeMarkdown(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"Decent DE1", "Decent DE1"},
+		{"**bold** _it_", `\*\*bold\*\* \_it\_`},
+		{"# heading\n- item\n> quote", "\\# heading\n\\- item\n\\> quote"},
+		{"[click](https://evil.example)", `\[click\]\(https://evil.example\)`},
+		{"<@123> ||spoiler||", `\<@123\> \|\|spoiler\|\|`},
+		{`a\b`, `a\\b`},
+		{"see https://example.com/a_b*c", "see https://example.com/a_b*c"},
+	}
+	for _, tt := range tests {
+		if got := escapeMarkdown(tt.in); got != tt.want {
+			t.Errorf("escapeMarkdown(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestPreviewDescription(t *testing.T) {
+	fields := []profileField{
+		{Name: "Machine", Value: "Decent"},
+		{Name: "Grinder", Value: strings.Repeat("*", 400)},
+		{Name: "Location", Value: "Never shown"},
+	}
+	got := previewDescription(fields, maxPreviewDescriptionBytes)
+
+	if len(got) > maxPreviewDescriptionBytes {
+		t.Errorf("len = %d, over the %d-byte limit", len(got), maxPreviewDescriptionBytes)
+	}
+	if !strings.HasPrefix(got, "**Machine**\nDecent\n\n**Grinder**\n\\*") {
+		t.Errorf("unexpected prefix: %q", got[:min(len(got), 60)])
+	}
+	if !strings.HasSuffix(got, `\*…`) {
+		t.Errorf("truncated value should end with a complete escape and an ellipsis, got suffix %q", got[len(got)-8:])
+	}
+	if strings.Contains(got, "Location") {
+		t.Error("fields after the truncated one should be dropped")
+	}
+
+	// A header with no room left for a useful value is dropped entirely.
+	tight := previewDescription([]profileField{{Name: "Machine", Value: strings.Repeat("x", 330)}, {Name: "Grinder", Value: "EK43"}}, maxPreviewDescriptionBytes)
+	if strings.Contains(tight, "Grinder") {
+		t.Errorf("Grinder header should be dropped when there's no room for its value: %q", tight)
 	}
 }
 
