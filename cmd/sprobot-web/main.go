@@ -147,14 +147,12 @@ func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 
 func buildProfileData(ctx context.Context, s3 *s3client.Client, guildID, userID string, tmpl sprobot.Template, profile map[string]string) profileData {
 	var fields []profileField
-	var lines []string
 	for _, f := range tmpl.Fields {
 		value := profile[f.Name]
 		if value == "" {
 			continue
 		}
 		fields = append(fields, profileField{Name: f.Name, Value: value})
-		lines = append(lines, f.Name+": "+value)
 	}
 
 	title := tmpl.Name
@@ -168,7 +166,7 @@ func buildProfileData(ctx context.Context, s3 *s3client.Client, guildID, userID 
 		ImageURL:     s3.PresignExisting(ctx, profile[tmpl.Image.Name], s3client.PresignTTLPage),
 		Preview: linkPreview{
 			Title:       truncateBytes(title, maxPreviewTitleBytes),
-			Description: truncateBytes(strings.Join(lines, "\n"), maxPreviewDescriptionBytes),
+			Description: previewDescription(fields, maxPreviewDescriptionBytes),
 			ImageURL:    s3.ProfileImageURL(tmpl, guildID, userID, profile),
 			ImageAlt:    tmpl.Image.Name,
 		},
@@ -266,6 +264,101 @@ func lookupTemplate(name string, profile map[string]string) sprobot.Template {
 	return tmpl
 }
 
+// previewDescription renders fields as Discord markdown (bold field names, a
+// blank line between fields) within n bytes. Fields that don't fit are
+// dropped; the field that crosses the limit is cut short with an ellipsis.
+// Truncation happens on the raw value, before escaping, so a cut never splits
+// an escape sequence or leaves a dangling "**".
+func previewDescription(fields []profileField, n int) string {
+	// Below this, a truncated value isn't worth showing.
+	const minValueBytes = 16
+
+	var b strings.Builder
+	for i, f := range fields {
+		header := "**" + escapeMarkdown(f.Name) + "**\n"
+		if i > 0 {
+			header = "\n\n" + header
+		}
+		room := n - b.Len() - len(header)
+		if room < minValueBytes {
+			break
+		}
+		value := escapeMarkdown(f.Value)
+		truncated := len(value) > room
+		if truncated {
+			value = truncateEscaped(f.Value, room)
+		}
+		b.WriteString(header)
+		b.WriteString(value)
+		if truncated {
+			break
+		}
+	}
+	return b.String()
+}
+
+// truncateEscaped returns escapeMarkdown of the longest prefix of raw (plus an
+// ellipsis) whose escaped form fits in n bytes.
+func truncateEscaped(raw string, n int) string {
+	// Escaping can double a value's length, so binary-search the raw cut point.
+	best := ""
+	lo, hi := 0, min(n, len(raw))
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		if s := escapeMarkdown(truncateBytes(raw, mid)); len(s) <= n {
+			best, lo = s, mid+1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return best
+}
+
+// markdownEscaper backslash-escapes the characters Discord markdown treats as
+// syntax: emphasis, code, spoilers, quotes, headings, lists, masked links, and
+// <@mention>/<t:timestamp> tags. Discord drops a backslash before any
+// punctuation, so over-escaping is harmless.
+var markdownEscaper = strings.NewReplacer(
+	`\`, `\\`, `*`, `\*`, `_`, `\_`, "`", "\\`", `~`, `\~`, `|`, `\|`,
+	`>`, `\>`, `<`, `\<`, `#`, `\#`, `-`, `\-`, `[`, `\[`, `]`, `\]`,
+	`(`, `\(`, `)`, `\)`,
+)
+
+// escapeMarkdown makes user text render literally in a rich Discord preview.
+// Text is split on every Unicode whitespace character (separators are kept
+// verbatim) so nothing can hide behind a tab or non-breaking space next to a
+// URL.
+func escapeMarkdown(s string) string {
+	var b strings.Builder
+	for len(s) > 0 {
+		i := strings.IndexFunc(s, unicode.IsSpace)
+		if i == 0 {
+			_, size := utf8.DecodeRuneInString(s)
+			b.WriteString(s[:size])
+			s = s[size:]
+			continue
+		}
+		if i < 0 {
+			i = len(s)
+		}
+		b.WriteString(escapeWord(s[:i]))
+		s = s[i:]
+	}
+	return b.String()
+}
+
+// escapeWord escapes one whitespace-free token. A bare URL is left intact so
+// Discord still autolinks it — but only if it contains nothing that could
+// end the autolink early or start other markup (a <@mention>, a masked link,
+// a spoiler); otherwise it's escaped like any other text.
+func escapeWord(w string) string {
+	isURL := strings.HasPrefix(w, "http://") || strings.HasPrefix(w, "https://")
+	if isURL && !strings.ContainsAny(w, "<>[]()|~`\\") {
+		return w
+	}
+	return markdownEscaper.Replace(w)
+}
+
 // truncateBytes shortens s to at most n bytes on a rune boundary, ending in an
 // ellipsis when anything was cut.
 func truncateBytes(s string, n int) string {
@@ -273,7 +366,7 @@ func truncateBytes(s string, n int) string {
 		return s
 	}
 	const ellipsis = "…"
-	cut := n - len(ellipsis)
+	cut := max(n-len(ellipsis), 0)
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
