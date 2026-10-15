@@ -85,6 +85,10 @@ var blockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("198.18.0.0/15"),
 	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/96"),          // IPv4-compatible (deprecated)
+	netip.MustParsePrefix("64:ff9b:1::/48"), // local NAT64; embedding depends on the operator
+	netip.MustParsePrefix("2001::/32"),      // Teredo
+	netip.MustParsePrefix("fec0::/10"),      // site-local (deprecated)
 }
 
 // blockedIP reports whether ip is anything but a public unicast address.
@@ -110,18 +114,18 @@ func blockedIP(ip net.IP) bool {
 }
 
 var (
-	nat64Prefix      = netip.MustParsePrefix("64:ff9b::/96")
-	nat64LocalPrefix = netip.MustParsePrefix("64:ff9b:1::/48")
-	sixToFourPrefix  = netip.MustParsePrefix("2002::/16")
+	nat64Prefix     = netip.MustParsePrefix("64:ff9b::/96")
+	sixToFourPrefix = netip.MustParsePrefix("2002::/16")
 )
 
-// embeddedIPv4 returns the IPv4 address carried in a NAT64 or 6to4 address.
+// embeddedIPv4 returns the IPv4 address carried in a well-known NAT64 or a
+// 6to4 address.
 func embeddedIPv4(addr netip.Addr) (netip.Addr, bool) {
 	b := addr.As16()
 	switch {
 	case !addr.Is6():
 		return netip.Addr{}, false
-	case nat64Prefix.Contains(addr), nat64LocalPrefix.Contains(addr):
+	case nat64Prefix.Contains(addr):
 		return netip.AddrFrom4([4]byte(b[12:16])), true
 	case sixToFourPrefix.Contains(addr):
 		return netip.AddrFrom4([4]byte(b[2:6])), true
