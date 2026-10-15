@@ -1,8 +1,9 @@
 {{define "title"}}{{.Preview.Title}} - sprobot{{end}}
 {{define "meta"}}
     <meta property="og:site_name" content="sprobot">
-    {{- /* rich: render og:description as Discord markdown. It is also a layout
-         tag, and the last layout tag wins, so twitter:card must stay below it. */}}
+    {{- /* rich: render og:description as Discord markdown, with og:image as a
+         small thumbnail. Don't add a twitter:card: it's also a layout tag and
+         would override this one. */}}
     <meta property="og:type" content="rich">
     <meta property="og:title" content="{{.Preview.Title}}">
     {{- if .Preview.Description}}
@@ -12,7 +13,6 @@
     {{- if .Preview.ImageURL}}
     <meta property="og:image" content="{{.Preview.ImageURL}}">
     <meta property="og:image:alt" content="{{.Preview.ImageAlt}}">
-    <meta name="twitter:card" content="summary_large_image">
     {{- end}}
 {{end}}
 {{define "extra_css"}}

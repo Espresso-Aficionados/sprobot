@@ -482,7 +482,6 @@ func TestProfilePageLinkPreview(t *testing.T) {
 		`<meta name="theme-color" content="#674736">`,
 		`<meta property="og:image" content="https://bot.espressoaf.com/profiles/1/Coffee%20Setup/2/image.png?v=abc">`,
 		`<meta property="og:image:alt" content="Gear Picture">`,
-		`<meta name="twitter:card" content="summary_large_image">`,
 		`<title>Coffee Setup for alice - sprobot</title>`,
 	}
 	for _, want := range checks {
@@ -500,10 +499,9 @@ func TestProfilePageLinkPreview(t *testing.T) {
 	if strings.Index(body, ">Machine<") > strings.Index(body, ">Grinder<") {
 		t.Error("fields should render in template order (Machine before Grinder)")
 	}
-	// Discord uses the last layout tag; twitter:card must follow og:type=rich
-	// so the large-image layout wins while the description stays markdown.
-	if strings.Index(body, `og:type`) > strings.Index(body, `twitter:card`) {
-		t.Error("og:type must come before twitter:card")
+	// twitter:card is also a layout tag and would override og:type=rich.
+	if strings.Contains(body, "twitter:card") {
+		t.Error("profile page must not emit twitter:card; it overrides the rich layout")
 	}
 }
 
@@ -517,7 +515,13 @@ func TestEscapeMarkdown(t *testing.T) {
 		{"[click](https://evil.example)", `\[click\]\(https://evil.example\)`},
 		{"<@123> ||spoiler||", `\<@123\> \|\|spoiler\|\|`},
 		{`a\b`, `a\\b`},
-		{"see https://example.com/a_b*c", "see https://example.com/a_b*c"},
+		{"see https://example.com/a_b*c#frag", "see https://example.com/a_b*c#frag"},
+		// Every whitespace character separates tokens, and is preserved.
+		{"https://x.example\t[a](https://evil)", "https://x.example\t\\[a\\]\\(https://evil\\)"},
+		{"https://x.example **b**", "https://x.example \\*\\*b\\*\\*"},
+		// A URL token carrying markup is escaped rather than trusted.
+		{"https://x.example/<@123>", `https://x.example/\<@123\>`},
+		{"https://x.example||spoiler||", `https://x.example\|\|spoiler\|\|`},
 	}
 	for _, tt := range tests {
 		if got := escapeMarkdown(tt.in); got != tt.want {

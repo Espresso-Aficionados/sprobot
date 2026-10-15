@@ -325,25 +325,38 @@ var markdownEscaper = strings.NewReplacer(
 )
 
 // escapeMarkdown makes user text render literally in a rich Discord preview.
-// Bare URLs are left intact so Discord still autolinks them.
+// Text is split on every Unicode whitespace character (separators are kept
+// verbatim) so nothing can hide behind a tab or non-breaking space next to a
+// URL.
 func escapeMarkdown(s string) string {
 	var b strings.Builder
-	for i, line := range strings.Split(s, "\n") {
-		if i > 0 {
-			b.WriteByte('\n')
+	for len(s) > 0 {
+		i := strings.IndexFunc(s, unicode.IsSpace)
+		if i == 0 {
+			_, size := utf8.DecodeRuneInString(s)
+			b.WriteString(s[:size])
+			s = s[size:]
+			continue
 		}
-		for j, word := range strings.Split(line, " ") {
-			if j > 0 {
-				b.WriteByte(' ')
-			}
-			if strings.HasPrefix(word, "http://") || strings.HasPrefix(word, "https://") {
-				b.WriteString(word)
-			} else {
-				b.WriteString(markdownEscaper.Replace(word))
-			}
+		if i < 0 {
+			i = len(s)
 		}
+		b.WriteString(escapeWord(s[:i]))
+		s = s[i:]
 	}
 	return b.String()
+}
+
+// escapeWord escapes one whitespace-free token. A bare URL is left intact so
+// Discord still autolinks it — but only if it contains nothing that could
+// end the autolink early or start other markup (a <@mention>, a masked link,
+// a spoiler); otherwise it's escaped like any other text.
+func escapeWord(w string) string {
+	isURL := strings.HasPrefix(w, "http://") || strings.HasPrefix(w, "https://")
+	if isURL && !strings.ContainsAny(w, "<>[]()|~`\\") {
+		return w
+	}
+	return markdownEscaper.Replace(w)
 }
 
 // truncateBytes shortens s to at most n bytes on a rune boundary, ending in an
