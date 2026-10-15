@@ -369,10 +369,11 @@ const legacyAvatarKey = "76916743.gif"
 
 // LegacyLink is a bucket URL resolved to the web route that replaces it.
 type LegacyLink struct {
-	Kind   LegacyLinkKind
-	NewURL string
+	Kind    LegacyLinkKind
+	NewURL  string
+	GuildID string // set for LegacyFile and LegacyProfileImage
 	// Set for LegacyProfileImage.
-	GuildID, TemplateName, UserID string
+	TemplateName, UserID string
 }
 
 // ResolveLegacyLink maps a direct or presigned bucket URL to its stable web
@@ -399,7 +400,7 @@ func (c *Client) ResolveLegacyLink(raw string) LegacyLink {
 		key = key[:i]
 	}
 	if kind, guildID, name, ok := sprobot.ParseFileKey(key); ok {
-		return LegacyLink{Kind: LegacyFile, NewURL: c.webEndpoint + sprobot.FileWebPath(kind, guildID, name)}
+		return LegacyLink{Kind: LegacyFile, NewURL: c.webEndpoint + sprobot.FileWebPath(kind, guildID, name), GuildID: guildID}
 	}
 	if guildID, tmpl, userID, ok := sprobot.ParseProfileImageKey(key); ok {
 		return LegacyLink{

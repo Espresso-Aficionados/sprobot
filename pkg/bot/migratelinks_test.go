@@ -130,7 +130,11 @@ func TestMigratePlanSkips(t *testing.T) {
 		"unknown template": {Embeds: []discord.Embed{{
 			Image: &discord.EmbedResource{URL: bucket + "images/1/Nope/2.jpg"},
 		}}},
-		"external": {Content: "https://example.com/a.png"},
+		"external":           {Content: "https://example.com/a.png"},
+		"other guild's file": {Content: bucket + "mod_files/9/" + migrateTestName + ".png"},
+		"other guild's profile": {Embeds: []discord.Embed{{
+			Image: &discord.EmbedResource{URL: bucket + "images/9/Coffee%20Setup/2.jpg"},
+		}}},
 	}
 	for name, msg := range tests {
 		if _, ok := m.plan(msg); ok {

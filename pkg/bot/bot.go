@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/disgoorg/disgo"
@@ -56,7 +55,7 @@ type Bot struct {
 	tempRoleConfig       *guildStateStore[tempRoleConfigState]
 	tempRoles            *guildStateStore[tempRoleState]
 	threadHelpConfig     map[snowflake.ID]threadHelpInfo
-	linkMigrationRunning atomic.Bool // temporary: remove with migratelinks.go
+	linkMigrations       sync.Map // guild ID -> running; temporary: remove with migratelinks.go
 }
 
 func New(token string) (*Bot, error) {

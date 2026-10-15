@@ -3,7 +3,7 @@ package bot
 // /config migrate-links rewrites links in messages the bot posted while files
 // were linked straight from the (now private) bucket, pointing them at the web
 // server's stable routes. It is a one-off: remove it, and the
-// linkMigrationRunning field, once every guild has run it.
+// linkMigrations field, once every guild has run it.
 
 import (
 	"context"
@@ -71,8 +71,8 @@ func (b *Bot) handleMigrateLinks(e *events.ApplicationCommandInteractionCreate) 
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
 
-	if !b.linkMigrationRunning.CompareAndSwap(false, true) {
-		botutil.RespondEphemeral(e, "A link migration is already running.")
+	if _, running := b.linkMigrations.LoadOrStore(guildID, struct{}{}); running {
+		botutil.RespondEphemeral(e, "A link migration is already running in this server.")
 		return
 	}
 	b.Log.Info("Link migration started", "user_id", e.User().ID, "guild_id", guildID, "apply", apply)
@@ -84,7 +84,7 @@ func (b *Bot) handleMigrateLinks(e *events.ApplicationCommandInteractionCreate) 
 	botutil.RespondEphemeral(e, mode+". This can take a while; the report will be posted in this channel.")
 
 	go func() {
-		defer b.linkMigrationRunning.Store(false)
+		defer b.linkMigrations.Delete(guildID)
 		defer func() {
 			if r := recover(); r != nil {
 				b.Log.Error("Link migration panicked", "panic", r)
@@ -301,6 +301,11 @@ func (m *linkMigration) rewrite(s string) (string, int) {
 	changed := 0
 	out := linkPattern.ReplaceAllStringFunc(s, func(raw string) string {
 		link := m.b.S3.ResolveLegacyLink(raw)
+		// Only resolve this guild's files: another guild's profile would put
+		// its current image in this guild's message.
+		if (link.Kind == s3client.LegacyFile || link.Kind == s3client.LegacyProfileImage) && link.GuildID != m.guildID.String() {
+			link.Kind = s3client.LegacyUnknown
+		}
 		switch link.Kind {
 		case s3client.LegacyFile:
 			m.files++
@@ -447,7 +452,7 @@ func (m *linkMigration) report() string {
 			fmt.Fprintf(&sb, "- %s\n", s)
 		}
 	}
-	list("Bucket links with no stable route", m.unknown, m.unknownCount)
+	list("Bucket links left alone (no stable route, or another server's file)", m.unknown, m.unknownCount)
 	list("Failed edits", m.failed, len(m.failed))
 	list("The scan was incomplete", m.scanErrors, len(m.scanErrors))
 	if len(m.leftUnarchived) > 0 {
