@@ -1,4 +1,17 @@
-{{define "title"}}{{.TemplateName}} - sprobot{{end}}
+{{define "title"}}{{.Preview.Title}} - sprobot{{end}}
+{{define "meta"}}
+    <meta property="og:site_name" content="sprobot">
+    <meta property="og:title" content="{{.Preview.Title}}">
+    {{- if .Preview.Description}}
+    <meta property="og:description" content="{{.Preview.Description}}">
+    {{- end}}
+    <meta name="theme-color" content="#674736">
+    {{- if .Preview.ImageURL}}
+    <meta property="og:image" content="{{.Preview.ImageURL}}">
+    <meta property="og:image:alt" content="{{.Preview.ImageAlt}}">
+    <meta name="twitter:card" content="summary_large_image">
+    {{- end}}
+{{end}}
 {{define "extra_css"}}
         .card {
             background-color: #2b2d31;

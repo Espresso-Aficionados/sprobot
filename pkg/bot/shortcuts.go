@@ -12,6 +12,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
+	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 const shortcutResponseSlots = 5
@@ -79,7 +80,7 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 		},
 	}
 	if isImageURL(response) {
-		response = b.S3.PresignExisting(context.Background(), response)
+		response = b.S3.PresignExisting(context.Background(), response, s3client.PresignTTLMessage)
 		embed.Image = &discord.EmbedResource{URL: response}
 	} else {
 		embed.Description = response

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -138,13 +139,24 @@ func (c *Client) Bucket() string {
 	return c.bucket
 }
 
-// PresignedURL returns a presigned GET URL for the given S3 key with a 48-hour expiry.
-func (c *Client) PresignedURL(ctx context.Context, s3Key string) (string, error) {
+// Presigned URL lifetimes.
+const (
+	// PresignTTLPage is for URLs rendered into a page that is re-signed on
+	// every load, so they only need to outlive the page's own image fetch.
+	PresignTTLPage = 15 * time.Minute
+	// PresignTTLMessage is for URLs posted into Discord messages, which
+	// Discord's media proxy may re-fetch long after posting. Kept long until
+	// those callers move to stable routes.
+	PresignTTLMessage = 48 * time.Hour
+)
+
+// PresignedURL returns a presigned GET URL for the given S3 key that expires after ttl.
+func (c *Client) PresignedURL(ctx context.Context, s3Key string, ttl time.Duration) (string, error) {
 	out, err := c.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: &c.bucket,
 		Key:    &s3Key,
 	}, func(opts *s3.PresignOptions) {
-		opts.Expires = 48 * time.Hour
+		opts.Expires = ttl
 	})
 	if err != nil {
 		return "", fmt.Errorf("presigning %q: %w", s3Key, err)
@@ -160,9 +172,24 @@ func (c *Client) PresignedURL(ctx context.Context, s3Key string) (string, error)
 //   - Otherwise (external URL) → returned unchanged
 //
 // Best-effort: logs errors and returns the input on failure.
-func (c *Client) PresignExisting(ctx context.Context, urlOrKey string) string {
+func (c *Client) PresignExisting(ctx context.Context, urlOrKey string, ttl time.Duration) string {
+	key, ok := c.objectKey(urlOrKey)
+	if !ok {
+		return urlOrKey
+	}
+	presigned, err := c.PresignedURL(ctx, key, ttl)
+	if err != nil {
+		c.log.Error("PresignExisting: presign failed", "key", key, "error", err)
+		return urlOrKey
+	}
+	return presigned
+}
+
+// objectKey resolves a stored image value to an S3 key in our bucket. It
+// returns false for empty values, external URLs, and unparseable old-style URLs.
+func (c *Client) objectKey(urlOrKey string) (string, bool) {
 	if urlOrKey == "" {
-		return ""
+		return "", false
 	}
 
 	// Old-style full S3 URL: extract the key portion.
@@ -171,29 +198,60 @@ func (c *Client) PresignExisting(ctx context.Context, urlOrKey string) string {
 		raw := strings.TrimPrefix(urlOrKey, prefix)
 		key, err := url.PathUnescape(raw)
 		if err != nil {
-			c.log.Error("PresignExisting: failed to unescape key", "raw", raw, "error", err)
-			return urlOrKey
+			c.log.Error("objectKey: failed to unescape key", "raw", raw, "error", err)
+			return "", false
 		}
-		presigned, err := c.PresignedURL(ctx, key)
-		if err != nil {
-			c.log.Error("PresignExisting: presign failed", "key", key, "error", err)
-			return urlOrKey
-		}
-		return presigned
+		return key, true
 	}
 
 	// Bare S3 key (not an HTTP URL).
 	if !strings.HasPrefix(urlOrKey, "http") {
-		presigned, err := c.PresignedURL(ctx, urlOrKey)
-		if err != nil {
-			c.log.Error("PresignExisting: presign failed", "key", urlOrKey, "error", err)
-			return urlOrKey
-		}
-		return presigned
+		return urlOrKey, true
 	}
 
-	// External URL — return unchanged.
-	return urlOrKey
+	// External URL.
+	return "", false
+}
+
+// ProfileImageURL returns a non-expiring URL for a profile's image, suitable
+// for Discord embeds: images in our bucket go through the web server's
+// Discord-only image route; external URLs are returned unchanged. Returns ""
+// when the profile has no image.
+func (c *Client) ProfileImageURL(tmpl sprobot.Template, guildID, userID string, profile map[string]string) string {
+	value := profile[tmpl.Image.Name]
+	key, ok := c.objectKey(value)
+	if !ok {
+		return value
+	}
+	u := c.webEndpoint + sprobot.ProfileImageWebPath(guildID, tmpl.Name, userID, path.Ext(key))
+	if v := profile[sprobot.ImageVersionKey]; v != "" {
+		u += "?v=" + url.QueryEscape(v)
+	}
+	return u
+}
+
+// OpenImage streams a stored image from our bucket. The caller must close the
+// returned body. Returns ErrNotFound for external URLs and missing objects.
+func (c *Client) OpenImage(ctx context.Context, urlOrKey string) (body io.ReadCloser, contentLength int64, err error) {
+	key, ok := c.objectKey(urlOrKey)
+	if !ok {
+		return nil, 0, ErrNotFound
+	}
+	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &c.bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return nil, 0, ErrNotFound
+		}
+		return nil, 0, fmt.Errorf("fetching image %q: %w", key, err)
+	}
+	var n int64
+	if out.ContentLength != nil {
+		n = *out.ContentLength
+	}
+	return out.Body, n, nil
 }
 
 func cacheKey(templateName, guildID, userID string) string {
@@ -270,9 +328,14 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 	c.log.Info("Saving profile", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 
 	// Step 1: re-host the image if needed
+	submitted := profile[tmpl.Image.Name]
 	userErr, imageURL := c.getImageS3URL(ctx, tmpl, guildID, userID, profile)
 	if imageURL != "" {
 		profile[tmpl.Image.Name] = imageURL
+		if imageURL != submitted {
+			// Freshly re-hosted: bump the version so the stable image URL changes.
+			profile[sprobot.ImageVersionKey] = strconv.FormatInt(time.Now().UnixMilli(), 36)
+		}
 	} else if userErr != "" {
 		// Validation failed — preserve the previously saved image instead of
 		// discarding it.
@@ -280,6 +343,7 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 		if fetchErr == nil {
 			if prev, ok := existing[tmpl.Image.Name]; ok && prev != "" {
 				profile[tmpl.Image.Name] = prev
+				profile[sprobot.ImageVersionKey] = existing[sprobot.ImageVersionKey]
 			} else {
 				delete(profile, tmpl.Image.Name)
 			}
@@ -288,6 +352,9 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 		}
 	} else {
 		delete(profile, tmpl.Image.Name)
+	}
+	if profile[sprobot.ImageVersionKey] == "" || profile[tmpl.Image.Name] == "" {
+		delete(profile, sprobot.ImageVersionKey)
 	}
 
 	// Step 2: save the JSON profile

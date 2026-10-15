@@ -84,11 +84,18 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	if err == nil {
 		if img, ok := existing[tmpl.Image.Name]; ok && img != "" {
 			profile[tmpl.Image.Name] = img
+			profile[sprobot.ImageVersionKey] = existing[sprobot.ImageVersionKey]
 		}
 	}
 
 	for _, field := range tmpl.Fields {
 		profile[field.Name] = e.Data.Text("field_" + field.Name)
+	}
+
+	username := getNickOrName(e.Member())
+	if e.Member() != nil {
+		// Stored so the web page's link preview can say whose profile it is.
+		profile[sprobot.DisplayNameKey] = username
 	}
 
 	// Check for file upload attachment (overrides existing image)
@@ -108,7 +115,6 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 		return
 	}
 
-	username := getNickOrName(e.Member())
 	embed := buildProfileEmbed(tmpl, username, profile, guildStr, userStr, b.S3)
 	err = e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},

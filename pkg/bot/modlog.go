@@ -13,6 +13,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
+	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 const embedSplitSize = 1024
@@ -131,7 +132,7 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 				b.Log.Error("Failed to save mod image", "error", err)
 				permLinks = append(permLinks, att.ProxyURL)
 			} else {
-				permLink = b.S3.PresignExisting(ctx, permLink)
+				permLink = b.S3.PresignExisting(ctx, permLink, s3client.PresignTTLMessage)
 				permLinks = append(permLinks, permLink)
 			}
 		}

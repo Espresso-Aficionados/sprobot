@@ -182,7 +182,7 @@ func (b *Bot) repostSticky(s *stickyMessage) bool {
 	for i := range embeds {
 		if embeds[i].Image != nil {
 			embeds[i].Image = &discord.EmbedResource{
-				URL: b.S3.PresignExisting(context.Background(), embeds[i].Image.URL),
+				URL: b.S3.PresignExisting(context.Background(), embeds[i].Image.URL, s3client.PresignTTLMessage),
 			}
 		}
 	}

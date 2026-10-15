@@ -4,15 +4,22 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"html/template"
+	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/sadbox/sprobot/pkg/s3client"
 	"github.com/sadbox/sprobot/pkg/sprobot"
@@ -29,8 +36,24 @@ type profileField struct {
 type profileData struct {
 	TemplateName string
 	Fields       []profileField
-	ImageURL     string
+	ImageURL     string // presigned, for the page's own <img>
+	Preview      linkPreview
 }
+
+// linkPreview feeds the Open Graph tags Discord reads when unfurling a link.
+// See https://docs.discord.com/developers/link-previews/overview.
+type linkPreview struct {
+	Title       string
+	Description string
+	ImageURL    string // non-expiring, Discord-only image route
+	ImageAlt    string
+}
+
+// Discord trims longer values; truncating ourselves gives a clean ellipsis.
+const (
+	maxPreviewTitleBytes       = 70
+	maxPreviewDescriptionBytes = 350
+)
 
 var pageTemplates map[string]*template.Template
 
@@ -60,6 +83,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handleIndex)
 	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}", handleProfile(s3))
+	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}/{file}", handleProfileImage(s3))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -117,38 +141,143 @@ func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 			return
 		}
 
-		// Look up the image field name from hardcoded templates.
-		imageFieldName := sprobot.ImageField
-		for _, tmpls := range sprobot.AllTemplates() {
-			for _, tmpl := range tmpls {
-				if tmpl.Name == templateName {
-					imageFieldName = tmpl.Image.Name
-				}
-			}
+		renderPage(w, "profile.html", buildProfileData(r.Context(), s3, guildID, userID, lookupTemplate(templateName, profile), profile))
+	}
+}
+
+func buildProfileData(ctx context.Context, s3 *s3client.Client, guildID, userID string, tmpl sprobot.Template, profile map[string]string) profileData {
+	var fields []profileField
+	var lines []string
+	for _, f := range tmpl.Fields {
+		value := profile[f.Name]
+		if value == "" {
+			continue
+		}
+		fields = append(fields, profileField{Name: f.Name, Value: value})
+		lines = append(lines, f.Name+": "+value)
+	}
+
+	title := tmpl.Name
+	if name := profile[sprobot.DisplayNameKey]; name != "" {
+		title += " for " + name
+	}
+
+	return profileData{
+		TemplateName: tmpl.Name,
+		Fields:       fields,
+		ImageURL:     s3.PresignExisting(ctx, profile[tmpl.Image.Name], s3client.PresignTTLPage),
+		Preview: linkPreview{
+			Title:       truncateBytes(title, maxPreviewTitleBytes),
+			Description: truncateBytes(strings.Join(lines, "\n"), maxPreviewDescriptionBytes),
+			ImageURL:    s3.ProfileImageURL(tmpl, guildID, userID, profile),
+			ImageAlt:    tmpl.Image.Name,
+		},
+	}
+}
+
+// handleProfileImage serves a profile's image at a stable, non-expiring URL —
+// but only to Discord, so embeds keep working without us becoming an image
+// host. Anyone else is redirected to the profile page, whose image is a
+// time-limited presigned URL; an <img> pointed here gets HTML and renders
+// nothing.
+func handleProfileImage(s3 *s3client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildID := r.PathValue("guildID")
+		templateName := r.PathValue("templateName")
+		userID := r.PathValue("userID")
+
+		if !strings.HasPrefix(r.PathValue("file"), "image") {
+			render404(w)
+			return
 		}
 
-		var fields []profileField
-		var imageURL string
-		keys := make([]string, 0, len(profile))
-		for k := range profile {
+		// The response depends on the User-Agent; keep shared caches from mixing them up.
+		w.Header().Set("Vary", "User-Agent")
+		if !isDiscordFetcher(r.UserAgent()) {
+			http.Redirect(w, r, "/"+sprobot.ProfileWebPath(guildID, templateName, userID), http.StatusFound)
+			return
+		}
+
+		profile, err := s3.FetchProfileSimple(r.Context(), guildID, templateName, userID)
+		if err != nil {
+			render404(w)
+			return
+		}
+		value := profile[lookupTemplate(templateName, profile).Image.Name]
+		contentType := mime.TypeByExtension(path.Ext(value))
+		if !strings.HasPrefix(contentType, "image/") {
+			render404(w)
+			return
+		}
+
+		body, size, err := s3.OpenImage(r.Context(), value)
+		if err != nil {
+			if !errors.Is(err, s3client.ErrNotFound) {
+				log.Printf("Image fetch error: %v", err)
+			}
+			render404(w)
+			return
+		}
+		defer body.Close()
+
+		w.Header().Set("Content-Type", contentType)
+		if size > 0 {
+			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		}
+		// The URL carries an image version, so a new upload gets a new URL.
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		if _, err := io.Copy(w, body); err != nil {
+			log.Printf("Image stream error: %v", err)
+		}
+	}
+}
+
+// isDiscordFetcher matches Discord's link unfurler and media proxy. It is
+// trivially spoofable; the point is that browsers can't spoof it from an
+// <img> tag, which is what hotlinking needs.
+func isDiscordFetcher(userAgent string) bool {
+	ua := strings.ToLower(userAgent)
+	return strings.Contains(ua, "discordbot") || strings.Contains(ua, "discordapp")
+}
+
+// lookupTemplate finds a hardcoded template by name. Profiles stored under a
+// template that no longer exists fall back to rendering every stored field in
+// key order.
+func lookupTemplate(name string, profile map[string]string) sprobot.Template {
+	for _, tmpls := range sprobot.AllTemplates() {
+		for _, tmpl := range tmpls {
+			if tmpl.Name == name {
+				return tmpl
+			}
+		}
+	}
+
+	tmpl := sprobot.Template{Name: name, Image: sprobot.Field{Name: sprobot.ImageField}}
+	keys := make([]string, 0, len(profile))
+	for k := range profile {
+		if k != tmpl.Image.Name && !strings.HasPrefix(k, "_") {
 			keys = append(keys, k)
 		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			value := profile[key]
-			if key == imageFieldName && value != "" {
-				imageURL = s3.PresignExisting(r.Context(), value)
-			} else {
-				fields = append(fields, profileField{Name: key, Value: value})
-			}
-		}
-
-		renderPage(w, "profile.html", profileData{
-			TemplateName: templateName,
-			Fields:       fields,
-			ImageURL:     imageURL,
-		})
 	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		tmpl.Fields = append(tmpl.Fields, sprobot.Field{Name: k})
+	}
+	return tmpl
+}
+
+// truncateBytes shortens s to at most n bytes on a rune boundary, ending in an
+// ellipsis when anything was cut.
+func truncateBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	const ellipsis = "…"
+	cut := n - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return strings.TrimRightFunc(s[:cut], unicode.IsSpace) + ellipsis
 }
 
 // --- Rendering ---

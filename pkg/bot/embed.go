@@ -1,8 +1,6 @@
 package bot
 
 import (
-	"context"
-
 	"github.com/disgoorg/disgo/discord"
 
 	"github.com/sadbox/sprobot/pkg/s3client"
@@ -31,8 +29,7 @@ func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[strin
 		})
 	}
 
-	if img, ok := profile[tmpl.Image.Name]; ok && img != "" {
-		img = s3.PresignExisting(context.Background(), img)
+	if img := s3.ProfileImageURL(tmpl, guildID, userID, profile); img != "" {
 		embed.Image = &discord.EmbedResource{
 			URL: img,
 		}
