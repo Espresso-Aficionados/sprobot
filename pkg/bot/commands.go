@@ -385,6 +385,21 @@ func (b *Bot) registerAllCommands() error {
 					},
 				},
 			},
+			// Temporary: remove with migratelinks.go.
+			discord.ApplicationCommandOptionSubCommandGroup{
+				Name:        "migrate-links",
+				Description: "Point old bot messages' file links at stable links",
+				Options: []discord.ApplicationCommandOptionSubCommand{
+					{
+						Name:        "dry-run",
+						Description: "Report what would change without editing anything",
+					},
+					{
+						Name:        "run",
+						Description: "Edit old bot messages to use stable links",
+					},
+				},
+			},
 			discord.ApplicationCommandOptionSubCommandGroup{
 				Name:        "temprole",
 				Description: "Configure temp role whitelist",
@@ -720,6 +735,8 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			b.handleEventLogConfig(e)
 		case "modlog":
 			b.handleModLogConfig(e)
+		case "migrate-links":
+			b.handleMigrateLinks(e)
 		case "temprole":
 			b.handleTempRoleConfig(e)
 		case "topposters":

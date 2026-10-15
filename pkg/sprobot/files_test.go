@@ -41,6 +41,21 @@ func TestFileKeyRejects(t *testing.T) {
 	}
 }
 
+func TestParseProfileImageKey(t *testing.T) {
+	g, tmpl, u, ok := ParseProfileImageKey("images/1/Coffee Setup/2.jpg")
+	if !ok || g != "1" || tmpl != "Coffee Setup" || u != "2" {
+		t.Errorf("ParseProfileImageKey = %q %q %q %v", g, tmpl, u, ok)
+	}
+	for _, key := range []string{
+		"images/1/Coffee Setup", "images/1//2.jpg", "images/x/Coffee Setup/2.jpg",
+		"images/1/Coffee Setup/abc.jpg", "mod_files/1/Coffee Setup/2.jpg", "images/1/a/b/2.jpg",
+	} {
+		if _, _, _, ok := ParseProfileImageKey(key); ok {
+			t.Errorf("ParseProfileImageKey(%q) accepted", key)
+		}
+	}
+}
+
 func TestSafeFileExt(t *testing.T) {
 	for ext, want := range map[string]string{
 		".png": ".png", ".JPEG": ".JPEG", "": "", ".": "", ".tar.gz": "", ".a b": "", ".verylongextension": "",
