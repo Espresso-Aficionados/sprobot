@@ -24,3 +24,6 @@
 .DS_Store
 config/*
 !config/example.env
+
+# Claude Code local settings and worktrees
+.claude/
