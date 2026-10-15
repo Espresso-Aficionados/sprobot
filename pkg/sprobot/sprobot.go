@@ -20,6 +20,9 @@ const (
 
 const WebEndpoint = "https://bot.espressoaf.com/"
 
+// AvatarWebPath is the bot's avatar, served by the web server.
+const AvatarWebPath = "static/sprobot.png"
+
 // WebEndpointFromEnv returns the web endpoint URL.
 // It reads the WEB_ENDPOINT env var, defaulting to the production URL.
 func WebEndpointFromEnv() string {

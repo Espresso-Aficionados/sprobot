@@ -300,7 +300,8 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	}
 
 	// Re-host attachments to S3
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), botutil.DeferredWorkBudget)
+	defer cancel()
 	guildStr := fmt.Sprintf("%d", guildID)
 	var fileURLs []string
 	for _, att := range msg.Attachments {

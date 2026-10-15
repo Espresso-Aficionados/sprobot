@@ -44,6 +44,15 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write(data)
 
+	case http.MethodHead:
+		data, ok := f.Objects[key]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+		w.WriteHeader(http.StatusOK)
+
 	case http.MethodPut:
 		data, _ := io.ReadAll(r.Body)
 		f.Objects[key] = data

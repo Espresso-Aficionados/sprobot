@@ -3,12 +3,13 @@ package s3client
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand/v2"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -28,7 +29,25 @@ import (
 
 const maxImageSize = 10 * 1024 * 1024 // 10 MB
 
+// MaxFileSize is the largest attachment Discord accepts from anyone (full
+// Nitro), so any file posted in Discord can be saved whole.
+const MaxFileSize = 500 << 20
+
+// ErrFileTooLarge is returned when a file exceeds MaxFileSize.
+var ErrFileTooLarge = errors.New("file too large")
+
+// fileSizeLimit is MaxFileSize, as a variable so tests can lower it.
+var fileSizeLimit int64 = MaxFileSize
+
 var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// downloadClient fetches files to save. Saves of large files can take minutes,
+// so there is no overall timeout; callers bound them with their context.
+var downloadClient = func() *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = 30 * time.Second
+	return &http.Client{Transport: t}
+}()
 
 // urlValidator is the function used to validate URLs before fetching.
 // It is a variable so tests can override it.
@@ -66,7 +85,8 @@ var ErrNotFound = errors.New("profile not found")
 
 func isNotFound(err error) bool {
 	var nsk *s3types.NoSuchKey
-	return errors.As(err, &nsk) || strings.Contains(err.Error(), "NoSuchKey")
+	var nf *s3types.NotFound // HeadObject's error, which has no body to carry NoSuchKey
+	return errors.As(err, &nsk) || errors.As(err, &nf) || strings.Contains(err.Error(), "NoSuchKey")
 }
 
 type Client struct {
@@ -134,21 +154,24 @@ func NewDirect(s3Client *s3.Client, bucket, endpoint string, cache *lru.Cache[st
 	}
 }
 
+// Origin returns the scheme and host that presigned URLs point at.
+func (c *Client) Origin() string {
+	u, err := url.Parse(c.endpoint)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 // Bucket returns the configured S3 bucket name.
 func (c *Client) Bucket() string {
 	return c.bucket
 }
 
-// Presigned URL lifetimes.
-const (
-	// PresignTTLPage is for URLs rendered into a page that is re-signed on
-	// every load, so they only need to outlive the page's own image fetch.
-	PresignTTLPage = 15 * time.Minute
-	// PresignTTLMessage is for URLs posted into Discord messages, which
-	// Discord's media proxy may re-fetch long after posting. Kept long until
-	// those callers move to stable routes.
-	PresignTTLMessage = 48 * time.Hour
-)
+// PresignTTLPage is the lifetime of presigned URLs, which are only ever
+// rendered into a page that re-signs them on every load, so they only need to
+// outlive the page's own fetch.
+const PresignTTLPage = 15 * time.Minute
 
 // PresignedURL returns a presigned GET URL for the given S3 key that expires after ttl.
 func (c *Client) PresignedURL(ctx context.Context, s3Key string, ttl time.Duration) (string, error) {
@@ -228,6 +251,60 @@ func (c *Client) ProfileImageURL(tmpl sprobot.Template, guildID, userID string, 
 		u += "?v=" + url.QueryEscape(v)
 	}
 	return u
+}
+
+// FileURL maps a stored reference to a saved file (a bare key or an old bucket
+// URL, presigned or not) to its permanent web route. Anything else, such as
+// external URLs or plain text, is returned unchanged.
+func (c *Client) FileURL(stored string) string {
+	key, ok := c.objectKey(strings.TrimSpace(stored))
+	if !ok {
+		return stored
+	}
+	if i := strings.IndexByte(key, '?'); i >= 0 {
+		key = key[:i]
+	}
+	kind, guildID, name, ok := sprobot.ParseFileKey(key)
+	if !ok {
+		return stored
+	}
+	return c.webEndpoint + sprobot.FileWebPath(kind, guildID, name)
+}
+
+// PresignFile presigns a GET for key that overrides the response's
+// Content-Type and Content-Disposition, since stored objects carry no
+// reliable type of their own.
+func (c *Client) PresignFile(ctx context.Context, key string, ttl time.Duration, contentType, disposition string) (string, error) {
+	out, err := c.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket:                     &c.bucket,
+		Key:                        &key,
+		ResponseContentType:        &contentType,
+		ResponseContentDisposition: &disposition,
+	}, func(opts *s3.PresignOptions) {
+		opts.Expires = ttl
+	})
+	if err != nil {
+		return "", fmt.Errorf("presigning %q: %w", key, err)
+	}
+	return out.URL, nil
+}
+
+// StatFile returns the size of an object in our bucket, or ErrNotFound.
+func (c *Client) StatFile(ctx context.Context, key string) (int64, error) {
+	out, err := c.s3.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: &c.bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return 0, ErrNotFound
+		}
+		return 0, fmt.Errorf("stat %q: %w", key, err)
+	}
+	if out.ContentLength == nil {
+		return 0, nil
+	}
+	return *out.ContentLength, nil
 }
 
 // OpenImage streams a stored image from our bucket. The caller must close the
@@ -407,56 +484,80 @@ func (c *Client) DeleteProfile(ctx context.Context, tmpl sprobot.Template, guild
 	return nil
 }
 
+// saveRemoteFile downloads fileURL whole and stores it under
+// {s3Prefix}/{guildID}/, returning the new key. Files over MaxFileSize fail
+// with ErrFileTooLarge rather than being truncated.
 func (c *Client) saveRemoteFile(ctx context.Context, guildID, fileURL, s3Prefix string) (string, error) {
 	if err := urlValidator(fileURL); err != nil {
-		c.log.Info("URL validation failed", "url", fileURL, "error", err)
-		return fileURL, nil
+		return "", fmt.Errorf("URL validation failed: %w", err)
 	}
-
-	resp, err := httpClient.Get(fileURL)
-	if err != nil {
-		c.log.Info("Unable to fetch from the link provided", "url", fileURL, "error", err)
-		return fileURL, nil
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize))
-	if err != nil {
-		c.log.Info("Unable to read response body", "url", fileURL, "error", err)
-		return fileURL, nil
-	}
-
-	randomID := randomString(30)
 	parsed, err := url.Parse(fileURL)
 	if err != nil {
-		c.log.Info("Unable to parse URL for extension", "url", fileURL, "error", err)
-		return fileURL, nil
+		return "", fmt.Errorf("parsing URL: %w", err)
 	}
-	ext := path.Ext(parsed.Path)
-	s3Path := fmt.Sprintf("%s/%s/%s%s", s3Prefix, guildID, randomID, ext)
 
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("building request: %w", err)
+	}
+	resp, err := downloadClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetching file: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetching file: HTTP %d", resp.StatusCode)
+	}
+	if resp.ContentLength > fileSizeLimit {
+		return "", fmt.Errorf("%w: %d bytes", ErrFileTooLarge, resp.ContentLength)
+	}
+
+	// Spool to disk rather than memory; a seekable body also lets the SDK sign
+	// the payload, which a raw network stream would not.
+	tmp, err := os.CreateTemp("", "sprobot-file-*")
+	if err != nil {
+		return "", fmt.Errorf("creating temp file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+
+	size, err := io.Copy(tmp, io.LimitReader(resp.Body, fileSizeLimit+1))
+	if err != nil {
+		return "", fmt.Errorf("downloading file: %w", err)
+	}
+	if size > fileSizeLimit {
+		return "", fmt.Errorf("%w: over %d bytes", ErrFileTooLarge, fileSizeLimit)
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("rewinding temp file: %w", err)
+	}
+
+	ext := sprobot.SafeFileExt(path.Ext(parsed.Path))
+	contentType := sprobot.InlineContentType(ext)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	s3Path := fmt.Sprintf("%s/%s/%s%s", s3Prefix, guildID, randomString(30), ext)
 	_, err = c.s3.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: &c.bucket,
-		Key:    &s3Path,
-		Body:   bytes.NewReader(data),
+		Bucket:        &c.bucket,
+		Key:           &s3Path,
+		Body:          tmp,
+		ContentLength: &size,
+		ContentType:   &contentType,
 	})
 	if err != nil {
-		c.log.Info("Unable to upload to s3", "error", err)
-		return fileURL, nil
+		return "", fmt.Errorf("uploading to s3: %w", err)
 	}
-
 	return s3Path, nil
 }
 
-func (c *Client) SaveModImage(ctx context.Context, guildID string, fileURL string) (string, error) {
+func (c *Client) SaveModFile(ctx context.Context, guildID string, fileURL string) (string, error) {
 	c.log.Info("Saving file to mod log", "guild_id", guildID)
 	s3Path, err := c.saveRemoteFile(ctx, guildID, fileURL, "mod_files")
 	if err != nil {
 		return "", err
 	}
-	if s3Path != fileURL {
-		c.log.Info("Mod image saved", "guild_id", guildID, "s3_key", s3Path)
-	}
+	c.log.Info("Mod file saved", "guild_id", guildID, "s3_key", s3Path)
 	return s3Path, nil
 }
 
@@ -469,9 +570,7 @@ func (c *Client) SaveShortcutImage(ctx context.Context, guildID string, fileURL 
 	if err != nil {
 		return "", err
 	}
-	if s3Path != fileURL {
-		c.log.Info("Shortcut image saved", "guild_id", guildID, "s3_key", s3Path)
-	}
+	c.log.Info("Shortcut image saved", "guild_id", guildID, "s3_key", s3Path)
 	return s3Path, nil
 }
 
@@ -592,46 +691,21 @@ func (c *Client) SaveThreadMemberCounts(ctx context.Context, guildID string, dat
 }
 
 func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (string, error) {
-	if err := urlValidator(fileURL); err != nil {
-		return "", fmt.Errorf("URL validation failed: %w", err)
-	}
-
-	resp, err := httpClient.Get(fileURL)
-	if err != nil {
-		return "", fmt.Errorf("fetching file: %w", err)
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize))
-	if err != nil {
-		return "", fmt.Errorf("reading file: %w", err)
-	}
-
-	randomID := randomString(30)
-	parsed, err := url.Parse(fileURL)
-	if err != nil {
-		return "", fmt.Errorf("parsing URL: %w", err)
-	}
-	ext := path.Ext(parsed.Path)
-	s3Path := fmt.Sprintf("sticky_files/%s/%s%s", guildID, randomID, ext)
-
-	_, err = c.s3.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: &c.bucket,
-		Key:    &s3Path,
-		Body:   bytes.NewReader(data),
-	})
-	if err != nil {
-		return "", fmt.Errorf("uploading to s3: %w", err)
-	}
-
-	return s3Path, nil
+	return c.saveRemoteFile(ctx, guildID, fileURL, "sticky_files")
 }
 
+// randomString returns n characters from crypto/rand. Saved-file names are the
+// only thing keeping their permanent links from being guessed.
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	limit := big.NewInt(int64(len(letters)))
 	b := make([]byte, n)
 	for i := range b {
-		b[i] = letters[rand.IntN(len(letters))]
+		idx, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			panic(fmt.Sprintf("crypto/rand failed: %v", err))
+		}
+		b[i] = letters[idx.Int64()]
 	}
 	return string(b)
 }

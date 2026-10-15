@@ -7,7 +7,7 @@ import (
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
-const footerIconURL = "https://profile-bot.us-southeast-1.linodeobjects.com/76916743.gif"
+const footerIconURL = sprobot.WebEndpoint + sprobot.AvatarWebPath
 
 func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[string]string, guildID, userID string, s3 *s3client.Client) discord.Embed {
 	profileURL := buildProfileURL(tmpl, guildID, userID)

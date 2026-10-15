@@ -15,21 +15,8 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	funcMap := template.FuncMap{
-		"add": func(a, b int) int { return a + b },
-		"toJSON": func(v any) template.JS {
-			b, _ := json.Marshal(v)
-			return template.JS(b)
-		},
-	}
-
-	pageTemplates = make(map[string]*template.Template)
-	for _, name := range []string{"index.html", "profile.html", "404.html"} {
-		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/"+name)
-		if err != nil {
-			log.Fatalf("Failed to parse template %s: %v", name, err)
-		}
-		pageTemplates[name] = t
+	if err := loadTemplates(); err != nil {
+		log.Fatal(err)
 	}
 	os.Exit(m.Run())
 }
@@ -191,7 +178,7 @@ func TestBaseTemplateStructure(t *testing.T) {
 		`<meta name="viewport"`,
 		`class="header"`,
 		`class="container"`,
-		"76916743.gif",              // sprobot icon
+		`src="/static/sprobot.png"`, // sprobot icon
 		`<a href="/">`,              // home link
 		`background-color: #2b2d31`, // Discord dark theme
 	}
@@ -432,6 +419,9 @@ func newTestServer(t *testing.T) (*testutil.FakeS3, *http.ServeMux) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}", handleProfile(s3))
 	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}/{file}", handleProfileImage(s3))
+	mux.HandleFunc("GET /files/{kind}/{guildID}/{name}", handleFile(s3))
+	mux.HandleFunc("GET /files/{kind}/{guildID}/{name}/view", handleFileView(s3))
+	mux.HandleFunc("GET /"+sprobot.AvatarWebPath, handleAvatar)
 	return fake, mux
 }
 

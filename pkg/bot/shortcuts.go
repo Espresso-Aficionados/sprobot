@@ -12,7 +12,6 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
 const shortcutResponseSlots = 5
@@ -79,9 +78,10 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 			IconURL: e.User().EffectiveAvatarURL(),
 		},
 	}
-	if isImageURL(response) {
-		response = b.S3.PresignExisting(context.Background(), response, s3client.PresignTTLMessage)
-		embed.Image = &discord.EmbedResource{URL: response}
+	// Re-hosted images are stored as bare keys; map them to their permanent
+	// link first so they embed rather than posting the key as text.
+	if u := b.S3.FileURL(response); isImageURL(u) {
+		embed.Image = &discord.EmbedResource{URL: u}
 	} else {
 		embed.Description = response
 	}
@@ -240,6 +240,13 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 		return
 	}
 
+	// Defer: re-hosting images below can outlast the 3-second response window.
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer shortcut config response", "error", err)
+		return
+	}
+	respond := func(content string) { b.ephemeralFollowup(e.Token(), content) }
+
 	var responses []string
 	for i := range shortcutResponseSlots {
 		text := e.Data.Text(fmt.Sprintf("response_%d", i))
@@ -249,12 +256,13 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 	}
 
 	if len(responses) == 0 {
-		botutil.RespondEphemeral(e, "No responses provided. Shortcut not saved.")
+		respond("No responses provided. Shortcut not saved.")
 		return
 	}
 
 	// Re-host image URLs to S3 so they don't expire.
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), botutil.DeferredWorkBudget)
+	defer cancel()
 	guildStr := fmt.Sprintf("%d", *guildID)
 	for i, resp := range responses {
 		if isImageURL(resp) {
@@ -269,14 +277,14 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 
 	st := b.shortcuts.get(*guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "Something went wrong.")
+		respond("Something went wrong.")
 		return
 	}
 
 	st.mu.Lock()
 	if _, exists := st.Shortcuts[name]; !exists && len(st.Shortcuts) >= maxShortcutsPerGuild {
 		st.mu.Unlock()
-		botutil.RespondEphemeral(e, fmt.Sprintf("Maximum of %d shortcuts reached.", maxShortcutsPerGuild))
+		respond(fmt.Sprintf("Maximum of %d shortcuts reached.", maxShortcutsPerGuild))
 		return
 	}
 	st.Shortcuts[name] = shortcutEntry{Responses: responses}
@@ -285,13 +293,23 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 
 	if err := b.shortcuts.persist(*guildID); err != nil {
 		b.Log.Error("Failed to save shortcut data", "guild_id", *guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save shortcut.")
+		respond("Failed to save shortcut.")
 		return
 	}
 
 	b.Log.Info("Shortcut saved", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name, "responses", len(responses))
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Shortcut %q saved with %d response(s).", name, len(responses)))
+	respond(fmt.Sprintf("Shortcut %q saved with %d response(s).", name, len(responses)))
+}
+
+// ephemeralFollowup answers a deferred interaction.
+func (b *Bot) ephemeralFollowup(token, content string) {
+	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, token, discord.MessageCreate{
+		Content: content,
+		Flags:   discord.MessageFlagEphemeral,
+	}); err != nil {
+		b.Log.Error("Failed to send follow-up", "error", err)
+	}
 }
 
 func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteractionCreate) {
