@@ -62,6 +62,20 @@ func ParseFileKey(key string) (kind, guildID, name string, ok bool) {
 	return "", "", "", false
 }
 
+// ParseProfileImageKey parses a profile image key,
+// images/{guildID}/{templateName}/{userID}.{ext}.
+func ParseProfileImageKey(key string) (guildID, templateName, userID string, ok bool) {
+	parts := strings.Split(key, "/")
+	if len(parts) != 4 || parts[0] != "images" || !guildIDRE.MatchString(parts[1]) || parts[2] == "" {
+		return "", "", "", false
+	}
+	userID = strings.TrimSuffix(parts[3], path.Ext(parts[3]))
+	if !guildIDRE.MatchString(userID) {
+		return "", "", "", false
+	}
+	return parts[1], parts[2], userID, true
+}
+
 // FileWebPath is the permanent web route for a saved file.
 func FileWebPath(kind, guildID, name string) string {
 	return fmt.Sprintf("files/%s/%s/%s", kind, guildID, name)

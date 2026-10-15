@@ -55,6 +55,7 @@ type Bot struct {
 	tempRoleConfig       *guildStateStore[tempRoleConfigState]
 	tempRoles            *guildStateStore[tempRoleState]
 	threadHelpConfig     map[snowflake.ID]threadHelpInfo
+	linkMigrations       sync.Map // guild ID -> running; temporary: remove with migratelinks.go
 }
 
 func New(token string) (*Bot, error) {

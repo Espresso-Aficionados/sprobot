@@ -352,6 +352,85 @@ func (c *Client) FileURL(stored string) string {
 	return c.webEndpoint + sprobot.FileWebPath(kind, guildID, name)
 }
 
+// LegacyLinkKind classifies a URL found in a message posted while files were
+// linked straight from the bucket.
+type LegacyLinkKind int
+
+const (
+	LegacyNone         LegacyLinkKind = iota // not a link into our bucket
+	LegacyFile                               // a saved mod, shortcut, or sticky file
+	LegacyProfileImage                       // a profile image
+	LegacyAvatar                             // the bot avatar, once hosted in the bucket
+	LegacyUnknown                            // our bucket's host, but no stable route for it
+)
+
+// legacyAvatarKey is where the bot avatar lived before the web server hosted it.
+const legacyAvatarKey = "76916743.gif"
+
+// LegacyLink is a bucket URL resolved to the web route that replaces it.
+type LegacyLink struct {
+	Kind    LegacyLinkKind
+	NewURL  string
+	GuildID string // set for LegacyFile and LegacyProfileImage
+	// Set for LegacyProfileImage.
+	TemplateName, UserID string
+}
+
+// ResolveLegacyLink maps a direct or presigned bucket URL to its stable web
+// route. URLs on the bucket's host that it can't map are LegacyUnknown, so
+// callers can report them.
+func (c *Client) ResolveLegacyLink(raw string) LegacyLink {
+	origin := c.Origin()
+	if origin == "" || !strings.HasPrefix(raw, origin+"/") {
+		// Same storage provider under another hostname: possibly an old URL
+		// form, so surface it rather than silently skipping it.
+		if u, err := url.Parse(raw); err == nil && sameProvider(u.Hostname(), origin) {
+			return LegacyLink{Kind: LegacyUnknown}
+		}
+		return LegacyLink{}
+	}
+	if u, err := url.Parse(raw); err == nil && u.Path == "/"+legacyAvatarKey {
+		return LegacyLink{Kind: LegacyAvatar, NewURL: c.webEndpoint + sprobot.AvatarWebPath}
+	}
+	key, ok := c.objectKey(raw)
+	if !ok {
+		return LegacyLink{Kind: LegacyUnknown}
+	}
+	if i := strings.IndexByte(key, '?'); i >= 0 {
+		key = key[:i]
+	}
+	if kind, guildID, name, ok := sprobot.ParseFileKey(key); ok {
+		return LegacyLink{Kind: LegacyFile, NewURL: c.webEndpoint + sprobot.FileWebPath(kind, guildID, name), GuildID: guildID}
+	}
+	if guildID, tmpl, userID, ok := sprobot.ParseProfileImageKey(key); ok {
+		return LegacyLink{
+			Kind:         LegacyProfileImage,
+			NewURL:       c.webEndpoint + sprobot.ProfileImageWebPath(guildID, tmpl, userID, path.Ext(key)),
+			GuildID:      guildID,
+			TemplateName: tmpl,
+			UserID:       userID,
+		}
+	}
+	return LegacyLink{Kind: LegacyUnknown}
+}
+
+// sameProvider reports whether host and origin's host share their last two
+// labels, e.g. both under linodeobjects.com.
+func sameProvider(host, origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	base := func(h string) string {
+		labels := strings.Split(h, ".")
+		if len(labels) < 2 || net.ParseIP(h) != nil {
+			return h
+		}
+		return strings.Join(labels[len(labels)-2:], ".")
+	}
+	return host != "" && base(host) == base(u.Hostname())
+}
+
 // PresignFile presigns a GET for key that overrides the response's
 // Content-Type and Content-Disposition, since stored objects carry no
 // reliable type of their own.

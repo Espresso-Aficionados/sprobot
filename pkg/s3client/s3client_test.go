@@ -764,6 +764,59 @@ func TestFileURL(t *testing.T) {
 	}
 }
 
+func TestResolveLegacyLink(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+	const name = "abcdefghijABCDEFGHIJ0123456789"
+	bucket := server.URL + "/test-bucket/"
+	profileImage := sprobot.WebEndpoint + "profiles/1/Coffee%20Setup/2/image.jpg"
+
+	tests := []struct {
+		raw    string
+		kind   LegacyLinkKind
+		newURL string
+	}{
+		{bucket + "mod_files/1/" + name + "..png", LegacyFile, sprobot.WebEndpoint + "files/mod/1/" + name + "..png"},
+		{bucket + "shortcut_files/1/" + name + ".png?X-Amz-Signature=abc", LegacyFile, sprobot.WebEndpoint + "files/shortcut/1/" + name + ".png"},
+		{bucket + "images/1/Coffee%20Setup/2.jpg", LegacyProfileImage, profileImage},
+		{bucket + "images/1/Coffee%20Setup/2.jpg?X-Amz-Expires=300", LegacyProfileImage, profileImage},
+		{server.URL + "/76916743.gif", LegacyAvatar, sprobot.WebEndpoint + sprobot.AvatarWebPath},
+		{bucket + "profiles/1/Coffee%20Setup/2.json", LegacyUnknown, ""},
+		{server.URL + "/elsewhere/x.png", LegacyUnknown, ""},
+		{"https://cdn.discordapp.com/attachments/1/2/a.png", LegacyNone, ""},
+		{"https://bot.espressoaf.com/files/mod/1/" + name, LegacyNone, ""},
+	}
+	for _, tt := range tests {
+		got := c.ResolveLegacyLink(tt.raw)
+		if got.Kind != tt.kind || got.NewURL != tt.newURL {
+			t.Errorf("ResolveLegacyLink(%q) = %v %q, want %v %q", tt.raw, got.Kind, got.NewURL, tt.kind, tt.newURL)
+		}
+	}
+
+	got := c.ResolveLegacyLink(bucket + "images/1/Coffee%20Setup/2.jpg")
+	if got.GuildID != "1" || got.TemplateName != "Coffee Setup" || got.UserID != "2" {
+		t.Errorf("profile image parts = %q %q %q", got.GuildID, got.TemplateName, got.UserID)
+	}
+}
+
+func TestSameProvider(t *testing.T) {
+	origin := "https://profile-bot.us-southeast-1.linodeobjects.com"
+	for host, want := range map[string]bool{
+		"us-southeast-1.linodeobjects.com":  true,
+		"other.us-east-1.linodeobjects.com": true,
+		"cdn.discordapp.com":                false,
+		"linodeobjects.com.evil.example":    false,
+		"":                                  false,
+	} {
+		if got := sameProvider(host, origin); got != want {
+			t.Errorf("sameProvider(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
 func TestStatFile(t *testing.T) {
 	fake := newFakeS3()
 	server := httptest.NewServer(fake)
