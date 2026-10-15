@@ -97,7 +97,9 @@ func TestBlockedIP(t *testing.T) {
 	for addr, want := range map[string]bool{
 		"127.0.0.1": true, "::1": true, "::ffff:127.0.0.1": true, "10.1.2.3": true, "192.168.0.1": true,
 		"169.254.169.254": true, "fe80::1": true, "0.0.0.0": true, "224.0.0.1": true,
-		"8.8.8.8": false, "2606:4700::1111": false,
+		"100.64.0.1": true, "0.1.2.3": true, "192.0.0.8": true, "198.18.0.1": true, "240.0.0.1": true,
+		"fc00::1": true, "64:ff9b::a9fe:a9fe": true, "64:ff9b:1::7f00:1": true, "2002:7f00:1::": true,
+		"8.8.8.8": false, "2606:4700::1111": false, "64:ff9b::808:808": false, "2002:808:808::": false,
 	} {
 		if got := blockedIP(net.ParseIP(addr)); got != want {
 			t.Errorf("blockedIP(%s) = %v, want %v", addr, got, want)

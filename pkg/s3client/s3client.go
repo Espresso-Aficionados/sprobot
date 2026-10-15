@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -77,9 +78,55 @@ func checkDialAddress(address string) error {
 	return nil
 }
 
+// blockedPrefixes are non-public ranges the net.IP predicates don't cover.
+var blockedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"), // carrier-grade NAT
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+}
+
+// blockedIP reports whether ip is anything but a public unicast address.
+// IPv4 addresses embedded in NAT64 and 6to4 addresses are checked too.
 func blockedIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
+	}
+	addr = addr.Unmap()
+	if v4, ok := embeddedIPv4(addr); ok {
+		addr = v4
+	}
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() {
+		return true
+	}
+	for _, p := range blockedPrefixes {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	nat64Prefix      = netip.MustParsePrefix("64:ff9b::/96")
+	nat64LocalPrefix = netip.MustParsePrefix("64:ff9b:1::/48")
+	sixToFourPrefix  = netip.MustParsePrefix("2002::/16")
+)
+
+// embeddedIPv4 returns the IPv4 address carried in a NAT64 or 6to4 address.
+func embeddedIPv4(addr netip.Addr) (netip.Addr, bool) {
+	b := addr.As16()
+	switch {
+	case !addr.Is6():
+		return netip.Addr{}, false
+	case nat64Prefix.Contains(addr), nat64LocalPrefix.Contains(addr):
+		return netip.AddrFrom4([4]byte(b[12:16])), true
+	case sixToFourPrefix.Contains(addr):
+		return netip.AddrFrom4([4]byte(b[2:6])), true
+	}
+	return netip.Addr{}, false
 }
 
 // urlValidator is the function used to validate URLs before fetching.
