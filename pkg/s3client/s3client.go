@@ -17,6 +17,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -39,22 +40,55 @@ var ErrFileTooLarge = errors.New("file too large")
 // fileSizeLimit is MaxFileSize, as a variable so tests can lower it.
 var fileSizeLimit int64 = MaxFileSize
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+var httpClient = newFetchClient(30*time.Second, 0)
 
 // downloadClient fetches files to save. Saves of large files can take minutes,
 // so there is no overall timeout; callers bound them with their context.
-var downloadClient = func() *http.Client {
+var downloadClient = newFetchClient(0, 30*time.Second)
+
+// newFetchClient returns a client for fetching user-supplied URLs. Every
+// connection, including each redirect hop, is checked against blockedIP at
+// dial time, so redirects and DNS rebinding can't reach internal addresses.
+// Proxies are disabled so the checked address is the one connected to.
+func newFetchClient(timeout, responseHeaderTimeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout: 30 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error { return dialCheck(address) },
+	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.ResponseHeaderTimeout = 30 * time.Second
-	return &http.Client{Transport: t}
-}()
+	t.Proxy = nil
+	t.DialContext = dialer.DialContext
+	t.ResponseHeaderTimeout = responseHeaderTimeout
+	return &http.Client{Timeout: timeout, Transport: t}
+}
+
+// dialCheck rejects connections to blocked addresses. It is a variable so
+// tests can reach local servers.
+var dialCheck = checkDialAddress
+
+func checkDialAddress(address string) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	if ip := net.ParseIP(host); ip == nil || blockedIP(ip) {
+		return fmt.Errorf("connection to %s blocked", host)
+	}
+	return nil
+}
+
+func blockedIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
+}
 
 // urlValidator is the function used to validate URLs before fetching.
 // It is a variable so tests can override it.
 var urlValidator = validateImageURL
 
 // validateImageURL checks that the URL uses an allowed scheme and does not
-// resolve to a private/loopback IP range.
+// resolve to a blocked IP range. It gives an early, clear error; the fetch
+// clients enforce the IP check on the address actually dialed.
 func validateImageURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -70,11 +104,7 @@ func validateImageURL(rawURL string) error {
 		return fmt.Errorf("DNS lookup failed for %q: %w", host, err)
 	}
 	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			continue
-		}
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		if ip := net.ParseIP(ipStr); ip != nil && blockedIP(ip) {
 			return fmt.Errorf("URL resolves to a blocked IP range")
 		}
 	}

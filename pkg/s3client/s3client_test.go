@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,9 +29,80 @@ import (
 // disableURLValidation overrides the URL validator for testing with local servers.
 func disableURLValidation(t *testing.T) {
 	t.Helper()
+	origValidator, origDial := urlValidator, dialCheck
+	urlValidator = func(string) error { return nil }
+	dialCheck = func(string) error { return nil }
+	t.Cleanup(func() { urlValidator, dialCheck = origValidator, origDial })
+}
+
+// The dial-time check must block loopback even when the URL passed the
+// up-front validation, as happens with a redirect or a rebinding DNS name.
+func TestFetchBlocksLoopbackAtDial(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	c := newTestClient(t, server)
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("internal"))
+	}))
+	defer target.Close()
+
 	orig := urlValidator
 	urlValidator = func(string) error { return nil }
 	t.Cleanup(func() { urlValidator = orig })
+
+	if _, err := c.SaveModFile(context.Background(), "123", target.URL+"/secret.png"); err == nil {
+		t.Fatal("expected the loopback connection to be blocked")
+	}
+	if len(fake.objects) != 0 {
+		t.Errorf("nothing should be stored, got %d objects", len(fake.objects))
+	}
+}
+
+// A redirect to a blocked address is caught when its connection is dialed.
+func TestFetchBlocksRedirectTarget(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	c := newTestClient(t, server)
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("internal"))
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/secret.png", http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	disableURLValidation(t)
+	blocked := target.Listener.Addr().String()
+	dialCheck = func(address string) error {
+		if address == blocked {
+			return errors.New("blocked")
+		}
+		return nil
+	}
+
+	if _, err := c.SaveModFile(context.Background(), "123", redirector.URL+"/x.png"); err == nil {
+		t.Fatal("expected the redirect target to be blocked")
+	}
+	if len(fake.objects) != 0 {
+		t.Errorf("nothing should be stored, got %d objects", len(fake.objects))
+	}
+}
+
+func TestBlockedIP(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1": true, "::1": true, "::ffff:127.0.0.1": true, "10.1.2.3": true, "192.168.0.1": true,
+		"169.254.169.254": true, "fe80::1": true, "0.0.0.0": true, "224.0.0.1": true,
+		"8.8.8.8": false, "2606:4700::1111": false,
+	} {
+		if got := blockedIP(net.ParseIP(addr)); got != want {
+			t.Errorf("blockedIP(%s) = %v, want %v", addr, got, want)
+		}
+	}
 }
 
 // fakeS3 is an in-memory S3-compatible server for testing.
