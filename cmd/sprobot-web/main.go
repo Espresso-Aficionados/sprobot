@@ -5,14 +5,13 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"io"
 	"log"
-	"mime"
 	"net/http"
 	"os"
 	"os/signal"
-	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +26,9 @@ import (
 
 //go:embed templates/*.html
 var templateFS embed.FS
+
+//go:embed static
+var staticFS embed.FS
 
 type profileField struct {
 	Name  string
@@ -55,9 +57,18 @@ const (
 	maxPreviewDescriptionBytes = 350
 )
 
+// fileData is the saved-file viewer page.
+type fileData struct {
+	Name        string
+	Size        string
+	Media       string // "image", "video", or "" for download only
+	ViewURL     string // presigned, served inline as its own type
+	DownloadURL string // presigned, served as an attachment
+}
+
 var pageTemplates map[string]*template.Template
 
-func main() {
+func loadTemplates() error {
 	funcMap := template.FuncMap{
 		"add": func(a, b int) int { return a + b },
 		"toJSON": func(v any) template.JS {
@@ -67,12 +78,19 @@ func main() {
 	}
 
 	pageTemplates = make(map[string]*template.Template)
-	for _, name := range []string{"index.html", "profile.html", "404.html"} {
+	for _, name := range []string{"index.html", "profile.html", "file.html", "404.html"} {
 		t, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/base.html", "templates/"+name)
 		if err != nil {
-			log.Fatalf("Failed to parse template %s: %v", name, err)
+			return fmt.Errorf("parsing template %s: %w", name, err)
 		}
 		pageTemplates[name] = t
+	}
+	return nil
+}
+
+func main() {
+	if err := loadTemplates(); err != nil {
+		log.Fatal(err)
 	}
 
 	s3, err := s3client.New()
@@ -82,8 +100,11 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handleIndex)
+	mux.HandleFunc("GET /"+sprobot.AvatarWebPath, handleAvatar)
 	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}", handleProfile(s3))
 	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}/{file}", handleProfileImage(s3))
+	mux.HandleFunc("GET /files/{kind}/{guildID}/{name}", handleFile(s3))
+	mux.HandleFunc("GET /files/{kind}/{guildID}/{name}/view", handleFileView(s3))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -201,33 +222,118 @@ func handleProfileImage(s3 *s3client.Client) http.HandlerFunc {
 			render404(w)
 			return
 		}
-		value := profile[lookupTemplate(templateName, profile).Image.Name]
-		contentType := mime.TypeByExtension(path.Ext(value))
-		if !strings.HasPrefix(contentType, "image/") {
+		// The URL carries an image version, so a new upload gets a new URL.
+		serveImageToDiscord(w, r, s3, profile[lookupTemplate(templateName, profile).Image.Name])
+	}
+}
+
+// serveImageToDiscord streams a stored image. Only images are ever served
+// this way, and the response is sandboxed so a mislabeled file can't run as
+// a page on our origin.
+func serveImageToDiscord(w http.ResponseWriter, r *http.Request, s3 *s3client.Client, urlOrKey string) {
+	contentType := sprobot.InlineContentType(urlOrKey)
+	if !strings.HasPrefix(contentType, "image/") {
+		render404(w)
+		return
+	}
+
+	body, size, err := s3.OpenImage(r.Context(), urlOrKey)
+	if err != nil {
+		if !errors.Is(err, s3client.ErrNotFound) {
+			log.Printf("Image fetch error: %v", err)
+		}
+		render404(w)
+		return
+	}
+	defer body.Close()
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	if size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if _, err := io.Copy(w, body); err != nil {
+		log.Printf("Image stream error: %v", err)
+	}
+}
+
+// handleFile is the permanent link for a saved file. Everyone is redirected to
+// the viewer page, except that Discord gets the bytes of shortcut and sticky
+// images, which it has to fetch to show them in embeds. Mod files are only
+// ever linked from embed fields, which Discord never unfurls, so they never
+// need serving directly.
+func handleFile(s3 *s3client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		kind, guildID, name := r.PathValue("kind"), r.PathValue("guildID"), r.PathValue("name")
+		key, ok := sprobot.FileKey(kind, guildID, name)
+		if !ok {
 			render404(w)
 			return
 		}
 
-		body, size, err := s3.OpenImage(r.Context(), value)
+		w.Header().Set("Vary", "User-Agent")
+		embeddable := kind != "mod" && strings.HasPrefix(sprobot.InlineContentType(name), "image/")
+		if !embeddable || !isDiscordFetcher(r.UserAgent()) {
+			http.Redirect(w, r, "/"+sprobot.FileWebPath(kind, guildID, name)+"/view", http.StatusFound)
+			return
+		}
+		// Saved-file names never change, so the bytes behind a URL never do.
+		serveImageToDiscord(w, r, s3, key)
+	}
+}
+
+// handleFileView renders a saved file behind short-lived presigned URLs, so
+// the permanent link can't be used to hotlink or hand out the file directly.
+func handleFileView(s3 *s3client.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		key, ok := sprobot.FileKey(r.PathValue("kind"), r.PathValue("guildID"), name)
+		if !ok {
+			render404(w)
+			return
+		}
+
+		size, err := s3.StatFile(r.Context(), key)
 		if err != nil {
 			if !errors.Is(err, s3client.ErrNotFound) {
-				log.Printf("Image fetch error: %v", err)
+				log.Printf("File stat error: %v", err)
 			}
 			render404(w)
 			return
 		}
-		defer body.Close()
 
-		w.Header().Set("Content-Type", contentType)
-		if size > 0 {
-			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		data := fileData{Name: name, Size: sprobot.FormatBytes(size)}
+		download := `attachment; filename="` + name + `"` // name is validated to [A-Za-z0-9.]
+		data.DownloadURL, err = s3.PresignFile(r.Context(), key, s3client.PresignTTLPage, "application/octet-stream", download)
+		if err != nil {
+			log.Printf("Presign error: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
 		}
-		// The URL carries an image version, so a new upload gets a new URL.
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		if _, err := io.Copy(w, body); err != nil {
-			log.Printf("Image stream error: %v", err)
+		if contentType := sprobot.InlineContentType(name); contentType != "" {
+			data.Media, _, _ = strings.Cut(contentType, "/")
+			data.ViewURL, err = s3.PresignFile(r.Context(), key, s3client.PresignTTLPage, contentType, "inline")
+			if err != nil {
+				log.Printf("Presign error: %v", err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
 		}
+
+		origin := s3.Origin()
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'none'; style-src 'unsafe-inline'; img-src 'self' "+origin+"; media-src "+origin+";")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		renderPage(w, "file.html", data)
 	}
+}
+
+func handleAvatar(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeFileFS(w, r, staticFS, "static/sprobot.png")
 }
 
 // isDiscordFetcher matches Discord's link unfurler and media proxy. It is

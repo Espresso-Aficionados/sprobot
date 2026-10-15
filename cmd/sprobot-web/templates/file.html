@@ -1,0 +1,58 @@
+{{define "title"}}Saved file - sprobot{{end}}
+{{define "meta"}}
+    <meta name="robots" content="noindex, nofollow">
+{{end}}
+{{define "extra_css"}}
+        .card {
+            border-left: 4px solid rgb(103, 71, 54);
+            border-radius: 4px;
+            padding: 16px;
+            background-color: #313338;
+        }
+        .card-title {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #f2f3f5;
+            margin-bottom: 12px;
+        }
+        .media img, .media video {
+            display: block;
+            max-width: 100%;
+            border-radius: 4px;
+            object-fit: contain;
+        }
+        .file-info {
+            margin-top: 12px;
+            font-size: 0.85em;
+            color: #949ba4;
+            word-break: break-all;
+        }
+        .hint {
+            margin-top: 4px;
+            font-size: 0.85em;
+            color: #949ba4;
+        }
+        .download {
+            display: inline-block;
+            margin-top: 12px;
+            padding: 8px 16px;
+            border-radius: 4px;
+            background-color: rgb(103, 71, 54);
+            color: #f2f3f5;
+            text-decoration: none;
+            font-weight: 600;
+        }
+{{end}}
+{{define "content"}}
+    <div class="card">
+        <div class="card-title">Saved file</div>
+        {{if eq .Media "image"}}
+        <div class="media"><img src="{{.ViewURL}}" alt="{{.Name}}"></div>
+        {{else if eq .Media "video"}}
+        <div class="media"><video src="{{.ViewURL}}" controls preload="metadata"></video></div>
+        <div class="hint">If the video doesn't play in your browser, download it instead.</div>
+        {{end}}
+        <div class="file-info">{{.Name}} · {{.Size}}</div>
+        <a class="download" href="{{.DownloadURL}}" rel="noopener noreferrer">Download</a>
+    </div>
+{{end}}

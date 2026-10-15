@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
 const embedSplitSize = 1024
@@ -82,6 +84,28 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		return
 	}
 
+	// Resolve where the entry goes before saving attachments, which can take
+	// minutes.
+	st := b.modLog.get(*e.GuildID())
+	var modLogChannelID snowflake.ID
+	if st != nil {
+		st.mu.Lock()
+		modLogChannelID = st.ChannelID
+		st.mu.Unlock()
+	}
+	if modLogChannelID == 0 {
+		b.Log.Info("Mod log channel not set", "guild_id", guildIDStr(e))
+		b.ephemeralFollowup(e.Token(), "No mod log channel is configured; set one with /config modlog set.")
+		return
+	}
+
+	// Find or create thread in the mod log forum channel
+	thread := b.findOrCreateModLogThread(modLogChannelID, msg.Author)
+	if thread == nil {
+		b.ephemeralFollowup(e.Token(), "Oops! Something went wrong finding the mod log channel.")
+		return
+	}
+
 	channel, err := b.Client.Rest.GetChannel(channelID)
 	if err != nil {
 		b.Log.Error("Failed to get channel", "error", err)
@@ -121,25 +145,20 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 
 	guildStr := guildIDStr(e)
 
+	failedAttachments := 0
 	if len(msg.Attachments) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), botutil.DeferredWorkBudget)
 		defer cancel()
 
-		var permLinks []string
+		var lines []string
 		for _, att := range msg.Attachments {
-			permLink, err := b.S3.SaveModImage(ctx, guildStr, att.ProxyURL)
-			if err != nil {
-				b.Log.Error("Failed to save mod image", "error", err)
-				permLinks = append(permLinks, att.ProxyURL)
-			} else {
-				permLink = b.S3.PresignExisting(ctx, permLink, s3client.PresignTTLMessage)
-				permLinks = append(permLinks, permLink)
+			line, ok := b.saveModAttachment(ctx, guildStr, att)
+			if !ok {
+				failedAttachments++
 			}
+			lines = append(lines, line)
 		}
-		embed.Fields = append(embed.Fields, discord.EmbedField{
-			Name:  "Attachments",
-			Value: strings.Join(permLinks, " "),
-		})
+		embed.Fields = append(embed.Fields, attachmentFields(lines)...)
 	}
 
 	embed.Fields = append(embed.Fields, discord.EmbedField{
@@ -166,29 +185,6 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		})
 	}
 
-	st := b.modLog.get(*e.GuildID())
-	if st == nil {
-		b.Log.Info("No mod log config found")
-		return
-	}
-	st.mu.Lock()
-	modLogChannelID := st.ChannelID
-	st.mu.Unlock()
-	if modLogChannelID == 0 {
-		b.Log.Info("Mod log channel not set")
-		return
-	}
-
-	// Find or create thread in the mod log forum channel
-	thread := b.findOrCreateModLogThread(modLogChannelID, msg.Author)
-	if thread == nil {
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-			Content: "Oops! Something went wrong finding the mod log channel.",
-			Flags:   discord.MessageFlagEphemeral,
-		})
-		return
-	}
-
 	sentMsg, err := b.Client.Rest.CreateMessage(thread.ID(), discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	})
@@ -211,11 +207,72 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		Title: fmt.Sprintf("Saved message to from %s in #%s/%s", msg.Author.Username, modLogChannelName, thread.Name()),
 		URL:   messageLink(*e.GuildID(), thread.ID(), sentMsg.ID),
 	}
+	if failedAttachments > 0 {
+		notificationEmbed.Description = fmt.Sprintf("⚠️ %d of %d attachments could not be saved; the mod log entry says why.",
+			failedAttachments, len(msg.Attachments))
+	}
 
 	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{notificationEmbed},
 		Flags:  discord.MessageFlagEphemeral,
 	})
+}
+
+// saveModAttachment saves one attachment and returns the line to show for it
+// in the mod log entry: its permanent link, or why it couldn't be saved.
+func (b *Bot) saveModAttachment(ctx context.Context, guildID string, att discord.Attachment) (line string, ok bool) {
+	failed := func(reason string) (string, bool) {
+		// Discord limits filenames to safe characters, but drop backticks
+		// anyway so the name can't break out of its code span.
+		name := strings.ReplaceAll(att.Filename, "`", "")
+		return fmt.Sprintf("⚠️ `%s` (%s) not saved: %s", name, sprobot.FormatBytes(int64(att.Size)), reason), false
+	}
+
+	if int64(att.Size) > s3client.MaxFileSize {
+		return failed("larger than " + sprobot.FormatBytes(s3client.MaxFileSize))
+	}
+	key, err := b.S3.SaveModFile(ctx, guildID, att.ProxyURL)
+	if err != nil {
+		b.Log.Error("Failed to save mod file", "guild_id", guildID, "size", att.Size, "error", err)
+		switch {
+		case errors.Is(err, s3client.ErrFileTooLarge):
+			return failed("larger than " + sprobot.FormatBytes(s3client.MaxFileSize))
+		case errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil:
+			return failed("timed out")
+		default:
+			return failed("upload failed")
+		}
+	}
+	return b.S3.FileURL(key), true
+}
+
+// attachmentFields packs attachment lines into as few embed fields as fit
+// Discord's per-field limit.
+func attachmentFields(lines []string) []discord.EmbedField {
+	var fields []discord.EmbedField
+	var cur strings.Builder
+	flush := func() {
+		if cur.Len() == 0 {
+			return
+		}
+		name := "Attachments"
+		if len(fields) > 0 {
+			name = "Attachments (cont.)"
+		}
+		fields = append(fields, discord.EmbedField{Name: name, Value: cur.String()})
+		cur.Reset()
+	}
+	for _, line := range lines {
+		if cur.Len() > 0 && cur.Len()+1+len(line) > embedSplitSize {
+			flush()
+		}
+		if cur.Len() > 0 {
+			cur.WriteByte('\n')
+		}
+		cur.WriteString(line)
+	}
+	flush()
+	return fields
 }
 
 func (b *Bot) findOrCreateModLogThread(forumChannelID snowflake.ID, author discord.User) discord.Channel {

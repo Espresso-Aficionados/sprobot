@@ -1,14 +1,17 @@
 package s3client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,19 +29,94 @@ import (
 // disableURLValidation overrides the URL validator for testing with local servers.
 func disableURLValidation(t *testing.T) {
 	t.Helper()
+	origValidator, origDial := urlValidator, dialCheck
+	urlValidator = func(string) error { return nil }
+	dialCheck = func(string) error { return nil }
+	t.Cleanup(func() { urlValidator, dialCheck = origValidator, origDial })
+}
+
+// The dial-time check must block loopback even when the URL passed the
+// up-front validation, as happens with a redirect or a rebinding DNS name.
+func TestFetchBlocksLoopbackAtDial(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	c := newTestClient(t, server)
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("internal"))
+	}))
+	defer target.Close()
+
 	orig := urlValidator
 	urlValidator = func(string) error { return nil }
 	t.Cleanup(func() { urlValidator = orig })
+
+	if _, err := c.SaveModFile(context.Background(), "123", target.URL+"/secret.png"); err == nil {
+		t.Fatal("expected the loopback connection to be blocked")
+	}
+	if len(fake.objects) != 0 {
+		t.Errorf("nothing should be stored, got %d objects", len(fake.objects))
+	}
+}
+
+// A redirect to a blocked address is caught when its connection is dialed.
+func TestFetchBlocksRedirectTarget(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	c := newTestClient(t, server)
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("internal"))
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/secret.png", http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	disableURLValidation(t)
+	blocked := target.Listener.Addr().String()
+	dialCheck = func(address string) error {
+		if address == blocked {
+			return errors.New("blocked")
+		}
+		return nil
+	}
+
+	if _, err := c.SaveModFile(context.Background(), "123", redirector.URL+"/x.png"); err == nil {
+		t.Fatal("expected the redirect target to be blocked")
+	}
+	if len(fake.objects) != 0 {
+		t.Errorf("nothing should be stored, got %d objects", len(fake.objects))
+	}
+}
+
+func TestBlockedIP(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1": true, "::1": true, "::ffff:127.0.0.1": true, "10.1.2.3": true, "192.168.0.1": true,
+		"169.254.169.254": true, "fe80::1": true, "0.0.0.0": true, "224.0.0.1": true,
+		"100.64.0.1": true, "0.1.2.3": true, "192.0.0.8": true, "198.18.0.1": true, "240.0.0.1": true,
+		"fc00::1": true, "64:ff9b::a9fe:a9fe": true, "64:ff9b:1::808:808": true, "2002:7f00:1::": true,
+		"::808:808": true, "2001:0:4136:e378::1": true, "fec0::1": true,
+		"8.8.8.8": false, "2606:4700::1111": false, "64:ff9b::808:808": false, "2002:808:808::": false,
+	} {
+		if got := blockedIP(net.ParseIP(addr)); got != want {
+			t.Errorf("blockedIP(%s) = %v, want %v", addr, got, want)
+		}
+	}
 }
 
 // fakeS3 is an in-memory S3-compatible server for testing.
 type fakeS3 struct {
 	mu      sync.Mutex
 	objects map[string][]byte
+	types   map[string]string // Content-Type of each PUT
 }
 
 func newFakeS3() *fakeS3 {
-	return &fakeS3{objects: make(map[string][]byte)}
+	return &fakeS3{objects: make(map[string][]byte), types: make(map[string]string)}
 }
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -81,9 +159,21 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write(data)
 
+	case http.MethodHead:
+		data, ok := f.objects[key]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+		w.WriteHeader(http.StatusOK)
+
 	case http.MethodPut:
 		data, _ := io.ReadAll(r.Body)
 		f.objects[key] = data
+		if f.types != nil {
+			f.types[key] = r.Header.Get("Content-Type")
+		}
 		w.WriteHeader(http.StatusOK)
 
 	case http.MethodDelete:
@@ -502,33 +592,118 @@ func TestDeleteProfile(t *testing.T) {
 	}
 }
 
-func TestSaveModImage(t *testing.T) {
+func TestSaveModFile(t *testing.T) {
 	disableURLValidation(t)
 	fake := newFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
 
-	// Serve a file to download
+	// Larger than the old 10 MB cap, which silently truncated.
+	payload := bytes.Repeat([]byte("v"), 11<<20)
 	fileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("fake-image-data"))
+		w.Write(payload)
 	}))
 	defer fileServer.Close()
 
 	c := newTestClient(t, server)
 
-	got, err := c.SaveModImage(context.Background(), "123", fileServer.URL+"/photo.jpg")
+	got, err := c.SaveModFile(context.Background(), "123", fileServer.URL+"/clip.mp4")
 	if err != nil {
-		t.Fatalf("SaveModImage: %v", err)
+		t.Fatalf("SaveModFile: %v", err)
 	}
-	if !strings.HasPrefix(got, "mod_files/") {
-		t.Errorf("result key %q should start with mod_files/", got)
+	if _, _, _, ok := sprobot.ParseFileKey(got); !ok || !strings.HasPrefix(got, "mod_files/123/") || !strings.HasSuffix(got, ".mp4") {
+		t.Fatalf("key %q is not a valid mod_files/123/*.mp4 key", got)
 	}
-	if !strings.HasSuffix(got, ".jpg") {
-		t.Errorf("result key %q should end with .jpg", got)
+	stored := "/test-bucket/" + got
+	if n := len(fake.objects[stored]); n != len(payload) {
+		t.Errorf("stored %d bytes, want %d", n, len(payload))
+	}
+	if ct := fake.types[stored]; ct != "video/mp4" {
+		t.Errorf("stored Content-Type %q, want video/mp4", ct)
 	}
 }
 
-func TestSaveModImageUnreachable(t *testing.T) {
+func TestSaveModFileUnsafeExtension(t *testing.T) {
+	disableURLValidation(t)
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	fileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("data"))
+	}))
+	defer fileServer.Close()
+
+	c := newTestClient(t, server)
+
+	got, err := c.SaveModFile(context.Background(), "123", fileServer.URL+"/notes.verylongextension")
+	if err != nil {
+		t.Fatalf("SaveModFile: %v", err)
+	}
+	if _, _, name, ok := sprobot.ParseFileKey(got); !ok || strings.Contains(name, ".") {
+		t.Errorf("key %q should be valid with the extension dropped", got)
+	}
+	if ct := fake.types["/test-bucket/"+got]; ct != "application/octet-stream" {
+		t.Errorf("stored Content-Type %q, want application/octet-stream", ct)
+	}
+}
+
+func TestSaveModFileTooLarge(t *testing.T) {
+	disableURLValidation(t)
+	orig := fileSizeLimit
+	fileSizeLimit = 10
+	t.Cleanup(func() { fileSizeLimit = orig })
+
+	for name, handler := range map[string]http.HandlerFunc{
+		"declared length": func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("01234567890"))
+		},
+		"chunked": func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("012345"))
+			w.(http.Flusher).Flush()
+			w.Write([]byte("67890"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeS3()
+			server := httptest.NewServer(fake)
+			defer server.Close()
+			fileServer := httptest.NewServer(handler)
+			defer fileServer.Close()
+
+			c := newTestClient(t, server)
+
+			_, err := c.SaveModFile(context.Background(), "123", fileServer.URL+"/big.mov")
+			if !errors.Is(err, ErrFileTooLarge) {
+				t.Errorf("err = %v, want ErrFileTooLarge", err)
+			}
+			if len(fake.objects) != 0 {
+				t.Errorf("stored %d objects, want none", len(fake.objects))
+			}
+		})
+	}
+}
+
+func TestSaveModFileHTTPError(t *testing.T) {
+	disableURLValidation(t)
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	fileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "expired", http.StatusForbidden)
+	}))
+	defer fileServer.Close()
+
+	c := newTestClient(t, server)
+
+	if _, err := c.SaveModFile(context.Background(), "123", fileServer.URL+"/photo.jpg"); err == nil {
+		t.Error("expected error for HTTP 403, got nil")
+	}
+	if len(fake.objects) != 0 {
+		t.Errorf("stored the error page: %d objects", len(fake.objects))
+	}
+}
+
+func TestSaveModFileUnreachable(t *testing.T) {
 	disableURLValidation(t)
 	fake := newFakeS3()
 	server := httptest.NewServer(fake)
@@ -536,32 +711,90 @@ func TestSaveModImageUnreachable(t *testing.T) {
 
 	c := newTestClient(t, server)
 
-	original := "http://127.0.0.1:1/nope.jpg"
-	got, err := c.SaveModImage(context.Background(), "123", original)
-	if err != nil {
-		t.Fatalf("SaveModImage: %v", err)
-	}
-	// Should gracefully return the original URL
-	if got != original {
-		t.Errorf("expected original URL %q on failure, got %q", original, got)
+	if _, err := c.SaveModFile(context.Background(), "123", "http://127.0.0.1:1/nope.jpg"); err == nil {
+		t.Error("expected error for unreachable URL, got nil")
 	}
 }
 
-func TestSaveModImageBlockedURL(t *testing.T) {
+func TestSaveModFileBlockedURL(t *testing.T) {
 	fake := newFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
 
 	c := newTestClient(t, server)
 
-	original := "http://127.0.0.1:1/nope.jpg"
-	got, err := c.SaveModImage(context.Background(), "123", original)
-	if err != nil {
-		t.Fatalf("SaveModImage: %v", err)
+	// The default validator blocks loopback.
+	if _, err := c.SaveModFile(context.Background(), "123", "http://127.0.0.1:1/nope.jpg"); err == nil {
+		t.Error("expected error for blocked URL, got nil")
 	}
-	// URL validation blocks loopback — should return original URL
-	if got != original {
-		t.Errorf("expected original URL %q on blocked, got %q", original, got)
+}
+
+func TestFileURL(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+	const name = "abcdefghijABCDEFGHIJ0123456789"
+	want := sprobot.WebEndpoint + "files/mod/123/" + name + ".jpg"
+
+	tests := []struct {
+		stored string
+		want   string
+	}{
+		{"mod_files/123/" + name + ".jpg", want},
+		{server.URL + "/test-bucket/mod_files/123/" + name + ".jpg", want},
+		{server.URL + "/test-bucket/mod_files%2F123%2F" + name + ".jpg", want},
+		{server.URL + "/test-bucket/mod_files/123/" + name + ".jpg?X-Amz-Expires=172800&X-Amz-Signature=abc", want},
+		{"shortcut_files/123/" + name + ".png", sprobot.WebEndpoint + "files/shortcut/123/" + name + ".png"},
+		{"sticky_files/123/" + name, sprobot.WebEndpoint + "files/sticky/123/" + name},
+		{"mod_files/123/" + name + "..jpg", sprobot.WebEndpoint + "files/mod/123/" + name + "..jpg"},
+		// Unchanged: external URLs, plain text, other prefixes, bad names.
+		{"https://cdn.discordapp.com/attachments/1/2/a.png", "https://cdn.discordapp.com/attachments/1/2/a.png"},
+		{"just some shortcut text", "just some shortcut text"},
+		{"images/123/Coffee Setup/456.png", "images/123/Coffee Setup/456.png"},
+		{"mod_files/123/short.jpg", "mod_files/123/short.jpg"},
+		{"mod_files/../123/" + name, "mod_files/../123/" + name},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := c.FileURL(tt.stored); got != tt.want {
+			t.Errorf("FileURL(%q) = %q, want %q", tt.stored, got, tt.want)
+		}
+	}
+}
+
+func TestStatFile(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+	fake.objects["/test-bucket/mod_files/1/x.pdf"] = []byte("12345")
+
+	if n, err := c.StatFile(context.Background(), "mod_files/1/x.pdf"); err != nil || n != 5 {
+		t.Errorf("StatFile = %d, %v; want 5, nil", n, err)
+	}
+	if _, err := c.StatFile(context.Background(), "mod_files/1/missing.pdf"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("StatFile(missing) err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestPresignFile(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	got, err := c.PresignFile(context.Background(), "mod_files/1/x.pdf", PresignTTLPage, "application/octet-stream", `attachment; filename="x.pdf"`)
+	if err != nil {
+		t.Fatalf("PresignFile: %v", err)
+	}
+	for _, want := range []string{"X-Amz-Expires=900", "response-content-type=application%2Foctet-stream", "response-content-disposition=attachment"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("PresignFile = %q, want it to contain %q", got, want)
+		}
 	}
 }
 
@@ -926,8 +1159,8 @@ func TestPresignExistingHonorsTTL(t *testing.T) {
 	c := newTestClient(t, server)
 
 	for ttl, want := range map[time.Duration]string{
-		PresignTTLPage:    "X-Amz-Expires=900",
-		PresignTTLMessage: "X-Amz-Expires=172800",
+		PresignTTLPage: "X-Amz-Expires=900",
+		time.Hour:      "X-Amz-Expires=3600",
 	} {
 		got := c.PresignExisting(context.Background(), "images/1/x.png", ttl)
 		if !strings.Contains(got, want) {

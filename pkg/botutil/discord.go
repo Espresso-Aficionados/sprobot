@@ -11,6 +11,11 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
+// DeferredWorkBudget bounds slow work (such as saving large files) done after
+// deferring an interaction. The interaction token, needed for the follow-up
+// message, expires 15 minutes after the interaction was created.
+const DeferredWorkBudget = 12 * time.Minute
+
 type MessageResponder interface {
 	CreateMessage(discord.MessageCreate, ...rest.RequestOpt) error
 }
