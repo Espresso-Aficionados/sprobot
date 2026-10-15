@@ -112,6 +112,23 @@ func TestBuildProfileEmbedWithImage(t *testing.T) {
 	}
 }
 
+func TestBuildProfileEmbedWithHostedImageUsesStableURL(t *testing.T) {
+	profile := map[string]string{
+		"Gear Picture":          "images/123/Coffee Setup/456.png",
+		sprobot.ImageVersionKey: "abc",
+	}
+
+	embed := buildProfileEmbed(sprobot.ProfileTemplate, "user", profile, "123", "456", newTestS3(t))
+
+	if embed.Image == nil {
+		t.Fatal("Image is nil when profile has image")
+	}
+	want := sprobot.WebEndpoint + "profiles/123/Coffee%20Setup/456/image.png?v=abc"
+	if embed.Image.URL != want {
+		t.Errorf("Image URL = %q, want non-expiring %q", embed.Image.URL, want)
+	}
+}
+
 func TestBuildProfileEmbedWithoutImage(t *testing.T) {
 	profile := map[string]string{
 		"Machine": "Rocket",

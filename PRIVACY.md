@@ -9,9 +9,10 @@ plus the **sprobot-web** profile page server.
 ### sprobot (profiles and moderation)
 
 - **User profiles** — text and an optional image that you explicitly submit via the
-  `/edit<template>` slash commands. Stored in a private S3 bucket, keyed by server and
-  user ID, and rendered as a web page by sprobot-web so profiles can be linked from
-  Discord. You can view your data at any time with `/get<template>` and permanently
+  `/edit<template>` slash commands, plus your server display name as of your last
+  save (shown in link previews of your profile page). Stored in a private S3 bucket,
+  keyed by server and user ID, and rendered as a web page by sprobot-web so profiles
+  can be linked from Discord. You can view your data at any time with `/get<template>` and permanently
   delete it with `/delete<template>`.
 - **Message counts** — a per-user count of messages posted per server, used for the
   top-poster role feature. Counts only; no message text is stored.

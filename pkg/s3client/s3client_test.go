@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -867,7 +868,7 @@ func TestPresignExistingEmpty(t *testing.T) {
 
 	c := newTestClient(t, server)
 
-	got := c.PresignExisting(context.Background(), "")
+	got := c.PresignExisting(context.Background(), "", PresignTTLPage)
 	if got != "" {
 		t.Errorf("PresignExisting('') = %q, want empty", got)
 	}
@@ -881,7 +882,7 @@ func TestPresignExistingExternalURL(t *testing.T) {
 	c := newTestClient(t, server)
 
 	ext := "https://cdn.discord.com/attachments/123/456/photo.png"
-	got := c.PresignExisting(context.Background(), ext)
+	got := c.PresignExisting(context.Background(), ext, PresignTTLPage)
 	if got != ext {
 		t.Errorf("PresignExisting(external) = %q, want %q", got, ext)
 	}
@@ -894,7 +895,7 @@ func TestPresignExistingBareKey(t *testing.T) {
 
 	c := newTestClient(t, server)
 
-	got := c.PresignExisting(context.Background(), "images/123/Coffee Setup/456.png")
+	got := c.PresignExisting(context.Background(), "images/123/Coffee Setup/456.png", PresignTTLPage)
 	if !strings.HasPrefix(got, "http") {
 		t.Errorf("PresignExisting(bare key) = %q, should be a full URL", got)
 	}
@@ -911,8 +912,136 @@ func TestPresignExistingOldFullURL(t *testing.T) {
 	c := newTestClient(t, server)
 
 	oldURL := server.URL + "/test-bucket/images%2F123%2FCoffee+Setup%2F456.png"
-	got := c.PresignExisting(context.Background(), oldURL)
+	got := c.PresignExisting(context.Background(), oldURL, PresignTTLPage)
 	if !strings.Contains(got, "X-Amz-") {
 		t.Errorf("PresignExisting(old URL) = %q, should contain presign params", got)
+	}
+}
+
+func TestPresignExistingHonorsTTL(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+
+	for ttl, want := range map[time.Duration]string{
+		PresignTTLPage:    "X-Amz-Expires=900",
+		PresignTTLMessage: "X-Amz-Expires=172800",
+	} {
+		got := c.PresignExisting(context.Background(), "images/1/x.png", ttl)
+		if !strings.Contains(got, want) {
+			t.Errorf("PresignExisting(ttl=%s) = %q, want it to contain %q", ttl, got, want)
+		}
+	}
+}
+
+func TestProfileImageURL(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+	tmpl := sprobot.ProfileTemplate
+
+	tests := []struct {
+		name    string
+		profile map[string]string
+		want    string
+	}{
+		{"no image", map[string]string{}, ""},
+		{"bare key", map[string]string{"Gear Picture": "images/123/Coffee Setup/456.jpg"},
+			sprobot.WebEndpoint + "profiles/123/Coffee%20Setup/456/image.jpg"},
+		{"bare key with version", map[string]string{"Gear Picture": "images/123/Coffee Setup/456.png", sprobot.ImageVersionKey: "k3x"},
+			sprobot.WebEndpoint + "profiles/123/Coffee%20Setup/456/image.png?v=k3x"},
+		{"old full URL", map[string]string{"Gear Picture": server.URL + "/test-bucket/images%2F123%2FCoffee+Setup%2F456.webp"},
+			sprobot.WebEndpoint + "profiles/123/Coffee%20Setup/456/image.webp"},
+		{"external URL unchanged", map[string]string{"Gear Picture": "https://example.com/a.png"}, "https://example.com/a.png"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := c.ProfileImageURL(tmpl, "123", "456", tt.profile); got != tt.want {
+				t.Errorf("ProfileImageURL = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOpenImage(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+	fake.mu.Lock()
+	fake.objects["/test-bucket/images/1/x.png"] = []byte("data")
+	fake.mu.Unlock()
+
+	body, size, err := c.OpenImage(context.Background(), "images/1/x.png")
+	if err != nil {
+		t.Fatalf("OpenImage: %v", err)
+	}
+	defer body.Close()
+	got, _ := io.ReadAll(body)
+	if string(got) != "data" || size != 4 {
+		t.Errorf("OpenImage = %q (size %d), want \"data\" (size 4)", got, size)
+	}
+
+	if _, _, err := c.OpenImage(context.Background(), "images/1/missing.png"); err != ErrNotFound {
+		t.Errorf("missing object: err = %v, want ErrNotFound", err)
+	}
+	if _, _, err := c.OpenImage(context.Background(), "https://example.com/a.png"); err != ErrNotFound {
+		t.Errorf("external URL: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSaveProfileImageVersion(t *testing.T) {
+	disableURLValidation(t)
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	imgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+		png.Encode(w, img)
+	}))
+	defer imgServer.Close()
+
+	c := newTestClient(t, server)
+	tmpl := sprobot.ProfileTemplate
+	saved := func() map[string]string {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		var p map[string]string
+		json.Unmarshal(fake.objects["/test-bucket/profiles/123/Coffee Setup/456.json"], &p)
+		return p
+	}
+
+	// New upload sets a version.
+	c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{"Gear Picture": imgServer.URL + "/a.png"})
+	first := saved()
+	v1 := first[sprobot.ImageVersionKey]
+	if v1 == "" {
+		t.Fatal("re-hosted image should set an image version")
+	}
+
+	// Re-saving the already-hosted key with its version keeps it.
+	c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{
+		"Gear Picture": first["Gear Picture"], sprobot.ImageVersionKey: v1, "Machine": "Rocket",
+	})
+	if got := saved()[sprobot.ImageVersionKey]; got != v1 {
+		t.Errorf("unchanged image: version = %q, want %q", got, v1)
+	}
+
+	// A failed upload preserves the previous image and its version.
+	c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{"Gear Picture": "http://[::1]:0/bad"})
+	if got := saved(); got["Gear Picture"] != first["Gear Picture"] || got[sprobot.ImageVersionKey] != v1 {
+		t.Errorf("failed upload: image = %q version = %q, want previous image and %q", got["Gear Picture"], got[sprobot.ImageVersionKey], v1)
+	}
+
+	// Removing the image drops the version.
+	c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{"Machine": "Rocket", sprobot.ImageVersionKey: v1})
+	if got, ok := saved()[sprobot.ImageVersionKey]; ok {
+		t.Errorf("no image: version = %q, want absent", got)
 	}
 }
