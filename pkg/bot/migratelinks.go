@@ -29,7 +29,7 @@ const migrateLinksTimeout = 6 * time.Hour
 
 // searchPageInterval paces the search scan. Back-to-back searches are
 // answered 429; disgo waits those out, but pacing keeps them from piling up.
-const searchPageInterval = 3 * time.Second
+var searchPageInterval = 3 * time.Second
 
 // searchProgressPages is how often the search scan logs its progress.
 const searchProgressPages = 20
@@ -74,6 +74,12 @@ type linkMigration struct {
 	modLogThreads   map[snowflake.ID]bool
 	archivedThreads map[snowflake.ID]bool // archived threads outside the mod log, as of the scan
 	inArchived      []string
+
+	noAccess         []snowflake.ID // channels Discord wouldn't let the bot read
+	noPrivateThreads int            // channels whose private threads couldn't be listed
+
+	// search runs one search; nil means Discord's. Tests replace it.
+	search func(discord.GuildMessagesSearch) (*discord.GuildMessagesSearchResult, error)
 }
 
 func (b *Bot) handleMigrateLinks(e *events.ApplicationCommandInteractionCreate) {
@@ -213,14 +219,14 @@ func (m *linkMigration) activeThreads() map[snowflake.ID][]snowflake.ID {
 	return byParent
 }
 
-// listArchivedThreads lists channelID's archived threads.
-func (m *linkMigration) listArchivedThreads(channelID snowflake.ID, private bool) []snowflake.ID {
-	what := fmt.Sprintf("listing archived threads in <#%d>", channelID)
+// listArchivedThreads lists channelID's archived threads, returning those
+// listed before any error.
+func (m *linkMigration) listArchivedThreads(channelID snowflake.ID, private bool) ([]snowflake.ID, error) {
 	var threads []snowflake.ID
 	before := time.Time{}
 	for {
 		var page *discord.GetThreads
-		err := m.call(what, func() (err error) {
+		err := m.call("listing archived threads", func() (err error) {
 			if private {
 				page, err = m.b.Client.Rest.GetPrivateArchivedThreads(channelID, before, 100, rest.WithCtx(m.ctx))
 			} else {
@@ -229,17 +235,24 @@ func (m *linkMigration) listArchivedThreads(channelID snowflake.ID, private bool
 			return err
 		})
 		if err != nil {
-			m.scanError(what, err)
-			return threads
+			return threads, err
 		}
 		for _, t := range page.Threads {
 			threads = append(threads, t.ID())
 		}
 		if !page.HasMore || len(page.Threads) == 0 {
-			return threads
+			return threads, nil
 		}
 		before = page.Threads[len(page.Threads)-1].ThreadMetadata.ArchiveTimestamp
 	}
+}
+
+// isAccessError reports whether Discord refused a request because the bot
+// can't see the channel or lacks a permission there.
+func isAccessError(err error) bool {
+	var restErr *rest.Error
+	return errors.As(err, &restErr) &&
+		(restErr.Code == rest.JSONErrorCodeMissingAccess || restErr.Code == rest.JSONErrorCodeLackPermissionsToPerformAction)
 }
 
 func (m *linkMigration) scanModLog(consider func(discord.Message), active map[snowflake.ID][]snowflake.ID) {
@@ -247,7 +260,11 @@ func (m *linkMigration) scanModLog(consider func(discord.Message), active map[sn
 	if forumID == 0 {
 		return
 	}
-	threads := append(active[forumID], m.listArchivedThreads(forumID, false)...)
+	archived, err := m.listArchivedThreads(forumID, false)
+	if err != nil {
+		m.scanError("listing archived mod log threads", err)
+	}
+	threads := append(active[forumID], archived...)
 
 	for _, threadID := range threads {
 		m.modLogThreads[threadID] = true
@@ -299,15 +316,36 @@ func (m *linkMigration) searchChannels(active map[snowflake.ID][]snowflake.ID) [
 		if !m.b.Client.Caches.MemberPermissionsInChannel(ch, self).Has(discord.PermissionViewChannel, discord.PermissionReadMessageHistory) {
 			continue
 		}
-		ids = append(ids, ch.ID())
-		ids = append(ids, active[ch.ID()]...)
 		var archived []snowflake.ID
 		switch ch.Type() {
-		case discord.ChannelTypeGuildText:
-			archived = append(m.listArchivedThreads(ch.ID(), false), m.listArchivedThreads(ch.ID(), true)...)
-		case discord.ChannelTypeGuildNews, discord.ChannelTypeGuildForum, discord.ChannelTypeGuildMedia:
-			archived = m.listArchivedThreads(ch.ID(), false)
+		case discord.ChannelTypeGuildText, discord.ChannelTypeGuildNews, discord.ChannelTypeGuildForum, discord.ChannelTypeGuildMedia:
+			public, err := m.listArchivedThreads(ch.ID(), false)
+			if isAccessError(err) {
+				// The cached permissions said otherwise, but Discord won't
+				// let the bot read here; leave it out so it can't fail the
+				// rest of its search batch.
+				m.noAccess = append(m.noAccess, ch.ID())
+				continue
+			}
+			if err != nil {
+				m.scanError(fmt.Sprintf("listing archived threads in <#%d>", ch.ID()), err)
+			}
+			archived = public
 		}
+		if ch.Type() == discord.ChannelTypeGuildText {
+			// Listing private threads needs Manage Threads; without it the
+			// public ones are still searched.
+			private, err := m.listArchivedThreads(ch.ID(), true)
+			switch {
+			case isAccessError(err):
+				m.noPrivateThreads++
+			case err != nil:
+				m.scanError(fmt.Sprintf("listing private archived threads in <#%d>", ch.ID()), err)
+			}
+			archived = append(archived, private...)
+		}
+		ids = append(ids, ch.ID())
+		ids = append(ids, active[ch.ID()]...)
 		for _, id := range archived {
 			m.archivedThreads[id] = true
 		}
@@ -316,8 +354,11 @@ func (m *linkMigration) searchChannels(active map[snowflake.ID][]snowflake.ID) [
 	return ids
 }
 
-// searchBatch is the most channels one search may filter on.
-const searchBatch = 500
+// searchBatch is how many channels one search filters on. The API allows 500,
+// but each ID adds up to 22 bytes to the query string (19 digits and an
+// escaped comma) and Discord rejects request lines over 4094 bytes. 100 comes
+// to about 2.3KB; TestSearchBatchFitsRequestLine checks it.
+const searchBatch = 100
 
 func (m *linkMigration) scanSearch(consider func(discord.Message), active map[snowflake.ID][]snowflake.ID) {
 	channels := m.searchChannels(active)
@@ -329,14 +370,16 @@ func (m *linkMigration) scanSearch(consider func(discord.Message), active map[sn
 	m.b.Log.Info("Link migration searching", "guild_id", m.guildID, "channels", len(channels))
 	for start := 0; start < len(channels); start += searchBatch {
 		batch := channels[start:min(start+searchBatch, len(channels))]
+		m.b.Log.Info("Link migration search batch", "guild_id", m.guildID, "from", start, "count", len(batch), "of", len(channels))
 		if !m.searchIn(consider, batch) {
 			return
 		}
 	}
 }
 
-// searchIn pages through the bot's messages in channels, reporting false if
-// the scan should stop.
+// searchIn pages through the bot's messages in channels. A failed search is
+// recorded and the next batch still runs; it reports false only once the run
+// is cancelled.
 func (m *linkMigration) searchIn(consider func(discord.Message), channels []snowflake.ID) bool {
 	includeNSFW := true
 	query := discord.GuildMessagesSearch{
@@ -350,14 +393,30 @@ func (m *linkMigration) searchIn(consider func(discord.Message), channels []snow
 			m.scanError("searching the server", m.ctx.Err())
 			return false
 		}
+		search := m.search
+		if search == nil {
+			search = func(q discord.GuildMessagesSearch) (*discord.GuildMessagesSearchResult, error) {
+				return m.b.Client.Rest.SearchGuildMessages(m.ctx, m.guildID, q)
+			}
+		}
 		var res *discord.GuildMessagesSearchResult
 		err := m.call("searching the server", func() (err error) {
-			res, err = m.b.Client.Rest.SearchGuildMessages(m.ctx, m.guildID, query)
+			res, err = search(query)
 			return err
 		})
+		if isAccessError(err) {
+			// One unreadable channel fails the whole batch; split it to
+			// find which, and search the rest.
+			if len(channels) == 1 {
+				m.noAccess = append(m.noAccess, channels[0])
+				return true
+			}
+			half := len(channels) / 2
+			return m.searchIn(consider, channels[:half]) && m.searchIn(consider, channels[half:])
+		}
 		if err != nil {
-			m.scanError("searching the server", err)
-			return false
+			m.scanError(fmt.Sprintf("searching a batch of %d channels", len(channels)), err)
+			return m.ctx.Err() == nil
 		}
 		if page%searchProgressPages == 0 {
 			m.b.Log.Info("Link migration search progress", "guild_id", m.guildID, "pages", page, "scanned", m.scanned, "before", query.MaxID.Time())
@@ -413,7 +472,19 @@ func isRateLimited(err error) bool {
 
 func (m *linkMigration) scanError(what string, err error) {
 	m.b.Log.Error("Link migration scan failed", "step", what, "error", err)
-	m.scanErrors = append(m.scanErrors, fmt.Sprintf("%s: %v", what, err))
+	m.scanErrors = append(m.scanErrors, fmt.Sprintf("%s: %s", what, reportError(err)))
+}
+
+// reportErrorLen caps an error in the report; REST errors can carry a whole
+// HTML page.
+const reportErrorLen = 200
+
+func reportError(err error) string {
+	s := err.Error()
+	if len(s) <= reportErrorLen {
+		return s
+	}
+	return strings.ToValidUTF8(s[:reportErrorLen], "") + "…"
 }
 
 // plan returns the edit that migrates msg's links, if it has any.
@@ -584,7 +655,7 @@ func (m *linkMigration) applyEdits() {
 			}
 			if err != nil {
 				m.b.Log.Error("Link migration edit failed", "channel_id", channelID, "message_id", p.messageID, "error", err)
-				m.failed = append(m.failed, fmt.Sprintf("<%s> (%v)", messageLink(m.guildID, channelID, p.messageID), err))
+				m.failed = append(m.failed, fmt.Sprintf("<%s> (%s)", messageLink(m.guildID, channelID, p.messageID), reportError(err)))
 				continue
 			}
 			m.edited++
@@ -652,6 +723,20 @@ func (m *linkMigration) report() string {
 	list("Left alone in archived threads outside the mod log", m.inArchived, len(m.inArchived))
 	list("Failed edits", m.failed, len(m.failed))
 	list("The scan was incomplete", m.scanErrors, len(m.scanErrors))
+	if len(m.noAccess) > 0 {
+		fmt.Fprintf(&sb, "\nSkipped %d channels the bot can't read:", len(m.noAccess))
+		for i, id := range m.noAccess {
+			if i == migrateReportExamples {
+				sb.WriteString(" …")
+				break
+			}
+			fmt.Fprintf(&sb, " <#%d>", id)
+		}
+		sb.WriteString("\n")
+	}
+	if m.noPrivateThreads > 0 {
+		fmt.Fprintf(&sb, "Couldn't list private archived threads in %d channels (needs Manage Threads).\n", m.noPrivateThreads)
+	}
 	if len(m.leftUnarchived) > 0 {
 		sb.WriteString("\nCouldn't re-archive:")
 		for _, id := range m.leftUnarchived {

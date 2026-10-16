@@ -8,7 +8,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	disgobot "github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
@@ -192,6 +195,93 @@ func TestMigrateQueueSetsAsideArchivedThreads(t *testing.T) {
 	}
 	if len(m.inArchived) != 1 || !strings.Contains(m.inArchived[0], "/20/2") {
 		t.Errorf("inArchived = %v, want the archived thread's message with a link", m.inArchived)
+	}
+}
+
+func TestSearchInSplitsOutUnreadableChannels(t *testing.T) {
+	saved := searchPageInterval
+	searchPageInterval = 0
+	t.Cleanup(func() { searchPageInterval = saved })
+
+	m, _ := newTestMigration(t)
+	m.b.Client = &disgobot.Client{Caches: cache.New()}
+	unreadable := map[snowflake.ID]bool{7: true, 8: true}
+	m.search = func(q discord.GuildMessagesSearch) (*discord.GuildMessagesSearchResult, error) {
+		for _, ch := range q.ChannelIDs {
+			if unreadable[ch] {
+				return nil, &rest.Error{Code: rest.JSONErrorCodeMissingAccess}
+			}
+		}
+		res := &discord.GuildMessagesSearchResult{}
+		if q.MaxID == 0 {
+			for _, ch := range q.ChannelIDs {
+				res.Messages = append(res.Messages, discord.Message{ID: 100 + ch, ChannelID: ch})
+			}
+		}
+		return res, nil
+	}
+
+	var channels []snowflake.ID
+	for ch := snowflake.ID(1); ch <= 10; ch++ {
+		channels = append(channels, ch)
+	}
+	found := map[snowflake.ID]bool{}
+	if !m.searchIn(func(msg discord.Message) { found[msg.ChannelID] = true }, channels) {
+		t.Fatal("searchIn stopped the scan")
+	}
+
+	for _, ch := range channels {
+		if found[ch] == unreadable[ch] {
+			t.Errorf("channel %d: searched %v, unreadable %v", ch, found[ch], unreadable[ch])
+		}
+	}
+	if len(m.noAccess) != 2 || len(m.scanErrors) != 0 {
+		t.Errorf("noAccess = %v, scanErrors = %v; want channels 7 and 8 skipped without scan errors", m.noAccess, m.scanErrors)
+	}
+}
+
+// searchRequestLine is the request line for a search over n channels, with
+// every ID at its longest. It includes the API host, which the real request
+// line doesn't, so it overstates the size slightly.
+func searchRequestLine(n int) string {
+	const maxID = snowflake.ID(1<<63 - 1)
+	channels := make([]snowflake.ID, n)
+	for i := range channels {
+		channels[i] = maxID
+	}
+	includeNSFW := true
+	query := discord.GuildMessagesSearch{
+		AuthorIDs:   []snowflake.ID{maxID},
+		ChannelIDs:  channels,
+		IncludeNSFW: &includeNSFW,
+		Limit:       25,
+		MaxID:       maxID,
+	}
+	return "GET " + rest.SearchGuildMessages.Compile(query.ToQueryValues(), maxID).URL + " HTTP/1.1"
+}
+
+// Discord rejects request lines over 4094 bytes.
+func TestSearchBatchFitsRequestLine(t *testing.T) {
+	const limit = 4094
+	line := searchRequestLine(searchBatch)
+	t.Logf("request line for %d channels: %d bytes", searchBatch, len(line))
+	if len(line) > limit {
+		t.Errorf("request line is %d bytes, over Discord's %d", len(line), limit)
+	}
+	// The API's own 500-channel maximum is what failed in prod; make sure
+	// this measurement would have caught it.
+	if n := len(searchRequestLine(500)); n <= limit {
+		t.Errorf("500 channels measured %d bytes; the measurement no longer reflects the real encoding", n)
+	}
+}
+
+func TestReportError(t *testing.T) {
+	if got := reportError(errors.New("short")); got != "short" {
+		t.Errorf("short error changed: %q", got)
+	}
+	got := reportError(errors.New(strings.Repeat("é", 300)))
+	if len(got) > reportErrorLen+len("…") || !strings.HasSuffix(got, "…") || !utf8.ValidString(got) {
+		t.Errorf("long error: len %d, %q", len(got), got)
 	}
 }
 
