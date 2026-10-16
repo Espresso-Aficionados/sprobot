@@ -8,7 +8,6 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 
-	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
@@ -74,9 +73,20 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
+	// Defer: re-hosting the image, and waiting on a running name update, can
+	// outlast the 3-second response window.
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer profile save response", "error", err)
+		return
+	}
+
 	profile := make(map[string]string)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	lock := b.profileLock(guildStr, userStr)
+	lock.Lock()
+	defer lock.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	// Preserve existing image URL from the saved profile
@@ -106,17 +116,21 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	_, userErr, err := b.S3.SaveProfile(ctx, tmpl, guildStr, userStr, profile)
 	if err != nil {
 		b.Log.Error("Failed to save profile", "error", err)
-		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
+		b.ephemeralFollowup(e.Token(), "Oops! Something went wrong.")
 		return
 	}
 
+	if e.Member() != nil {
+		b.profileSaved(guildStr, userStr, username)
+	}
+
 	if userErr != "" {
-		botutil.RespondEphemeral(e, userErr)
+		b.ephemeralFollowup(e.Token(), userErr)
 		return
 	}
 
 	embed := buildProfileEmbed(tmpl, username, profile, guildStr, userStr, b.S3)
-	err = e.CreateMessage(discord.MessageCreate{
+	_, err = b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 		Flags:  discord.MessageFlagEphemeral,
 	})

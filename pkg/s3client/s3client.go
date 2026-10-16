@@ -595,10 +595,35 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 	}
 
 	// Step 2: save the JSON profile
+	if err := c.putProfile(ctx, tmpl, guildID, userID, profile); err != nil {
+		return "", "", err
+	}
+
+	webURL = c.webEndpoint + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
+	c.log.Info("Profile saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "profile_url", webURL)
+
+	return webURL, userErr, nil
+}
+
+// SetProfileDisplayName changes only the stored display name of an existing
+// profile. It returns ErrNotFound rather than creating one.
+func (c *Client) SetProfileDisplayName(ctx context.Context, tmpl sprobot.Template, guildID, userID, name string) error {
+	profile, err := c.FetchProfile(ctx, tmpl, guildID, userID)
+	if err != nil {
+		return err
+	}
+	if profile[sprobot.DisplayNameKey] == name {
+		return nil
+	}
+	profile[sprobot.DisplayNameKey] = name
+	return c.putProfile(ctx, tmpl, guildID, userID, profile)
+}
+
+func (c *Client) putProfile(ctx context.Context, tmpl sprobot.Template, guildID, userID string, profile map[string]string) error {
 	s3Path := sprobot.ProfileS3Path(guildID, tmpl.Name, userID)
 	body, err := json.Marshal(profile)
 	if err != nil {
-		return "", "", fmt.Errorf("marshaling profile: %w", err)
+		return fmt.Errorf("marshaling profile: %w", err)
 	}
 
 	start := time.Now()
@@ -608,18 +633,13 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 		Body:   bytes.NewReader(body),
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("saving profile to s3: %w", err)
+		return fmt.Errorf("saving profile to s3: %w", err)
 	}
 	c.log.Info(fmt.Sprintf("s3 write time: %dms", time.Since(start).Milliseconds()),
 		"user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 
-	key := cacheKey(tmpl.Name, guildID, userID)
-	c.cache.Add(key, profile)
-
-	webURL = c.webEndpoint + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
-	c.log.Info("Profile saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "profile_url", webURL)
-
-	return webURL, userErr, nil
+	c.cache.Add(cacheKey(tmpl.Name, guildID, userID), profile)
+	return nil
 }
 
 func (c *Client) DeleteProfile(ctx context.Context, tmpl sprobot.Template, guildID, userID string) error {
