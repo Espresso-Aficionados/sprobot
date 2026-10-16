@@ -82,12 +82,12 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 
 	profile := make(map[string]string)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
 	lock := b.profileLock(guildStr, userStr)
 	lock.Lock()
 	defer lock.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
 	// Preserve existing image URL from the saved profile
 	existing, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)

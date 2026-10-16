@@ -134,62 +134,76 @@ func (b *Bot) confirmDeleteProfile(e *events.ComponentInteractionCreate, tmpl sp
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	respond, ok := b.deferDelete(e)
+	if !ok {
+		return
+	}
 
 	lock := b.profileLock(guildStr, userStr)
 	lock.Lock()
 	defer lock.Unlock()
 	defer b.profileDeleted(guildStr, userStr)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	err := b.S3.DeleteProfile(ctx, tmpl, guildStr, userStr)
 	if err != nil {
 		b.Log.Error("Failed to delete profile", "error", err)
-		content := "Oops! Something went wrong."
-		e.UpdateMessage(discord.MessageUpdate{
-			Content:    &content,
-			Components: &[]discord.LayoutComponent{},
-		})
+		respond("Oops! Something went wrong.")
 		return
 	}
 
 	b.Log.Info("Profile deleted", "user_id", userStr, "guild_id", guildStr, "template", tmpl.Name)
+	respond("Deleted!")
+}
 
-	content := "Deleted!"
-	e.UpdateMessage(discord.MessageUpdate{
+// deferDelete acknowledges a delete confirmation by swapping its buttons for a
+// progress note, since the delete may wait behind a slow save (say, an image
+// still uploading). The returned func replaces the note with the result.
+func (b *Bot) deferDelete(e *events.ComponentInteractionCreate) (respond func(string), ok bool) {
+	content := "Deleting…"
+	if err := e.UpdateMessage(discord.MessageUpdate{
 		Content:    &content,
 		Components: &[]discord.LayoutComponent{},
-	})
+	}); err != nil {
+		b.Log.Error("Failed to acknowledge delete", "error", err)
+		return nil, false
+	}
+	return func(content string) {
+		if _, err := b.Client.Rest.UpdateInteractionResponse(b.Client.ApplicationID, e.Token(), discord.MessageUpdate{
+			Content: &content,
+		}); err != nil {
+			b.Log.Error("Failed to update delete response", "error", err)
+		}
+	}, true
 }
 
 func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl sprobot.Template) {
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	respond, ok := b.deferDelete(e)
+	if !ok {
+		return
+	}
 
 	lock := b.profileLock(guildStr, userStr)
 	lock.Lock()
 	defer lock.Unlock()
 	defer b.profileDeleted(guildStr, userStr)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
 	if err != nil {
 		if errors.Is(err, s3client.ErrNotFound) {
-			content := "Deleted!"
-			e.UpdateMessage(discord.MessageUpdate{
-				Content:    &content,
-				Components: &[]discord.LayoutComponent{},
-			})
+			respond("Deleted!")
 			return
 		}
 		b.Log.Error("Failed to fetch profile for image delete", "error", err)
-		content := "Something went wrong, please try again."
-		e.UpdateMessage(discord.MessageUpdate{
-			Content:    &content,
-			Components: &[]discord.LayoutComponent{},
-		})
+		respond("Something went wrong, please try again.")
 		return
 	}
 
@@ -207,38 +221,21 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 		_, userErr, err := b.S3.SaveProfile(ctx, tmpl, guildStr, userStr, profile)
 		if err != nil {
 			b.Log.Error("Failed to save profile after image delete", "error", err)
-			content := "Something went wrong, please try again."
-			e.UpdateMessage(discord.MessageUpdate{
-				Content:    &content,
-				Components: &[]discord.LayoutComponent{},
-			})
+			respond("Something went wrong, please try again.")
 			return
 		}
 		if userErr != "" {
-			content := userErr
-			e.UpdateMessage(discord.MessageUpdate{
-				Content:    &content,
-				Components: &[]discord.LayoutComponent{},
-			})
+			respond(userErr)
 			return
 		}
 	} else {
 		if err := b.S3.DeleteProfile(ctx, tmpl, guildStr, userStr); err != nil {
 			b.Log.Error("Failed to delete empty profile", "error", err)
-			content := "Something went wrong, please try again."
-			e.UpdateMessage(discord.MessageUpdate{
-				Content:    &content,
-				Components: &[]discord.LayoutComponent{},
-			})
+			respond("Something went wrong, please try again.")
 			return
 		}
 	}
 
 	b.Log.Info("Profile image deleted", "user_id", userStr, "guild_id", guildStr, "template", tmpl.Name)
-
-	content := "Deleted!"
-	e.UpdateMessage(discord.MessageUpdate{
-		Content:    &content,
-		Components: &[]discord.LayoutComponent{},
-	})
+	respond("Deleted!")
 }
