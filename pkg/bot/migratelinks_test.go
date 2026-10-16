@@ -3,8 +3,10 @@ package bot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -240,24 +242,50 @@ func TestSearchInSplitsOutUnreadableChannels(t *testing.T) {
 	}
 }
 
-// searchRequestLine is the request line for a search over n channels, with
-// every ID at its longest. It includes the API host, which the real request
-// line doesn't, so it overstates the size slightly.
-func searchRequestLine(n int) string {
-	const maxID = snowflake.ID(1<<63 - 1)
+const longestID = snowflake.ID(1<<63 - 1)
+
+func longestSearch(n int) discord.GuildMessagesSearch {
 	channels := make([]snowflake.ID, n)
 	for i := range channels {
-		channels[i] = maxID
+		channels[i] = longestID
 	}
 	includeNSFW := true
-	query := discord.GuildMessagesSearch{
-		AuthorIDs:   []snowflake.ID{maxID},
+	return discord.GuildMessagesSearch{
+		AuthorIDs:   []snowflake.ID{longestID},
 		ChannelIDs:  channels,
 		IncludeNSFW: &includeNSFW,
 		Limit:       25,
-		MaxID:       maxID,
+		MaxID:       longestID,
 	}
-	return "GET " + rest.SearchGuildMessages.Compile(query.ToQueryValues(), maxID).URL + " HTTP/1.1"
+}
+
+// searchRequestLine is the request line the migration sends for a search
+// over n channels, with every ID at its longest.
+func searchRequestLine(n int) string {
+	return fmt.Sprintf("GET /api/v%d%s HTTP/1.1", rest.Version, searchEndpoint(longestID, longestSearch(n)).URL)
+}
+
+// Discord wants list filters as repeated parameters, one valid snowflake each.
+func TestSearchEndpointRepeatsListParams(t *testing.T) {
+	q := longestSearch(3)
+	q.ChannelIDs = []snowflake.ID{1, 2, 3}
+	u, err := url.Parse(searchEndpoint(9, q).URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Path != "/guilds/9/messages/search" {
+		t.Errorf("path = %q", u.Path)
+	}
+	got := u.Query()
+	if ids := got["channel_id"]; strings.Join(ids, " ") != "1 2 3" {
+		t.Errorf("channel_id = %q, want one parameter per channel", ids)
+	}
+	want := map[string]string{"author_id": longestID.String(), "include_nsfw": "true", "limit": "25", "max_id": longestID.String()}
+	for k, v := range want {
+		if got.Get(k) != v {
+			t.Errorf("%s = %q, want %q", k, got.Get(k), v)
+		}
+	}
 }
 
 // Discord rejects request lines over 4094 bytes.

@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -355,9 +357,9 @@ func (m *linkMigration) searchChannels(active map[snowflake.ID][]snowflake.ID) [
 }
 
 // searchBatch is how many channels one search filters on. The API allows 500,
-// but each ID adds up to 22 bytes to the query string (19 digits and an
-// escaped comma) and Discord rejects request lines over 4094 bytes. 100 comes
-// to about 2.3KB; TestSearchBatchFitsRequestLine checks it.
+// but each ID adds up to 31 bytes to the query string ("channel_id=", 19
+// digits and "&") and Discord rejects request lines over 4094 bytes. 100
+// comes to about 3.3KB; TestSearchBatchFitsRequestLine checks it.
 const searchBatch = 100
 
 func (m *linkMigration) scanSearch(consider func(discord.Message), active map[snowflake.ID][]snowflake.ID) {
@@ -395,9 +397,7 @@ func (m *linkMigration) searchIn(consider func(discord.Message), channels []snow
 		}
 		search := m.search
 		if search == nil {
-			search = func(q discord.GuildMessagesSearch) (*discord.GuildMessagesSearchResult, error) {
-				return m.b.Client.Rest.SearchGuildMessages(m.ctx, m.guildID, q)
-			}
+			search = m.discordSearch
 		}
 		var res *discord.GuildMessagesSearchResult
 		err := m.call("searching the server", func() (err error) {
@@ -432,6 +432,54 @@ func (m *linkMigration) searchIn(consider func(discord.Message), channels []snow
 		}
 		if query.MaxID == prev {
 			return true
+		}
+	}
+}
+
+// searchEndpoint builds the search request for q. disgo's own encoding joins
+// list filters with commas, which Discord rejects for more than one channel
+// ("is not snowflake"); it wants the parameter repeated, once per value. Only
+// the fields the migration uses are encoded.
+func searchEndpoint(guildID snowflake.ID, q discord.GuildMessagesSearch) *rest.CompiledEndpoint {
+	values := url.Values{}
+	for _, id := range q.AuthorIDs {
+		values.Add("author_id", id.String())
+	}
+	for _, id := range q.ChannelIDs {
+		values.Add("channel_id", id.String())
+	}
+	if q.IncludeNSFW != nil {
+		values.Set("include_nsfw", strconv.FormatBool(*q.IncludeNSFW))
+	}
+	if q.Limit != 0 {
+		values.Set("limit", strconv.Itoa(q.Limit))
+	}
+	if q.MaxID != 0 {
+		values.Set("max_id", q.MaxID.String())
+	}
+	endpoint := rest.SearchGuildMessages.Compile(nil, guildID)
+	endpoint.URL += "?" + values.Encode()
+	return endpoint
+}
+
+// discordSearch runs one search through disgo's rate-limited client, waiting
+// out a 202 while the guild is still being indexed, as disgo's
+// SearchGuildMessages does.
+func (m *linkMigration) discordSearch(q discord.GuildMessagesSearch) (*discord.GuildMessagesSearchResult, error) {
+	for {
+		var res discord.GuildMessagesSearchResult
+		if err := m.b.Client.Rest.Do(searchEndpoint(m.guildID, q), nil, &res, rest.WithCtx(m.ctx)); err != nil {
+			return nil, err
+		}
+		if res.Code != int(rest.JSONErrorCodeIndexNotYetAvailable) {
+			return &res, nil
+		}
+		wait := time.Duration(res.RetryAfter) * time.Second
+		if wait <= 0 {
+			wait = time.Second
+		}
+		if !m.sleep(wait) {
+			return nil, m.ctx.Err()
 		}
 	}
 }
