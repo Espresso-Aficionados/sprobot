@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	disgobot "github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
@@ -193,6 +195,48 @@ func TestMigrateQueueSetsAsideArchivedThreads(t *testing.T) {
 	}
 	if len(m.inArchived) != 1 || !strings.Contains(m.inArchived[0], "/20/2") {
 		t.Errorf("inArchived = %v, want the archived thread's message with a link", m.inArchived)
+	}
+}
+
+func TestSearchInSplitsOutUnreadableChannels(t *testing.T) {
+	saved := searchPageInterval
+	searchPageInterval = 0
+	t.Cleanup(func() { searchPageInterval = saved })
+
+	m, _ := newTestMigration(t)
+	m.b.Client = &disgobot.Client{Caches: cache.New()}
+	unreadable := map[snowflake.ID]bool{7: true, 8: true}
+	m.search = func(q discord.GuildMessagesSearch) (*discord.GuildMessagesSearchResult, error) {
+		for _, ch := range q.ChannelIDs {
+			if unreadable[ch] {
+				return nil, &rest.Error{Code: rest.JSONErrorCodeMissingAccess}
+			}
+		}
+		res := &discord.GuildMessagesSearchResult{}
+		if q.MaxID == 0 {
+			for _, ch := range q.ChannelIDs {
+				res.Messages = append(res.Messages, discord.Message{ID: 100 + ch, ChannelID: ch})
+			}
+		}
+		return res, nil
+	}
+
+	var channels []snowflake.ID
+	for ch := snowflake.ID(1); ch <= 10; ch++ {
+		channels = append(channels, ch)
+	}
+	found := map[snowflake.ID]bool{}
+	if !m.searchIn(func(msg discord.Message) { found[msg.ChannelID] = true }, channels) {
+		t.Fatal("searchIn stopped the scan")
+	}
+
+	for _, ch := range channels {
+		if found[ch] == unreadable[ch] {
+			t.Errorf("channel %d: searched %v, unreadable %v", ch, found[ch], unreadable[ch])
+		}
+	}
+	if len(m.noAccess) != 2 || len(m.scanErrors) != 0 {
+		t.Errorf("noAccess = %v, scanErrors = %v; want channels 7 and 8 skipped without scan errors", m.noAccess, m.scanErrors)
 	}
 }
 
