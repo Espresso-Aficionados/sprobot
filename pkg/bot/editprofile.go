@@ -79,6 +79,10 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	lock := b.profileLock(guildStr, userStr)
+	lock.Lock()
+	defer lock.Unlock()
+
 	// Preserve existing image URL from the saved profile
 	existing, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
 	if err == nil {
@@ -108,6 +112,10 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 		b.Log.Error("Failed to save profile", "error", err)
 		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
 		return
+	}
+
+	if e.Member() != nil {
+		b.profileSaved(guildStr, userStr, username)
 	}
 
 	if userErr != "" {

@@ -137,6 +137,11 @@ func (b *Bot) confirmDeleteProfile(e *events.ComponentInteractionCreate, tmpl sp
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	lock := b.profileLock(guildStr, userStr)
+	lock.Lock()
+	defer lock.Unlock()
+	defer b.profileDeleted(guildStr, userStr)
+
 	err := b.S3.DeleteProfile(ctx, tmpl, guildStr, userStr)
 	if err != nil {
 		b.Log.Error("Failed to delete profile", "error", err)
@@ -163,6 +168,11 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	lock := b.profileLock(guildStr, userStr)
+	lock.Lock()
+	defer lock.Unlock()
+	defer b.profileDeleted(guildStr, userStr)
 
 	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
 	if err != nil {

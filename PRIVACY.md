@@ -9,8 +9,8 @@ plus the **sprobot-web** profile page server.
 ### sprobot (profiles and moderation)
 
 - **User profiles** — text and an optional image that you explicitly submit via the
-  `/edit<template>` slash commands, plus your server display name as of your last
-  save (shown in link previews of your profile page). Stored in a private S3 bucket,
+  `/edit<template>` slash commands. Your server display name is saved alongside your
+  profile (shown in link previews of your profile page). Stored in a private S3 bucket,
   keyed by server and user ID, and rendered as a web page by sprobot-web so profiles
   can be linked from Discord. You can view your data at any time with `/get<template>` and permanently
   delete it with `/delete<template>`.
