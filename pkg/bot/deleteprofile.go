@@ -59,12 +59,12 @@ func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
 		b.handleTicketCloseConfirm(e)
 		return
 	}
-	if customID == "ticket_close_yes" {
-		b.handleTicketClose(e)
+	if opener, ok := parseTicketCloseCustomID(customID, "ticket_close_yes"); ok {
+		b.handleTicketClose(e, opener)
 		return
 	}
-	if customID == "ticket_close_no" {
-		b.handleTicketCloseCancel(e)
+	if opener, ok := parseTicketCloseCustomID(customID, "ticket_close_no"); ok {
+		b.handleTicketCloseCancel(e, opener)
 		return
 	}
 

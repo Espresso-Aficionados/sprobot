@@ -2,7 +2,10 @@ package bot
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -260,14 +263,7 @@ func (b *Bot) handleTicketOpen(e *events.ComponentInteractionCreate) {
 		Content: fmt.Sprintf("||<@&%d>||", cfg.StaffRoleID),
 		Embeds:  []discord.Embed{{Description: intro}},
 		Components: []discord.LayoutComponent{
-			discord.NewActionRow(
-				discord.ButtonComponent{
-					Style:    discord.ButtonStyleDanger,
-					Label:    cfg.CloseButtonLabel,
-					CustomID: "ticket_close",
-					Emoji:    &discord.ComponentEmoji{Name: "🔒"},
-				},
-			),
+			discord.NewActionRow(ticketCloseButton(cfg)),
 		},
 	})
 	if err != nil {
@@ -300,54 +296,113 @@ func (b *Bot) handleTicketOpen(e *events.ComponentInteractionCreate) {
 	}
 }
 
+func ticketCloseButton(cfg ticketConfig) discord.ButtonComponent {
+	return discord.ButtonComponent{
+		Style:    discord.ButtonStyleDanger,
+		Label:    cfg.CloseButtonLabel,
+		CustomID: "ticket_close",
+		Emoji:    &discord.ComponentEmoji{Name: "🔒"},
+	}
+}
+
+var userMentionRe = regexp.MustCompile(`<@!?(\d+)>`)
+
+// ticketOpenerFromMessage returns the opener mentioned in the ticket intro
+// embed, or 0 if the intro was already replaced by the old generic cancel text.
+func ticketOpenerFromMessage(msg discord.Message) snowflake.ID {
+	if len(msg.Embeds) == 0 {
+		return 0
+	}
+	m := userMentionRe.FindStringSubmatch(msg.Embeds[0].Description)
+	if m == nil {
+		return 0
+	}
+	id, err := snowflake.Parse(m[1])
+	if err != nil {
+		return 0
+	}
+	return id
+}
+
+// ticketCloseCustomID carries the opener through the confirm step, since the
+// confirm prompt overwrites the intro embed that mentions them.
+func ticketCloseCustomID(base string, opener snowflake.ID) string {
+	if opener == 0 {
+		return base
+	}
+	return fmt.Sprintf("%s:%d", base, opener)
+}
+
+// parseTicketCloseCustomID matches base exactly (buttons rendered before the
+// opener was carried, opener 0) or base:<openerID>.
+func parseTicketCloseCustomID(customID, base string) (snowflake.ID, bool) {
+	if customID == base {
+		return 0, true
+	}
+	rest, ok := strings.CutPrefix(customID, base+":")
+	if !ok {
+		return 0, false
+	}
+	id, err := snowflake.Parse(rest)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+func ticketClosedDescription(opener, closer snowflake.ID, closedAt time.Time) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "**Ticket closed** <t:%d:f>", closedAt.Unix())
+	if opener != 0 {
+		fmt.Fprintf(&sb, "\nOpened by: <@%d>", opener)
+	}
+	fmt.Fprintf(&sb, "\nClosed by: <@%d>", closer)
+	return sb.String()
+}
+
 func (b *Bot) handleTicketCloseConfirm(e *events.ComponentInteractionCreate) {
-	b.Log.Info("Ticket close confirm", "user_id", e.User().ID, "channel_id", e.Channel().ID())
+	opener := ticketOpenerFromMessage(e.Message)
+	b.Log.Info("Ticket close confirm", "user_id", e.User().ID, "channel_id", e.Channel().ID(), "opener_id", opener)
 
 	e.UpdateMessage(discord.MessageUpdate{
 		Embeds: &[]discord.Embed{{Description: "Are you sure you want to close this ticket?"}},
 		Components: &[]discord.LayoutComponent{
 			discord.NewActionRow(
-				discord.NewDangerButton("Yes, close it", "ticket_close_yes"),
-				discord.NewSecondaryButton("Cancel", "ticket_close_no"),
+				discord.NewDangerButton("Yes, close it", ticketCloseCustomID("ticket_close_yes", opener)),
+				discord.NewSecondaryButton("Cancel", ticketCloseCustomID("ticket_close_no", opener)),
 			),
 		},
 	})
 }
 
-func (b *Bot) handleTicketCloseCancel(e *events.ComponentInteractionCreate) {
+func (b *Bot) handleTicketCloseCancel(e *events.ComponentInteractionCreate, opener snowflake.ID) {
 	b.Log.Info("Ticket close cancelled", "user_id", e.User().ID, "channel_id", e.Channel().ID())
 
-	guildID := e.GuildID()
-	cfg := ticketConfig{
-		CloseButtonLabel: "Close Ticket",
-		TicketIntro:      "Ticket",
-	}
-	if guildID != nil {
+	cfg := ticketConfig{CloseButtonLabel: "Close Ticket"}
+	if guildID := e.GuildID(); guildID != nil {
 		if c, ok := b.ticketConfigs[*guildID]; ok {
 			cfg = c
 		}
 	}
 
-	// Restore the intro embed with close button (we can't recover the original user mention,
-	// so just show a generic message)
+	// Without the opener the intro can't be rebuilt, so fall back to a generic message.
+	desc := "Use the button below when you're ready to close this ticket."
+	if opener != 0 && cfg.TicketIntro != "" {
+		desc = fmt.Sprintf(cfg.TicketIntro, fmt.Sprintf("<@%d>", opener))
+	}
+
 	e.UpdateMessage(discord.MessageUpdate{
-		Embeds: &[]discord.Embed{{Description: "Use the button below when you're ready to close this ticket."}},
+		Embeds: &[]discord.Embed{{Description: desc}},
 		Components: &[]discord.LayoutComponent{
-			discord.NewActionRow(
-				discord.ButtonComponent{
-					Style:    discord.ButtonStyleDanger,
-					Label:    cfg.CloseButtonLabel,
-					CustomID: "ticket_close",
-					Emoji:    &discord.ComponentEmoji{Name: "🔒"},
-				},
-			),
+			discord.NewActionRow(ticketCloseButton(cfg)),
 		},
 	})
 }
 
-func (b *Bot) handleTicketClose(e *events.ComponentInteractionCreate) {
+func (b *Bot) handleTicketClose(e *events.ComponentInteractionCreate, opener snowflake.ID) {
+	closer := e.User().ID
 	e.UpdateMessage(discord.MessageUpdate{
-		Embeds:     &[]discord.Embed{{Description: "Ticket closed."}},
+		Embeds:     &[]discord.Embed{{Description: ticketClosedDescription(opener, closer, time.Now())}},
 		Components: &[]discord.LayoutComponent{},
 	})
 
@@ -360,6 +415,6 @@ func (b *Bot) handleTicketClose(e *events.ComponentInteractionCreate) {
 	}); err != nil {
 		b.Log.Error("Failed to archive/lock ticket thread", "channel_id", channelID, "error", err)
 	} else {
-		b.Log.Info("Closed ticket", "channel_id", channelID, "user_id", e.User().ID)
+		b.Log.Info("Closed ticket", "channel_id", channelID, "user_id", closer, "opener_id", opener)
 	}
 }
