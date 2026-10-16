@@ -178,6 +178,23 @@ func TestMigratePlanContent(t *testing.T) {
 	}
 }
 
+func TestMigrateQueueSetsAsideArchivedThreads(t *testing.T) {
+	m, bucket := newTestMigration(t)
+	m.archivedThreads = map[snowflake.ID]bool{20: true}
+	link := bucket + "shortcut_files/1/" + migrateTestName + ".png"
+
+	m.queue(discord.Message{ID: 1, ChannelID: 10, Content: link})
+	m.queue(discord.Message{ID: 2, ChannelID: 20, Content: link})
+	m.queue(discord.Message{ID: 3, ChannelID: 20, Content: "no links"})
+
+	if len(m.pending) != 1 || m.pending[0].messageID != 1 {
+		t.Errorf("pending = %+v, want only the message outside the archived thread", m.pending)
+	}
+	if len(m.inArchived) != 1 || !strings.Contains(m.inArchived[0], "/20/2") {
+		t.Errorf("inArchived = %v, want the archived thread's message with a link", m.inArchived)
+	}
+}
+
 func TestMigrateCallBacksOffOnRateLimit(t *testing.T) {
 	saved := rateLimitBackoff
 	rateLimitBackoff = []time.Duration{time.Millisecond, time.Millisecond}

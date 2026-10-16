@@ -68,6 +68,12 @@ type linkMigration struct {
 	leftUnarchived         []snowflake.ID
 	scanErrors             []string
 	stopped                error
+
+	// Only mod log threads are unarchived for edits; messages in other
+	// archived threads are left alone.
+	modLogThreads   map[snowflake.ID]bool
+	archivedThreads map[snowflake.ID]bool // archived threads outside the mod log, as of the scan
+	inArchived      []string
 }
 
 func (b *Bot) handleMigrateLinks(e *events.ApplicationCommandInteractionCreate) {
@@ -142,16 +148,29 @@ func (m *linkMigration) scan() {
 		}
 		seen[msg.ID] = true
 		m.scanned++
-		if update, ok := m.plan(msg); ok {
-			m.pending = append(m.pending, pendingEdit{channelID: msg.ChannelID, messageID: msg.ID, update: update})
-		}
+		m.queue(msg)
 	}
 
+	m.modLogThreads = map[snowflake.ID]bool{}
+	m.archivedThreads = map[snowflake.ID]bool{}
 	active := m.activeThreads()
 	before := m.scanned
 	m.scanModLog(consider, active)
 	m.modLogScanned = m.scanned - before
 	m.scanSearch(consider, active)
+}
+
+// queue plans msg's edit, setting it aside if it's in an archived thread
+// outside the mod log.
+func (m *linkMigration) queue(msg discord.Message) {
+	update, ok := m.plan(msg)
+	switch {
+	case !ok:
+	case m.archivedThreads[msg.ChannelID]:
+		m.inArchived = append(m.inArchived, "<"+messageLink(m.guildID, msg.ChannelID, msg.ID)+">")
+	default:
+		m.pending = append(m.pending, pendingEdit{channelID: msg.ChannelID, messageID: msg.ID, update: update})
+	}
 }
 
 func (m *linkMigration) modLogForum() snowflake.ID {
@@ -194,8 +213,8 @@ func (m *linkMigration) activeThreads() map[snowflake.ID][]snowflake.ID {
 	return byParent
 }
 
-// archivedThreads lists channelID's archived threads.
-func (m *linkMigration) archivedThreads(channelID snowflake.ID, private bool) []snowflake.ID {
+// listArchivedThreads lists channelID's archived threads.
+func (m *linkMigration) listArchivedThreads(channelID snowflake.ID, private bool) []snowflake.ID {
 	what := fmt.Sprintf("listing archived threads in <#%d>", channelID)
 	var threads []snowflake.ID
 	before := time.Time{}
@@ -228,9 +247,10 @@ func (m *linkMigration) scanModLog(consider func(discord.Message), active map[sn
 	if forumID == 0 {
 		return
 	}
-	threads := append(active[forumID], m.archivedThreads(forumID, false)...)
+	threads := append(active[forumID], m.listArchivedThreads(forumID, false)...)
 
 	for _, threadID := range threads {
+		m.modLogThreads[threadID] = true
 		var oldest snowflake.ID
 		for {
 			var msgs []discord.Message
@@ -281,13 +301,17 @@ func (m *linkMigration) searchChannels(active map[snowflake.ID][]snowflake.ID) [
 		}
 		ids = append(ids, ch.ID())
 		ids = append(ids, active[ch.ID()]...)
+		var archived []snowflake.ID
 		switch ch.Type() {
 		case discord.ChannelTypeGuildText:
-			ids = append(ids, m.archivedThreads(ch.ID(), false)...)
-			ids = append(ids, m.archivedThreads(ch.ID(), true)...)
+			archived = append(m.listArchivedThreads(ch.ID(), false), m.listArchivedThreads(ch.ID(), true)...)
 		case discord.ChannelTypeGuildNews, discord.ChannelTypeGuildForum, discord.ChannelTypeGuildMedia:
-			ids = append(ids, m.archivedThreads(ch.ID(), false)...)
+			archived = m.listArchivedThreads(ch.ID(), false)
 		}
+		for _, id := range archived {
+			m.archivedThreads[id] = true
+		}
+		ids = append(ids, archived...)
 	}
 	return ids
 }
@@ -544,10 +568,18 @@ func (m *linkMigration) applyEdits() {
 				return
 			}
 			err := m.edit(p)
-			if isArchivedThreadError(err) && !unarchived {
-				if err = m.setArchived(channelID, false); err == nil {
-					unarchived = true
-					err = m.edit(p)
+			if isArchivedThreadError(err) {
+				// Only mod log threads are reopened; anywhere else, a thread
+				// archived since the scan is left as it is.
+				if !m.modLogThreads[channelID] {
+					m.inArchived = append(m.inArchived, "<"+messageLink(m.guildID, channelID, p.messageID)+">")
+					continue
+				}
+				if !unarchived {
+					if err = m.setArchived(channelID, false); err == nil {
+						unarchived = true
+						err = m.edit(p)
+					}
 				}
 			}
 			if err != nil {
@@ -617,6 +649,7 @@ func (m *linkMigration) report() string {
 		}
 	}
 	list("Bucket links left alone (no stable route, or another server's file)", m.unknown, m.unknownCount)
+	list("Left alone in archived threads outside the mod log", m.inArchived, len(m.inArchived))
 	list("Failed edits", m.failed, len(m.failed))
 	list("The scan was incomplete", m.scanErrors, len(m.scanErrors))
 	if len(m.leftUnarchived) > 0 {
