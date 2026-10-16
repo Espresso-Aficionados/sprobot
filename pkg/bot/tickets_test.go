@@ -198,16 +198,47 @@ func TestParseTicketCloseCustomIDRejects(t *testing.T) {
 }
 
 func TestTicketClosedDescription(t *testing.T) {
-	at := time.Unix(1760000000, 0)
-	got := ticketClosedDescription(11, 22, at)
-	want := "**Ticket closed** <t:1760000000:f>\nOpened by: <@11>\nClosed by: <@22>"
+	opened := time.Unix(1760000000, 0)
+	closed := opened.Add(26*time.Hour + 30*time.Minute)
+	got := ticketClosedDescription(11, 22, opened, closed)
+	want := "**Ticket closed**\n" +
+		"Opened by <@11> on <t:1760000000:f>\n" +
+		"Closed by <@22> on <t:1760095400:f>\n" +
+		"Open for 1d 2h"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 
-	got = ticketClosedDescription(0, 22, at)
-	want = "**Ticket closed** <t:1760000000:f>\nClosed by: <@22>"
+	got = ticketClosedDescription(0, 22, opened, closed)
+	want = "**Ticket closed**\n" +
+		"Opened on <t:1760000000:f>\n" +
+		"Closed by <@22> on <t:1760095400:f>\n" +
+		"Open for 1d 2h"
 	if got != want {
 		t.Errorf("unknown opener: got %q, want %q", got, want)
+	}
+}
+
+func TestFormatTicketDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{-time.Minute, "less than a minute"},
+		{0, "less than a minute"},
+		{59 * time.Second, "less than a minute"},
+		{time.Minute, "1m"},
+		{45*time.Minute + 30*time.Second, "45m"},
+		{time.Hour, "1h"},
+		{2*time.Hour + 15*time.Minute, "2h 15m"},
+		{24 * time.Hour, "1d"},
+		{3*24*time.Hour + 5*time.Minute, "3d"},
+		{50 * time.Hour, "2d 2h"},
+		{40 * 24 * time.Hour, "40d"},
+	}
+	for _, tt := range tests {
+		if got := formatTicketDuration(tt.d); got != tt.want {
+			t.Errorf("formatTicketDuration(%v) = %q, want %q", tt.d, got, tt.want)
+		}
 	}
 }
