@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
@@ -192,6 +193,51 @@ func TestMigrateQueueSetsAsideArchivedThreads(t *testing.T) {
 	}
 	if len(m.inArchived) != 1 || !strings.Contains(m.inArchived[0], "/20/2") {
 		t.Errorf("inArchived = %v, want the archived thread's message with a link", m.inArchived)
+	}
+}
+
+// searchRequestLine is the request line for a search over n channels, with
+// every ID at its longest. It includes the API host, which the real request
+// line doesn't, so it overstates the size slightly.
+func searchRequestLine(n int) string {
+	const maxID = snowflake.ID(1<<63 - 1)
+	channels := make([]snowflake.ID, n)
+	for i := range channels {
+		channels[i] = maxID
+	}
+	includeNSFW := true
+	query := discord.GuildMessagesSearch{
+		AuthorIDs:   []snowflake.ID{maxID},
+		ChannelIDs:  channels,
+		IncludeNSFW: &includeNSFW,
+		Limit:       25,
+		MaxID:       maxID,
+	}
+	return "GET " + rest.SearchGuildMessages.Compile(query.ToQueryValues(), maxID).URL + " HTTP/1.1"
+}
+
+// Discord rejects request lines over 4094 bytes.
+func TestSearchBatchFitsRequestLine(t *testing.T) {
+	const limit = 4094
+	line := searchRequestLine(searchBatch)
+	t.Logf("request line for %d channels: %d bytes", searchBatch, len(line))
+	if len(line) > limit {
+		t.Errorf("request line is %d bytes, over Discord's %d", len(line), limit)
+	}
+	// The API's own 500-channel maximum is what failed in prod; make sure
+	// this measurement would have caught it.
+	if n := len(searchRequestLine(500)); n <= limit {
+		t.Errorf("500 channels measured %d bytes; the measurement no longer reflects the real encoding", n)
+	}
+}
+
+func TestReportError(t *testing.T) {
+	if got := reportError(errors.New("short")); got != "short" {
+		t.Errorf("short error changed: %q", got)
+	}
+	got := reportError(errors.New(strings.Repeat("é", 300)))
+	if len(got) > reportErrorLen+len("…") || !strings.HasSuffix(got, "…") || !utf8.ValidString(got) {
+		t.Errorf("long error: len %d, %q", len(got), got)
 	}
 }
 

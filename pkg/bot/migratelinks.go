@@ -316,8 +316,11 @@ func (m *linkMigration) searchChannels(active map[snowflake.ID][]snowflake.ID) [
 	return ids
 }
 
-// searchBatch is the most channels one search may filter on.
-const searchBatch = 500
+// searchBatch is how many channels one search filters on. The API allows 500,
+// but each ID adds up to 22 bytes to the query string (19 digits and an
+// escaped comma) and Discord rejects request lines over 4094 bytes. 100 comes
+// to about 2.3KB; TestSearchBatchFitsRequestLine checks it.
+const searchBatch = 100
 
 func (m *linkMigration) scanSearch(consider func(discord.Message), active map[snowflake.ID][]snowflake.ID) {
 	channels := m.searchChannels(active)
@@ -329,14 +332,16 @@ func (m *linkMigration) scanSearch(consider func(discord.Message), active map[sn
 	m.b.Log.Info("Link migration searching", "guild_id", m.guildID, "channels", len(channels))
 	for start := 0; start < len(channels); start += searchBatch {
 		batch := channels[start:min(start+searchBatch, len(channels))]
+		m.b.Log.Info("Link migration search batch", "guild_id", m.guildID, "from", start, "count", len(batch), "of", len(channels))
 		if !m.searchIn(consider, batch) {
 			return
 		}
 	}
 }
 
-// searchIn pages through the bot's messages in channels, reporting false if
-// the scan should stop.
+// searchIn pages through the bot's messages in channels. A failed search is
+// recorded and the next batch still runs; it reports false only once the run
+// is cancelled.
 func (m *linkMigration) searchIn(consider func(discord.Message), channels []snowflake.ID) bool {
 	includeNSFW := true
 	query := discord.GuildMessagesSearch{
@@ -356,8 +361,8 @@ func (m *linkMigration) searchIn(consider func(discord.Message), channels []snow
 			return err
 		})
 		if err != nil {
-			m.scanError("searching the server", err)
-			return false
+			m.scanError(fmt.Sprintf("searching a batch of %d channels", len(channels)), err)
+			return m.ctx.Err() == nil
 		}
 		if page%searchProgressPages == 0 {
 			m.b.Log.Info("Link migration search progress", "guild_id", m.guildID, "pages", page, "scanned", m.scanned, "before", query.MaxID.Time())
@@ -413,7 +418,19 @@ func isRateLimited(err error) bool {
 
 func (m *linkMigration) scanError(what string, err error) {
 	m.b.Log.Error("Link migration scan failed", "step", what, "error", err)
-	m.scanErrors = append(m.scanErrors, fmt.Sprintf("%s: %v", what, err))
+	m.scanErrors = append(m.scanErrors, fmt.Sprintf("%s: %s", what, reportError(err)))
+}
+
+// reportErrorLen caps an error in the report; REST errors can carry a whole
+// HTML page.
+const reportErrorLen = 200
+
+func reportError(err error) string {
+	s := err.Error()
+	if len(s) <= reportErrorLen {
+		return s
+	}
+	return strings.ToValidUTF8(s[:reportErrorLen], "") + "…"
 }
 
 // plan returns the edit that migrates msg's links, if it has any.
@@ -584,7 +601,7 @@ func (m *linkMigration) applyEdits() {
 			}
 			if err != nil {
 				m.b.Log.Error("Link migration edit failed", "channel_id", channelID, "message_id", p.messageID, "error", err)
-				m.failed = append(m.failed, fmt.Sprintf("<%s> (%v)", messageLink(m.guildID, channelID, p.messageID), err))
+				m.failed = append(m.failed, fmt.Sprintf("<%s> (%s)", messageLink(m.guildID, channelID, p.messageID), reportError(err)))
 				continue
 			}
 			m.edited++
