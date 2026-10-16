@@ -345,6 +345,26 @@ func TestMigrateCallBacksOffOnRateLimit(t *testing.T) {
 	}
 }
 
+// Old shortcut responses were presigned as if their text were a key, giving
+// huge links; the report must show each one briefly, with where it is.
+func TestMigrateReportsUnknownLinksBriefly(t *testing.T) {
+	m, bucket := newTestMigration(t)
+	text := strings.Repeat("%0Asome%20shortcut%20text", 40)
+	link := bucket + text + "?X-Amz-Credential=AKIDEXAMPLE%2F20260307&X-Amz-Signature=abc"
+	m.plan(discord.Message{ID: 3, ChannelID: 2, Embeds: []discord.Embed{{Description: link}}})
+
+	if m.unknownCount != 1 {
+		t.Fatalf("unknownCount = %d, want 1", m.unknownCount)
+	}
+	got := m.unknown[0]
+	if !strings.HasPrefix(got, "<https://discord.com/channels/1/2/3> <") {
+		t.Errorf("example %q should start with the message link", got)
+	}
+	if strings.Contains(got, "X-Amz") || !strings.HasSuffix(got, "…>") || len(got) > 200 {
+		t.Errorf("example not shortened: len %d, %q", len(got), got)
+	}
+}
+
 func TestTruncateReport(t *testing.T) {
 	if got := truncateReport("short", 2000); got != "short" {
 		t.Errorf("short report changed: %q", got)

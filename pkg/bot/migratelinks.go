@@ -80,6 +80,8 @@ type linkMigration struct {
 	noAccess         []snowflake.ID // channels Discord wouldn't let the bot read
 	noPrivateThreads int            // channels whose private threads couldn't be listed
 
+	planning string // link to the message being planned, for report examples
+
 	// search runs one search; nil means Discord's. Tests replace it.
 	search func(discord.GuildMessagesSearch) (*discord.GuildMessagesSearchResult, error)
 }
@@ -523,6 +525,22 @@ func (m *linkMigration) scanError(what string, err error) {
 	m.scanErrors = append(m.scanErrors, fmt.Sprintf("%s: %s", what, reportError(err)))
 }
 
+// reportLinkLen caps a link in the report. Old shortcut responses were
+// presigned as if their whole text were a bucket key, giving links over 1KB.
+const reportLinkLen = 100
+
+// reportLink shortens raw for the report, dropping the query: a presigned
+// link's query is noise, and carries the bucket's access key ID.
+func reportLink(raw string) string {
+	if i := strings.IndexByte(raw, '?'); i >= 0 {
+		raw = raw[:i]
+	}
+	if len(raw) <= reportLinkLen {
+		return raw
+	}
+	return strings.ToValidUTF8(raw[:reportLinkLen], "") + "…"
+}
+
 // reportErrorLen caps an error in the report; REST errors can carry a whole
 // HTML page.
 const reportErrorLen = 200
@@ -537,6 +555,10 @@ func reportError(err error) string {
 
 // plan returns the edit that migrates msg's links, if it has any.
 func (m *linkMigration) plan(msg discord.Message) (discord.MessageUpdate, bool) {
+	m.planning = ""
+	if msg.ID != 0 {
+		m.planning = "<" + messageLink(m.guildID, msg.ChannelID, msg.ID) + "> "
+	}
 	content, changed := m.rewrite(msg.Content)
 
 	var embeds []discord.Embed
@@ -628,7 +650,7 @@ func (m *linkMigration) rewrite(s string) (string, int) {
 		case s3client.LegacyUnknown:
 			m.unknownCount++
 			if len(m.unknown) < migrateReportExamples {
-				m.unknown = append(m.unknown, "<"+raw+">")
+				m.unknown = append(m.unknown, m.planning+"<"+reportLink(raw)+">")
 			}
 			return raw
 		default:
