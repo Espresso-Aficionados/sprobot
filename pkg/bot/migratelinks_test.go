@@ -2,11 +2,15 @@ package bot
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -171,6 +175,38 @@ func TestMigratePlanContent(t *testing.T) {
 	}
 	if m.unknownCount != 1 || !strings.Contains(m.unknown[0], unknown) {
 		t.Errorf("unknown = %d %v, want the profile JSON link", m.unknownCount, m.unknown)
+	}
+}
+
+func TestMigrateCallBacksOffOnRateLimit(t *testing.T) {
+	saved := rateLimitBackoff
+	rateLimitBackoff = []time.Duration{time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { rateLimitBackoff = saved })
+
+	m, _ := newTestMigration(t)
+	limited := &rest.Error{Response: &http.Response{StatusCode: http.StatusTooManyRequests}}
+
+	calls := 0
+	err := m.call("test", func() error {
+		calls++
+		if calls < 3 {
+			return limited
+		}
+		return nil
+	})
+	if err != nil || calls != 3 {
+		t.Errorf("got err %v after %d calls, want success on the 3rd", err, calls)
+	}
+
+	calls = 0
+	if err := m.call("test", func() error { calls++; return limited }); !errors.Is(err, limited) || calls != 3 {
+		t.Errorf("got err %v after %d calls, want the 429 after 3", err, calls)
+	}
+
+	calls = 0
+	other := errors.New("boom")
+	if err := m.call("test", func() error { calls++; return other }); !errors.Is(err, other) || calls != 1 {
+		t.Errorf("got err %v after %d calls, want other errors returned at once", err, calls)
 	}
 }
 

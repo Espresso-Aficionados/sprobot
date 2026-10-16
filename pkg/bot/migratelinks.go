@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -25,6 +26,17 @@ import (
 // migrateLinksTimeout bounds a whole run, which edits at Discord's per-channel
 // rate limit.
 const migrateLinksTimeout = 6 * time.Hour
+
+// searchPageInterval paces the search scan. Back-to-back searches are
+// answered 429; disgo waits those out, but pacing keeps them from piling up.
+const searchPageInterval = 3 * time.Second
+
+// searchProgressPages is how often the search scan logs its progress.
+const searchProgressPages = 20
+
+// rateLimitBackoff is how long to wait before each retry once disgo has given
+// up on a 429.
+var rateLimitBackoff = []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute}
 
 // migrateReportExamples caps each list in the report.
 const migrateReportExamples = 10
@@ -154,7 +166,11 @@ func (m *linkMigration) scanModLog(consider func(discord.Message)) {
 	}
 
 	var threads []snowflake.ID
-	active, err := m.b.Client.Rest.GetActiveGuildThreads(m.guildID, rest.WithCtx(m.ctx))
+	var active *discord.GuildActiveThreads
+	err := m.call("listing active mod log threads", func() (err error) {
+		active, err = m.b.Client.Rest.GetActiveGuildThreads(m.guildID, rest.WithCtx(m.ctx))
+		return err
+	})
 	if err != nil {
 		m.scanError("listing active mod log threads", err)
 	} else {
@@ -166,7 +182,11 @@ func (m *linkMigration) scanModLog(consider func(discord.Message)) {
 	}
 	before := time.Time{}
 	for {
-		page, err := m.b.Client.Rest.GetPublicArchivedThreads(forumID, before, 0, rest.WithCtx(m.ctx))
+		var page *discord.GetThreads
+		err := m.call("listing archived mod log threads", func() (err error) {
+			page, err = m.b.Client.Rest.GetPublicArchivedThreads(forumID, before, 0, rest.WithCtx(m.ctx))
+			return err
+		})
 		if err != nil {
 			m.scanError("listing archived mod log threads", err)
 			break
@@ -183,7 +203,11 @@ func (m *linkMigration) scanModLog(consider func(discord.Message)) {
 	for _, threadID := range threads {
 		var oldest snowflake.ID
 		for {
-			msgs, err := m.b.Client.Rest.GetMessages(threadID, 0, oldest, 0, 100, rest.WithCtx(m.ctx))
+			var msgs []discord.Message
+			err := m.call("reading mod log threads", func() (err error) {
+				msgs, err = m.b.Client.Rest.GetMessages(threadID, 0, oldest, 0, 100, rest.WithCtx(m.ctx))
+				return err
+			})
 			if err != nil {
 				m.scanError(fmt.Sprintf("reading <#%d>", threadID), err)
 				break
@@ -206,11 +230,22 @@ func (m *linkMigration) scanSearch(consider func(discord.Message)) {
 		IncludeNSFW: &includeNSFW,
 		Limit:       25,
 	}
-	for {
-		res, err := m.b.Client.Rest.SearchGuildMessages(m.ctx, m.guildID, query)
+	for page := 1; ; page++ {
+		if page > 1 && !m.sleep(searchPageInterval) {
+			m.scanError("searching the server", m.ctx.Err())
+			return
+		}
+		var res *discord.GuildMessagesSearchResult
+		err := m.call("searching the server", func() (err error) {
+			res, err = m.b.Client.Rest.SearchGuildMessages(m.ctx, m.guildID, query)
+			return err
+		})
 		if err != nil {
 			m.scanError("searching the server", err)
 			return
+		}
+		if page%searchProgressPages == 0 {
+			m.b.Log.Info("Link migration search progress", "guild_id", m.guildID, "pages", page, "scanned", m.scanned, "before", query.MaxID.Time())
 		}
 		// Page by moving the upper bound below the oldest result. Pages can
 		// come up short, so stop only when the bound stops moving.
@@ -225,6 +260,40 @@ func (m *linkMigration) scanSearch(consider func(discord.Message)) {
 			return
 		}
 	}
+}
+
+// call runs fn, and if Discord is still answering 429 once disgo has spent
+// its own retries, backs off and tries again rather than failing the step.
+func (m *linkMigration) call(what string, fn func() error) error {
+	err := fn()
+	for _, wait := range rateLimitBackoff {
+		if !isRateLimited(err) {
+			return err
+		}
+		m.b.Log.Warn("Link migration rate limited; backing off", "step", what, "wait", wait)
+		if !m.sleep(wait) {
+			return m.ctx.Err()
+		}
+		err = fn()
+	}
+	return err
+}
+
+// sleep waits d, reporting false if the run is cancelled first.
+func (m *linkMigration) sleep(d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-m.ctx.Done():
+		return false
+	}
+}
+
+func isRateLimited(err error) bool {
+	var restErr *rest.Error
+	return errors.As(err, &restErr) && restErr.Response != nil && restErr.Response.StatusCode == http.StatusTooManyRequests
 }
 
 func (m *linkMigration) scanError(what string, err error) {
@@ -407,13 +476,17 @@ func (m *linkMigration) applyEdits() {
 }
 
 func (m *linkMigration) edit(p pendingEdit) error {
-	_, err := m.b.Client.Rest.UpdateMessage(p.channelID, p.messageID, p.update, rest.WithCtx(m.ctx))
-	return err
+	return m.call("editing messages", func() error {
+		_, err := m.b.Client.Rest.UpdateMessage(p.channelID, p.messageID, p.update, rest.WithCtx(m.ctx))
+		return err
+	})
 }
 
 func (m *linkMigration) setArchived(channelID snowflake.ID, archived bool) error {
-	_, err := m.b.Client.Rest.UpdateChannel(channelID, discord.GuildThreadUpdate{Archived: &archived}, rest.WithCtx(m.ctx))
-	return err
+	return m.call("archiving threads", func() error {
+		_, err := m.b.Client.Rest.UpdateChannel(channelID, discord.GuildThreadUpdate{Archived: &archived}, rest.WithCtx(m.ctx))
+		return err
+	})
 }
 
 func isArchivedThreadError(err error) bool {
