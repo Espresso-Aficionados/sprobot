@@ -350,14 +350,47 @@ func parseTicketCloseCustomID(customID, base string) (snowflake.ID, bool) {
 	return id, true
 }
 
-func ticketClosedDescription(opener, closer snowflake.ID, closedAt time.Time) string {
+func ticketClosedDescription(opener, closer snowflake.ID, openedAt, closedAt time.Time) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "**Ticket closed** <t:%d:f>", closedAt.Unix())
+	sb.WriteString("**Ticket closed**\n")
 	if opener != 0 {
-		fmt.Fprintf(&sb, "\nOpened by: <@%d>", opener)
+		fmt.Fprintf(&sb, "Opened by <@%d> on <t:%d:f>\n", opener, openedAt.Unix())
+	} else {
+		fmt.Fprintf(&sb, "Opened on <t:%d:f>\n", openedAt.Unix())
 	}
-	fmt.Fprintf(&sb, "\nClosed by: <@%d>", closer)
+	fmt.Fprintf(&sb, "Closed by <@%d> on <t:%d:f>\n", closer, closedAt.Unix())
+	fmt.Fprintf(&sb, "Open for %s", formatTicketDuration(closedAt.Sub(openedAt)))
 	return sb.String()
+}
+
+// formatTicketDuration renders d as its largest unit plus the next one down
+// when nonzero, e.g. "2d 4h", "3h", "45m".
+func formatTicketDuration(d time.Duration) string {
+	if d < time.Minute {
+		return "less than a minute"
+	}
+	units := []struct {
+		size   time.Duration
+		suffix string
+	}{
+		{24 * time.Hour, "d"},
+		{time.Hour, "h"},
+		{time.Minute, "m"},
+	}
+	for i, u := range units {
+		if d < u.size {
+			continue
+		}
+		s := fmt.Sprintf("%d%s", d/u.size, u.suffix)
+		if i+1 < len(units) {
+			next := units[i+1]
+			if n := (d % u.size) / next.size; n > 0 {
+				s += fmt.Sprintf(" %d%s", n, next.suffix)
+			}
+		}
+		return s
+	}
+	return "less than a minute"
 }
 
 func (b *Bot) handleTicketCloseConfirm(e *events.ComponentInteractionCreate) {
@@ -401,12 +434,15 @@ func (b *Bot) handleTicketCloseCancel(e *events.ComponentInteractionCreate, open
 
 func (b *Bot) handleTicketClose(e *events.ComponentInteractionCreate, opener snowflake.ID) {
 	closer := e.User().ID
+	channelID := e.Channel().ID()
+	// The ticket thread's snowflake is its creation time, i.e. when it was opened.
+	openedAt := channelID.Time()
+	closedAt := time.Now()
 	e.UpdateMessage(discord.MessageUpdate{
-		Embeds:     &[]discord.Embed{{Description: ticketClosedDescription(opener, closer, time.Now())}},
+		Embeds:     &[]discord.Embed{{Description: ticketClosedDescription(opener, closer, openedAt, closedAt)}},
 		Components: &[]discord.LayoutComponent{},
 	})
 
-	channelID := e.Channel().ID()
 	archived := true
 	locked := true
 	if _, err := b.Client.Rest.UpdateChannel(channelID, discord.GuildThreadUpdate{
@@ -415,6 +451,6 @@ func (b *Bot) handleTicketClose(e *events.ComponentInteractionCreate, opener sno
 	}); err != nil {
 		b.Log.Error("Failed to archive/lock ticket thread", "channel_id", channelID, "error", err)
 	} else {
-		b.Log.Info("Closed ticket", "channel_id", channelID, "user_id", closer, "opener_id", opener)
+		b.Log.Info("Closed ticket", "channel_id", channelID, "user_id", closer, "opener_id", opener, "open_for", closedAt.Sub(openedAt))
 	}
 }
