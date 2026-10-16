@@ -68,6 +68,12 @@ type linkMigration struct {
 	leftUnarchived         []snowflake.ID
 	scanErrors             []string
 	stopped                error
+
+	// Only mod log threads are unarchived for edits; messages in other
+	// archived threads are left alone.
+	modLogThreads   map[snowflake.ID]bool
+	archivedThreads map[snowflake.ID]bool // archived threads outside the mod log, as of the scan
+	inArchived      []string
 }
 
 func (b *Bot) handleMigrateLinks(e *events.ApplicationCommandInteractionCreate) {
@@ -142,65 +148,109 @@ func (m *linkMigration) scan() {
 		}
 		seen[msg.ID] = true
 		m.scanned++
-		if update, ok := m.plan(msg); ok {
-			m.pending = append(m.pending, pendingEdit{channelID: msg.ChannelID, messageID: msg.ID, update: update})
-		}
+		m.queue(msg)
 	}
 
+	m.modLogThreads = map[snowflake.ID]bool{}
+	m.archivedThreads = map[snowflake.ID]bool{}
+	active := m.activeThreads()
 	before := m.scanned
-	m.scanModLog(consider)
+	m.scanModLog(consider, active)
 	m.modLogScanned = m.scanned - before
-	m.scanSearch(consider)
+	m.scanSearch(consider, active)
 }
 
-func (m *linkMigration) scanModLog(consider func(discord.Message)) {
+// queue plans msg's edit, setting it aside if it's in an archived thread
+// outside the mod log.
+func (m *linkMigration) queue(msg discord.Message) {
+	update, ok := m.plan(msg)
+	switch {
+	case !ok:
+	case m.archivedThreads[msg.ChannelID]:
+		m.inArchived = append(m.inArchived, "<"+messageLink(m.guildID, msg.ChannelID, msg.ID)+">")
+	default:
+		m.pending = append(m.pending, pendingEdit{channelID: msg.ChannelID, messageID: msg.ID, update: update})
+	}
+}
+
+func (m *linkMigration) modLogForum() snowflake.ID {
 	st := m.b.modLog.get(m.guildID)
 	if st == nil {
-		return
+		return 0
 	}
 	st.mu.Lock()
-	forumID := st.ChannelID
-	st.mu.Unlock()
-	if forumID == 0 {
-		return
-	}
+	defer st.mu.Unlock()
+	return st.ChannelID
+}
 
-	var threads []snowflake.ID
+func (m *linkMigration) eventLogChannel() snowflake.ID {
+	st := m.b.eventLog.get(m.guildID)
+	if st == nil {
+		return 0
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.ChannelID
+}
+
+// activeThreads lists the guild's active threads by parent channel.
+func (m *linkMigration) activeThreads() map[snowflake.ID][]snowflake.ID {
 	var active *discord.GuildActiveThreads
-	err := m.call("listing active mod log threads", func() (err error) {
+	err := m.call("listing active threads", func() (err error) {
 		active, err = m.b.Client.Rest.GetActiveGuildThreads(m.guildID, rest.WithCtx(m.ctx))
 		return err
 	})
 	if err != nil {
-		m.scanError("listing active mod log threads", err)
-	} else {
-		for _, t := range active.Threads {
-			if p := t.ParentID(); p != nil && *p == forumID {
-				threads = append(threads, t.ID())
-			}
+		m.scanError("listing active threads", err)
+		return nil
+	}
+	byParent := map[snowflake.ID][]snowflake.ID{}
+	for _, t := range active.Threads {
+		if p := t.ParentID(); p != nil {
+			byParent[*p] = append(byParent[*p], t.ID())
 		}
 	}
+	return byParent
+}
+
+// listArchivedThreads lists channelID's archived threads.
+func (m *linkMigration) listArchivedThreads(channelID snowflake.ID, private bool) []snowflake.ID {
+	what := fmt.Sprintf("listing archived threads in <#%d>", channelID)
+	var threads []snowflake.ID
 	before := time.Time{}
 	for {
 		var page *discord.GetThreads
-		err := m.call("listing archived mod log threads", func() (err error) {
-			page, err = m.b.Client.Rest.GetPublicArchivedThreads(forumID, before, 0, rest.WithCtx(m.ctx))
+		err := m.call(what, func() (err error) {
+			if private {
+				page, err = m.b.Client.Rest.GetPrivateArchivedThreads(channelID, before, 100, rest.WithCtx(m.ctx))
+			} else {
+				page, err = m.b.Client.Rest.GetPublicArchivedThreads(channelID, before, 100, rest.WithCtx(m.ctx))
+			}
 			return err
 		})
 		if err != nil {
-			m.scanError("listing archived mod log threads", err)
-			break
+			m.scanError(what, err)
+			return threads
 		}
 		for _, t := range page.Threads {
 			threads = append(threads, t.ID())
 		}
 		if !page.HasMore || len(page.Threads) == 0 {
-			break
+			return threads
 		}
 		before = page.Threads[len(page.Threads)-1].ThreadMetadata.ArchiveTimestamp
 	}
+}
+
+func (m *linkMigration) scanModLog(consider func(discord.Message), active map[snowflake.ID][]snowflake.ID) {
+	forumID := m.modLogForum()
+	if forumID == 0 {
+		return
+	}
+	threads := append(active[forumID], m.listArchivedThreads(forumID, false)...)
 
 	for _, threadID := range threads {
+		m.modLogThreads[threadID] = true
 		var oldest snowflake.ID
 		for {
 			var msgs []discord.Message
@@ -223,17 +273,82 @@ func (m *linkMigration) scanModLog(consider func(discord.Message)) {
 	}
 }
 
-func (m *linkMigration) scanSearch(consider func(discord.Message)) {
+// searchChannels lists what the search covers: every channel the bot can read
+// except the event log, whose embeds are most of the bot's messages and never
+// carry bucket links, and the mod log forum, which scanModLog reads in full.
+// Threads are listed explicitly, since Discord doesn't document whether a
+// parent channel filter includes them.
+func (m *linkMigration) searchChannels(active map[snowflake.ID][]snowflake.ID) []snowflake.ID {
+	skip := map[snowflake.ID]bool{m.eventLogChannel(): true, m.modLogForum(): true}
+	self, ok := m.b.Client.Caches.SelfMember(m.guildID)
+	if !ok {
+		m.scanError("listing channels", errors.New("the bot's member isn't cached"))
+		return nil
+	}
+
+	var ids []snowflake.ID
+	for ch := range m.b.Client.Caches.ChannelsForGuild(m.guildID) {
+		if skip[ch.ID()] {
+			continue
+		}
+		switch ch.Type() {
+		case discord.ChannelTypeGuildCategory, discord.ChannelTypeGuildDirectory,
+			discord.ChannelTypeGuildNewsThread, discord.ChannelTypeGuildPublicThread, discord.ChannelTypeGuildPrivateThread:
+			continue
+		}
+		if !m.b.Client.Caches.MemberPermissionsInChannel(ch, self).Has(discord.PermissionViewChannel, discord.PermissionReadMessageHistory) {
+			continue
+		}
+		ids = append(ids, ch.ID())
+		ids = append(ids, active[ch.ID()]...)
+		var archived []snowflake.ID
+		switch ch.Type() {
+		case discord.ChannelTypeGuildText:
+			archived = append(m.listArchivedThreads(ch.ID(), false), m.listArchivedThreads(ch.ID(), true)...)
+		case discord.ChannelTypeGuildNews, discord.ChannelTypeGuildForum, discord.ChannelTypeGuildMedia:
+			archived = m.listArchivedThreads(ch.ID(), false)
+		}
+		for _, id := range archived {
+			m.archivedThreads[id] = true
+		}
+		ids = append(ids, archived...)
+	}
+	return ids
+}
+
+// searchBatch is the most channels one search may filter on.
+const searchBatch = 500
+
+func (m *linkMigration) scanSearch(consider func(discord.Message), active map[snowflake.ID][]snowflake.ID) {
+	channels := m.searchChannels(active)
+	// An empty channel filter would search everything, event log included.
+	if len(channels) == 0 {
+		m.scanError("searching the server", errors.New("no channels to search"))
+		return
+	}
+	m.b.Log.Info("Link migration searching", "guild_id", m.guildID, "channels", len(channels))
+	for start := 0; start < len(channels); start += searchBatch {
+		batch := channels[start:min(start+searchBatch, len(channels))]
+		if !m.searchIn(consider, batch) {
+			return
+		}
+	}
+}
+
+// searchIn pages through the bot's messages in channels, reporting false if
+// the scan should stop.
+func (m *linkMigration) searchIn(consider func(discord.Message), channels []snowflake.ID) bool {
 	includeNSFW := true
 	query := discord.GuildMessagesSearch{
 		AuthorIDs:   []snowflake.ID{m.b.Client.ID()},
+		ChannelIDs:  channels,
 		IncludeNSFW: &includeNSFW,
 		Limit:       25,
 	}
 	for page := 1; ; page++ {
-		if page > 1 && !m.sleep(searchPageInterval) {
+		if !m.sleep(searchPageInterval) {
 			m.scanError("searching the server", m.ctx.Err())
-			return
+			return false
 		}
 		var res *discord.GuildMessagesSearchResult
 		err := m.call("searching the server", func() (err error) {
@@ -242,7 +357,7 @@ func (m *linkMigration) scanSearch(consider func(discord.Message)) {
 		})
 		if err != nil {
 			m.scanError("searching the server", err)
-			return
+			return false
 		}
 		if page%searchProgressPages == 0 {
 			m.b.Log.Info("Link migration search progress", "guild_id", m.guildID, "pages", page, "scanned", m.scanned, "before", query.MaxID.Time())
@@ -257,7 +372,7 @@ func (m *linkMigration) scanSearch(consider func(discord.Message)) {
 			}
 		}
 		if query.MaxID == prev {
-			return
+			return true
 		}
 	}
 }
@@ -453,10 +568,18 @@ func (m *linkMigration) applyEdits() {
 				return
 			}
 			err := m.edit(p)
-			if isArchivedThreadError(err) && !unarchived {
-				if err = m.setArchived(channelID, false); err == nil {
-					unarchived = true
-					err = m.edit(p)
+			if isArchivedThreadError(err) {
+				// Only mod log threads are reopened; anywhere else, a thread
+				// archived since the scan is left as it is.
+				if !m.modLogThreads[channelID] {
+					m.inArchived = append(m.inArchived, "<"+messageLink(m.guildID, channelID, p.messageID)+">")
+					continue
+				}
+				if !unarchived {
+					if err = m.setArchived(channelID, false); err == nil {
+						unarchived = true
+						err = m.edit(p)
+					}
 				}
 			}
 			if err != nil {
@@ -526,6 +649,7 @@ func (m *linkMigration) report() string {
 		}
 	}
 	list("Bucket links left alone (no stable route, or another server's file)", m.unknown, m.unknownCount)
+	list("Left alone in archived threads outside the mod log", m.inArchived, len(m.inArchived))
 	list("Failed edits", m.failed, len(m.failed))
 	list("The scan was incomplete", m.scanErrors, len(m.scanErrors))
 	if len(m.leftUnarchived) > 0 {
