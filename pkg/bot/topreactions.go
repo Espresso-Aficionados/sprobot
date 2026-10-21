@@ -29,9 +29,9 @@ const (
 	// unpostedEntryMaxAge is how long reactions on a message that has not
 	// reached the threshold are remembered.
 	unpostedEntryMaxAge = 30 * 24 * time.Hour
-	// starboardMaxAge is the message age past which reactions are ignored. A
-	// post's count is final from then on, so its entry can be pruned without
-	// the message ever being posted a second time.
+	// starboardMaxAge is the message age past which reactions are ignored: an
+	// older message is not posted, and a post's count stops changing. Posted
+	// entries are still kept, so deleting the message deletes its post.
 	starboardMaxAge = 90 * 24 * time.Hour
 )
 
@@ -98,35 +98,57 @@ func (b *Bot) resolveChannelParents(channelID snowflake.ID, _ *sync.Map) []snowf
 	return ids
 }
 
-// roleCanView reports whether a member holding only role (besides @everyone)
-// can view a channel with the given overwrites: guild permissions, then the
-// @everyone overwrite, then the role's overwrite. Member overwrites are
-// ignored, and Administrator sees everything.
-func roleCanView(guildID snowflake.ID, everyone, role discord.Role, overwrites discord.PermissionOverwrites) bool {
-	perms := everyone.Permissions | role.Permissions
+// rolesCanView reports whether a member holding roles (besides @everyone) can
+// view a channel with the given overwrites, computed as Discord does: guild
+// permissions, then the @everyone overwrite, then the roles' overwrites
+// combined, denies before allows. Member overwrites are ignored, and
+// Administrator sees everything.
+func rolesCanView(guildID snowflake.ID, everyone discord.Role, roles []discord.Role, overwrites discord.PermissionOverwrites) bool {
+	perms := everyone.Permissions
+	for _, r := range roles {
+		perms = perms.Add(r.Permissions)
+	}
 	if perms.Has(discord.PermissionAdministrator) {
 		return true
 	}
 	if ow, ok := overwrites.Role(guildID); ok {
 		perms = perms.Remove(ow.Deny).Add(ow.Allow)
 	}
-	if role.ID != guildID {
-		if ow, ok := overwrites.Role(role.ID); ok {
-			perms = perms.Remove(ow.Deny).Add(ow.Allow)
+	var deny, allow discord.Permissions
+	for _, r := range roles {
+		if ow, ok := overwrites.Role(r.ID); ok && r.ID != guildID {
+			deny, allow = deny.Add(ow.Deny), allow.Add(ow.Allow)
 		}
 	}
-	return perms.Has(discord.PermissionViewChannel)
+	return perms.Remove(deny).Add(allow).Has(discord.PermissionViewChannel)
+}
+
+// channelNSFW reports whether a channel is age-restricted. Threads report
+// false; their channel decides.
+func channelNSFW(ch discord.GuildChannel) bool {
+	switch c := ch.(type) {
+	case discord.GuildMessageChannel:
+		return c.NSFW()
+	case discord.GuildForumChannel:
+		return c.NSFW
+	case discord.GuildMediaChannel:
+		return c.NSFW
+	}
+	return false
 }
 
 // starboardAudienceOK reports whether a message in source may be reposted to
-// output: every role that can view output must also be able to view source,
-// so the starboard never shows a message to anyone who couldn't already read
-// it. A server where one broad "access" role gates both channels passes;
-// a staff channel does not. A thread is judged by its channel (sourceParent),
-// whose overwrites it inherits, and a private thread never passes. An output
-// thread must be passed as its channel. roles must include @everyone, whose
-// ID is the guild's. A nil channel or a missing @everyone role means the data
-// isn't available, which is an error so the caller can fail closed.
+// output: every member who can view output, whatever their roles, must also
+// be able to view source, so the starboard never shows a message to anyone
+// who couldn't already read it (member overwrites aside). A server where one
+// broad "access" role gates both channels passes; a staff channel, or one
+// that a restriction role is denied, does not. An age-restricted source
+// passes only for an age-restricted output. A thread is judged by its channel
+// (sourceParent), whose overwrites it inherits, and a private thread never
+// passes. An output thread must be passed as its channel. roles must include
+// @everyone, whose ID is the guild's. A nil channel or a missing @everyone
+// role means the data isn't available, which is an error so the caller can
+// fail closed.
 func starboardAudienceOK(guildID snowflake.ID, roles []discord.Role, source, sourceParent, output discord.GuildChannel) (bool, error) {
 	if source == nil {
 		return false, errors.New("source channel not found")
@@ -137,7 +159,6 @@ func starboardAudienceOK(guildID snowflake.ID, roles []discord.Role, source, sou
 	if _, ok := output.(discord.GuildThread); ok {
 		return false, errors.New("output is a thread, not its channel")
 	}
-	sourceOverwrites := source.PermissionOverwrites()
 	if thread, ok := source.(discord.GuildThread); ok {
 		if thread.Type() == discord.ChannelTypeGuildPrivateThread {
 			return false, nil
@@ -145,17 +166,46 @@ func starboardAudienceOK(guildID snowflake.ID, roles []discord.Role, source, sou
 		if sourceParent == nil {
 			return false, errors.New("thread's channel not found")
 		}
-		sourceOverwrites = sourceParent.PermissionOverwrites()
+		source = sourceParent
 	}
-	everyone := slices.IndexFunc(roles, func(r discord.Role) bool { return r.ID == guildID })
-	if everyone < 0 {
+	everyoneIdx := slices.IndexFunc(roles, func(r discord.Role) bool { return r.ID == guildID })
+	if everyoneIdx < 0 {
 		return false, errors.New("@everyone role not cached")
 	}
-	outputOverwrites := output.PermissionOverwrites()
-	for _, role := range roles {
-		if roleCanView(guildID, roles[everyone], role, outputOverwrites) &&
-			!roleCanView(guildID, roles[everyone], role, sourceOverwrites) {
+	if channelNSFW(source) && !channelNSFW(output) {
+		return false, nil
+	}
+
+	everyone := roles[everyoneIdx]
+	sourceOverwrites, outputOverwrites := source.PermissionOverwrites(), output.PermissionOverwrites()
+	leaks := func(held ...discord.Role) bool {
+		return rolesCanView(guildID, everyone, held, outputOverwrites) &&
+			!rolesCanView(guildID, everyone, held, sourceOverwrites)
+	}
+	// A member who sees output but not source has at most two roles that
+	// matter: one granting output, and one whose overwrite denies source. So
+	// @everyone alone, each role, and each role paired with each role denied
+	// source cover every combination of roles.
+	var denied []discord.Role
+	for _, r := range roles {
+		if ow, ok := sourceOverwrites.Role(r.ID); ok && r.ID != guildID && ow.Deny.Has(discord.PermissionViewChannel) {
+			denied = append(denied, r)
+		}
+	}
+	if leaks() {
+		return false, nil
+	}
+	for _, r := range roles {
+		if r.ID == guildID {
+			continue
+		}
+		if leaks(r) {
 			return false, nil
+		}
+		for _, d := range denied {
+			if d.ID != r.ID && leaks(r, d) {
+				return false, nil
+			}
 		}
 	}
 	return true, nil
@@ -196,10 +246,14 @@ type starboardEntry struct {
 	AuthorID       snowflake.ID `json:"author_id"`
 	Count          int          `json:"count"`
 	StarboardMsgID snowflake.ID `json:"starboard_msg_id"`
-	// PostChannelID is the channel the post went to. It is zero for posts
-	// made before it was recorded, which are in the current output channel.
+	// PostChannelID is the channel the post went to. Posts made before it was
+	// recorded get it at load (backfillPostChannels), unless the starboard
+	// was disabled then; those are taken to be in the current output channel.
 	PostChannelID snowflake.ID `json:"post_channel_id,omitempty"`
 	ChannelName   string       `json:"channel_name,omitempty"`
+	// SourceDeleted marks an entry whose message is gone. It is kept only
+	// until its post is deleted, and reactions no longer change it.
+	SourceDeleted bool `json:"source_deleted,omitempty"`
 }
 
 // postChannel returns the channel holding the entry's post.
@@ -208,6 +262,22 @@ func (e starboardEntry) postChannel(outputID snowflake.ID) snowflake.ID {
 		return e.PostChannelID
 	}
 	return outputID
+}
+
+// backfillPostChannels records the output channel on posts made before
+// PostChannelID was stored, taking them to be in the output channel at load as
+// edits always have, so later changing or disabling the output doesn't lose
+// where they are.
+func backfillPostChannels(st *starboardState) {
+	if st.Settings.OutputChannelID == 0 {
+		return
+	}
+	for id, e := range st.Entries {
+		if e.StarboardMsgID != 0 && e.PostChannelID == 0 {
+			e.PostChannelID = st.Settings.OutputChannelID
+			st.Entries[id] = e
+		}
+	}
 }
 
 type starboardState struct {
@@ -275,6 +345,10 @@ const (
 // first add. Must be called with mu held; it makes no Discord calls.
 func (st *starboardState) applyReaction(msgID snowflake.ID, change reactionChange, seed starboardEntry) starboardAction {
 	entry, ok := st.Entries[msgID]
+	if entry.SourceDeleted {
+		// A reaction handled after the delete; the post is being deleted.
+		return starboardNone
+	}
 	if !ok {
 		if change != reactionAdded {
 			return starboardNone
@@ -356,18 +430,13 @@ func (b *Bot) saveStarboard() {
 }
 
 // pruneStarboardEntries removes unposted entries older than
-// unpostedEntryMaxAge and posted ones older than starboardMaxAge, whose posts
-// can no longer change. Entries with a post or edit in flight are kept. Must
-// be called with mu held.
+// unpostedEntryMaxAge, unless a post is in flight. Posted entries are kept for
+// as long as their post: an entry is the only link from a message to its
+// post, which is deleted when the message is. Must be called with mu held.
 func pruneStarboardEntries(st *starboardState, now time.Time) {
-	unpostedCutoff := now.Add(-unpostedEntryMaxAge)
-	postedCutoff := now.Add(-starboardMaxAge)
+	cutoff := now.Add(-unpostedEntryMaxAge)
 	for msgID, entry := range st.Entries {
-		if st.work[msgID] != nil {
-			continue
-		}
-		sent := msgID.Time()
-		if sent.Before(postedCutoff) || (entry.StarboardMsgID == 0 && sent.Before(unpostedCutoff)) {
+		if entry.StarboardMsgID == 0 && st.work[msgID] == nil && msgID.Time().Before(cutoff) {
 			delete(st.Entries, msgID)
 		}
 	}
@@ -457,38 +526,136 @@ func (b *Bot) runStarboardAction(guildID, msgID snowflake.ID, st *starboardState
 
 // onStarboardSourceDelete deletes the entry and starboard post of a deleted
 // message, so its reposted text does not outlive it. A repeated delete finds
-// no entry and does nothing.
+// no entry, or retries a post delete that failed.
 func (b *Bot) onStarboardSourceDelete(e *events.GuildMessageDelete) {
-	st := b.starboard.get(e.GuildID)
-	if st == nil {
-		return
-	}
-
-	st.mu.Lock()
-	entry, ok := st.Entries[e.MessageID]
-	delete(st.Entries, e.MessageID)
-	outputID := st.Settings.OutputChannelID
-	st.mu.Unlock()
-
-	// A post still being created finds its entry gone and deletes itself.
-	if !ok || entry.StarboardMsgID == 0 {
-		return
-	}
-	if channelID := entry.postChannel(outputID); channelID != 0 {
-		b.deleteStarboardPost(e.GuildID, e.MessageID, channelID, entry.StarboardMsgID)
-	}
-	if err := b.starboard.persist(e.GuildID); err != nil {
-		b.Log.Error("Failed to persist starboard after delete", "guild_id", e.GuildID, "error", err)
+	if st := b.starboard.get(e.GuildID); st != nil {
+		b.markSourcesDeleted(e.GuildID, st, []snowflake.ID{e.MessageID})
 	}
 }
 
-// deleteStarboardPost deletes a post, treating one already gone as deleted.
-func (b *Bot) deleteStarboardPost(guildID, sourceID, channelID, postID snowflake.ID) {
-	err := b.Client.Rest.DeleteMessage(channelID, postID)
-	if err != nil && !rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownMessage, rest.JSONErrorCodeUnknownChannel) {
-		b.Log.Error("Failed to delete starboard post of a deleted message", "guild_id", guildID,
-			"message_id", sourceID, "channel_id", channelID, "post_id", postID, "error", err)
+// onStarboardChannelDelete and onStarboardThreadDelete delete the posts of
+// messages in a deleted channel or thread, for which Discord sends no message
+// deletes.
+func (b *Bot) onStarboardChannelDelete(e *events.GuildChannelDelete) {
+	b.deleteChannelSources(e.GuildID, e.ChannelID)
+}
+
+func (b *Bot) onStarboardThreadDelete(e *events.ThreadDelete) {
+	b.deleteChannelSources(e.GuildID, e.ThreadID)
+}
+
+// deleteChannelSources deletes the posts and entries of messages in
+// channelID, including its threads that the channel cache knows of.
+func (b *Bot) deleteChannelSources(guildID, channelID snowflake.ID) {
+	st := b.starboard.get(guildID)
+	if st == nil {
+		return
 	}
+	st.mu.Lock()
+	byChannel := make(map[snowflake.ID][]snowflake.ID)
+	for msgID, entry := range st.Entries {
+		byChannel[entry.ChannelID] = append(byChannel[entry.ChannelID], msgID)
+	}
+	st.mu.Unlock()
+
+	var deleted []snowflake.ID
+	for ch, msgIDs := range byChannel {
+		thread, isThread := b.Client.Caches.GuildThread(ch)
+		if ch == channelID || (isThread && thread.ParentID() != nil && *thread.ParentID() == channelID) {
+			deleted = append(deleted, msgIDs...)
+		}
+	}
+	b.markSourcesDeleted(guildID, st, deleted)
+}
+
+// markSourcesDeleted flags the entries of deleted messages and deletes their
+// posts and entries. One with a post or edit in flight is left to that work,
+// which finishes it when done; reactions no longer start any.
+func (b *Bot) markSourcesDeleted(guildID snowflake.ID, st *starboardState, msgIDs []snowflake.ID) {
+	var idle []snowflake.ID
+	st.mu.Lock()
+	for _, msgID := range msgIDs {
+		entry, ok := st.Entries[msgID]
+		if !ok {
+			continue
+		}
+		entry.SourceDeleted = true
+		st.Entries[msgID] = entry
+		if st.work[msgID] == nil {
+			idle = append(idle, msgID)
+		}
+	}
+	st.mu.Unlock()
+
+	for _, msgID := range idle {
+		b.removeDeletedEntry(guildID, msgID, st)
+	}
+	if len(idle) > 0 {
+		if err := b.starboard.persist(guildID); err != nil {
+			b.Log.Error("Failed to persist starboard after delete", "guild_id", guildID, "error", err)
+		}
+	}
+}
+
+// removeDeletedEntry deletes the post of an entry flagged SourceDeleted, then
+// the entry, and reports whether it did. If the post can't be deleted, or its
+// channel isn't known, the entry stays flagged for retryStarboardDeletes. The
+// caller persists. Must be called with nothing in flight for msgID.
+func (b *Bot) removeDeletedEntry(guildID, msgID snowflake.ID, st *starboardState) bool {
+	st.mu.Lock()
+	entry, ok := st.Entries[msgID]
+	outputID := st.Settings.OutputChannelID
+	st.mu.Unlock()
+	if !ok || !entry.SourceDeleted {
+		return false
+	}
+	if entry.StarboardMsgID != 0 {
+		channelID := entry.postChannel(outputID)
+		if channelID == 0 || !b.deleteStarboardPost(guildID, msgID, channelID, entry.StarboardMsgID) {
+			return false
+		}
+	}
+	st.mu.Lock()
+	delete(st.Entries, msgID)
+	st.mu.Unlock()
+	return true
+}
+
+// retryStarboardDeletes retries deleting the posts of deleted messages whose
+// first delete failed.
+func (b *Bot) retryStarboardDeletes() {
+	b.starboard.each(func(guildID snowflake.ID, st *starboardState) {
+		var pending []snowflake.ID
+		st.mu.Lock()
+		for msgID, entry := range st.Entries {
+			if entry.SourceDeleted && st.work[msgID] == nil {
+				pending = append(pending, msgID)
+			}
+		}
+		st.mu.Unlock()
+		removed := false
+		for _, msgID := range pending {
+			removed = b.removeDeletedEntry(guildID, msgID, st) || removed
+		}
+		if !removed {
+			return
+		}
+		if err := b.starboard.persist(guildID); err != nil {
+			b.Log.Error("Failed to persist starboard after delete", "guild_id", guildID, "error", err)
+		}
+	})
+}
+
+// deleteStarboardPost deletes a post and reports whether it is gone, counting
+// one that was already deleted.
+func (b *Bot) deleteStarboardPost(guildID, sourceID, channelID, postID snowflake.ID) bool {
+	err := b.Client.Rest.DeleteMessage(channelID, postID)
+	if err == nil || rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownMessage, rest.JSONErrorCodeUnknownChannel) {
+		return true
+	}
+	b.Log.Error("Failed to delete starboard post of a deleted message", "guild_id", guildID,
+		"message_id", sourceID, "channel_id", channelID, "post_id", postID, "error", err)
+	return false
 }
 
 // emojiCDNURL returns a CDN URL for a custom emoji stored as "name:id",
@@ -565,29 +732,58 @@ func starboardEmbed(guildID snowflake.ID, msg discord.Message, emoji string, cou
 
 // --- Starboard Posting ---
 
+// postResult is the outcome of one attempt to post a message.
+type postResult int
+
+const (
+	postFailed         postResult = iota // a Discord call failed, or the message is gone
+	postBelowThreshold                   // the message's own count is too low
+	postDone
+)
+
 // postStarboardEntry posts msgID. The caller holds the message's posting flag
-// (see applyReaction), so no second post can start; reactions that arrive
-// meanwhile mark it dirty and get one edit once the post exists.
+// (see applyReaction), so no second post can start. A reaction that arrives
+// meanwhile marks it dirty: once the post exists it gets one edit, and if the
+// count read was too low it is read again.
 func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState) {
-	posted := b.createStarboardPost(guildID, msgID, st)
+	result := b.createStarboardPost(guildID, msgID, st)
 
 	st.mu.Lock()
 	w := st.work[msgID]
+	for result == postBelowThreshold && w.dirty {
+		st.mu.Unlock()
+		result = b.createStarboardPost(guildID, msgID, st)
+		st.mu.Lock()
+	}
+	sourceDeleted := st.Entries[msgID].SourceDeleted
 	w.posting = false
-	followUp := posted && w.dirty
+	followUp := result == postDone && w.dirty && !sourceDeleted
 	w.updating = followUp
 	st.endWork(msgID)
 	st.mu.Unlock()
 
-	if followUp {
+	switch {
+	case followUp:
 		b.runStarboardUpdates(guildID, msgID, st)
+	case sourceDeleted:
+		b.finishSourceDelete(guildID, msgID, st)
+	}
+}
+
+// finishSourceDelete removes msgID's flagged entry and its post, if any, once
+// the work in flight when its message was deleted has ended.
+func (b *Bot) finishSourceDelete(guildID, msgID snowflake.ID, st *starboardState) {
+	b.removeDeletedEntry(guildID, msgID, st)
+	if err := b.starboard.persist(guildID); err != nil {
+		b.Log.Error("Failed to persist starboard after delete", "guild_id", guildID, "error", err)
 	}
 }
 
 // createStarboardPost posts msgID if its actual reaction count meets the
-// threshold, and reports whether it did.
-func (b *Bot) createStarboardPost(guildID, msgID snowflake.ID, st *starboardState) bool {
+// threshold.
+func (b *Bot) createStarboardPost(guildID, msgID snowflake.ID, st *starboardState) postResult {
 	st.mu.Lock()
+	st.work[msgID].dirty = false
 	entry := st.Entries[msgID]
 	settings := st.Settings
 	st.mu.Unlock()
@@ -595,20 +791,25 @@ func (b *Bot) createStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 	msg, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID)
 	if err != nil {
 		b.Log.Error("Failed to fetch message for starboard", "guild_id", guildID, "message_id", msgID, "error", err)
-		return false
+		return postFailed
 	}
 
 	// Reaction events are handled concurrently, so the event counter can
-	// drift; the message's own reactions decide.
+	// drift; the message's own reactions decide. A reaction that arrived
+	// during the read marks the message dirty, and the caller reads again.
 	count := reactionCount(msg.Reactions, settings.Emoji)
 	st.mu.Lock()
-	if e, ok := st.Entries[msgID]; ok {
-		e.Count = count
-		st.Entries[msgID] = e
+	entry, ok := st.Entries[msgID]
+	if ok {
+		entry.Count = count
+		st.Entries[msgID] = entry
 	}
 	st.mu.Unlock()
+	if !ok || entry.SourceDeleted {
+		return postFailed
+	}
 	if count < settings.effectiveThreshold() {
-		return false
+		return postBelowThreshold
 	}
 
 	channelName := b.resolveChannelName(entry.ChannelID)
@@ -618,11 +819,13 @@ func (b *Bot) createStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 	sent, err := b.Client.Rest.CreateMessage(settings.OutputChannelID, create)
 	if err != nil {
 		b.Log.Error("Failed to post starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
-		return false
+		return postFailed
 	}
 
+	// The post is recorded even if the message was deleted meanwhile, so the
+	// caller's finishSourceDelete can delete it.
 	st.mu.Lock()
-	entry, ok := st.Entries[msgID]
+	entry, ok = st.Entries[msgID]
 	if ok {
 		entry.StarboardMsgID = sent.ID
 		entry.PostChannelID = settings.OutputChannelID
@@ -634,15 +837,15 @@ func (b *Bot) createStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 	st.mu.Unlock()
 
 	if !ok {
-		// Only onStarboardSourceDelete removes an entry with a post in
-		// flight: the message was deleted while it was being posted.
+		// Nothing removes an entry with a post in flight, but a post nothing
+		// tracks could never be deleted.
 		b.deleteStarboardPost(guildID, msgID, settings.OutputChannelID, sent.ID)
-		return false
+		return postFailed
 	}
 	if err := b.starboard.persist(guildID); err != nil {
 		b.Log.Error("Failed to persist starboard after post", "guild_id", guildID, "error", err)
 	}
-	return true
+	return postDone
 }
 
 // runStarboardUpdates edits msgID's post, again while reactions keep arriving
@@ -664,7 +867,11 @@ func (b *Bot) runStarboardUpdates(guildID, msgID snowflake.ID, st *starboardStat
 		if !w.dirty {
 			w.updating = false
 			st.endWork(msgID)
+			sourceDeleted := st.Entries[msgID].SourceDeleted
 			st.mu.Unlock()
+			if sourceDeleted {
+				b.finishSourceDelete(guildID, msgID, st)
+			}
 			return
 		}
 		st.mu.Unlock()
@@ -679,7 +886,7 @@ func (b *Bot) updateStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 	settings := st.Settings
 	st.mu.Unlock()
 
-	if !ok || entry.StarboardMsgID == 0 || settings.OutputChannelID == 0 {
+	if !ok || entry.StarboardMsgID == 0 || entry.SourceDeleted || settings.OutputChannelID == 0 {
 		return
 	}
 	postChannel := entry.postChannel(settings.OutputChannelID)

@@ -148,6 +148,8 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onReactionRemoveAll),
 		bot.WithEventListenerFunc(b.onReactionRemoveEmoji),
 		bot.WithEventListenerFunc(b.onStarboardSourceDelete),
+		bot.WithEventListenerFunc(b.onStarboardChannelDelete),
+		bot.WithEventListenerFunc(b.onStarboardThreadDelete),
 	)
 	if err != nil {
 		return nil, err
@@ -254,6 +256,7 @@ func (b *Bot) initStateStores() {
 		if st.Entries == nil {
 			st.Entries = make(map[snowflake.ID]starboardEntry)
 		}
+		backfillPostChannels(st)
 	}
 	b.topPosters.postLoad = func(gc *guildPostCounts) {
 		if gc.Counts == nil {
@@ -389,6 +392,7 @@ func (b *Bot) Run() error {
 	b.startLoop(5*time.Minute, b.saveCaches) // also prunes expired messages
 	b.startLoop(1*time.Hour, func() { pruneCorruptBackups(b.S3, b.Log, time.Now()) })
 	b.startLoop(5*time.Minute, b.saveStarboard)
+	b.startLoop(5*time.Minute, b.retryStarboardDeletes)
 	b.startLoop(5*time.Minute, b.renameLogs.save)
 	b.startLoop(5*time.Minute, b.tempRoles.save)
 	b.startLoop(1*time.Minute, b.processTempRoleExpiries)

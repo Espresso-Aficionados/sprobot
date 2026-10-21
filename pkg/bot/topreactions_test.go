@@ -44,6 +44,13 @@ type fakeStarboardAPI struct {
 	// createGate before creating the message. Later POSTs don't wait.
 	createStarted chan struct{}
 	createGate    chan struct{}
+	// getStarted and getGate do the same for the next message GET, which
+	// returns the message as it was when the request arrived.
+	getStarted chan struct{}
+	getGate    chan struct{}
+	// A non-zero createStatus or deleteStatus fails POSTs or DELETEs with it.
+	createStatus int
+	deleteStatus int
 }
 
 type starboardCreateBody struct {
@@ -116,11 +123,35 @@ func (f *fakeStarboardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if f.createStatus != 0 {
+			discordError(w, f.createStatus, 0)
+			return
+		}
 		f.creates = append(f.creates, body)
 		f.nextID++
 		msg := map[string]any{"id": fmt.Sprint(f.nextID), "channel_id": channelID, "embeds": body.Embeds}
 		f.messages[channelID+"/"+fmt.Sprint(f.nextID)] = msg
 		writeJSON(w, msg)
+		return
+	}
+
+	if r.Method == http.MethodGet && len(parts) == 4 && parts[2] == "messages" {
+		f.mu.Lock()
+		msg, ok := f.messages[channelID+"/"+parts[3]]
+		data, _ := json.Marshal(msg)
+		started, gate := f.getStarted, f.getGate
+		f.getStarted, f.getGate = nil, nil
+		f.mu.Unlock()
+		if started != nil {
+			started <- struct{}{}
+			<-gate
+		}
+		if !ok {
+			discordError(w, http.StatusNotFound, rest.JSONErrorCodeUnknownMessage)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(data)
 		return
 	}
 
@@ -143,8 +174,6 @@ func (f *fakeStarboardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch r.Method {
-		case http.MethodGet:
-			writeJSON(w, msg)
 		case http.MethodPatch:
 			var body struct {
 				Embeds []discord.Embed `json:"embeds"`
@@ -156,6 +185,10 @@ func (f *fakeStarboardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, msg)
 		case http.MethodDelete:
+			if f.deleteStatus != 0 {
+				discordError(w, f.deleteStatus, 0)
+				return
+			}
 			delete(f.messages, key)
 			f.deletes = append(f.deletes, key)
 			w.WriteHeader(http.StatusNoContent)
@@ -247,6 +280,34 @@ func entryOf(st *starboardState, msgID snowflake.ID) (starboardEntry, bool) {
 	return e, ok
 }
 
+func workCount(st *starboardState) int {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return len(st.work)
+}
+
+func messageDelete(msgID snowflake.ID) *events.GuildMessageDelete {
+	return &events.GuildMessageDelete{GenericGuildMessage: &events.GenericGuildMessage{
+		GuildID: sbGuild, ChannelID: sbSource, MessageID: msgID,
+	}}
+}
+
+// persistedHolds reports whether the starboard saved to S3 mentions msgID.
+func persistedHolds(t *testing.T, fakeS3 *testutil.FakeS3, msgID snowflake.ID) bool {
+	t.Helper()
+	fakeS3.Mu.Lock()
+	defer fakeS3.Mu.Unlock()
+	if len(fakeS3.Objects) == 0 {
+		t.Fatal("starboard never persisted")
+	}
+	for _, data := range fakeS3.Objects {
+		if strings.Contains(string(data), msgID.String()) {
+			return true
+		}
+	}
+	return false
+}
+
 // recentID returns a message ID sent ago before now.
 func recentID(ago time.Duration) snowflake.ID {
 	return snowflake.New(time.Now().Add(-ago))
@@ -325,6 +386,14 @@ func TestStarboardPostUsesActualReactionCount(t *testing.T) {
 	if e, _ := entryOf(st, inflated); e.Count != 1 {
 		t.Errorf("counter = %d, want it corrected to the real count 1", e.Count)
 	}
+	if n := workCount(st); n != 0 {
+		t.Fatalf("%d work records left after the attempt; the message could never post", n)
+	}
+	api.setSource(inflated, 2)
+	b.onReactionAdd(reactionAdd(inflated, "⭐"))
+	if n := len(api.calls().creates); n != 1 {
+		t.Fatalf("%d posts once the message reached the threshold, want 1", n)
+	}
 
 	// The message has more reactions than the counter saw.
 	msgID := recentID(2 * time.Hour)
@@ -332,14 +401,78 @@ func TestStarboardPostUsesActualReactionCount(t *testing.T) {
 	st.Entries[msgID] = starboardEntry{ChannelID: sbSource, Count: 1}
 	b.onReactionAdd(reactionAdd(msgID, "⭐"))
 	creates := api.calls().creates
-	if len(creates) != 1 {
-		t.Fatalf("%d posts, want 1", len(creates))
+	if len(creates) != 2 {
+		t.Fatalf("%d posts, want 2", len(creates))
 	}
-	if got := creates[0].Embeds[0].Footer.Text; got != "⭐ 7 | #coffee" {
+	if got := creates[1].Embeds[0].Footer.Text; got != "⭐ 7 | #coffee" {
 		t.Errorf("footer = %q, want the real count 7", got)
 	}
 	if e, _ := entryOf(st, msgID); e.Count != 7 {
 		t.Errorf("counter = %d, want 7", e.Count)
+	}
+}
+
+// A post that fails releases the message, so a later reaction can post it.
+func TestStarboardFailedPostReleasesMessage(t *testing.T) {
+	b, api, st, _ := newStarboardTest(t)
+	api.mu.Lock()
+	api.createStatus = http.StatusBadGateway
+	api.mu.Unlock()
+	msgID := recentID(time.Hour)
+	api.setSource(msgID, 2)
+	st.Entries[msgID] = starboardEntry{ChannelID: sbSource, Count: 1}
+
+	b.onReactionAdd(reactionAdd(msgID, "⭐"))
+	if n := workCount(st); n != 0 {
+		t.Fatalf("%d work records left after a failed post; the message could never post", n)
+	}
+
+	api.mu.Lock()
+	api.createStatus = 0
+	api.mu.Unlock()
+	api.setSource(msgID, 3)
+	b.onReactionAdd(reactionAdd(msgID, "⭐"))
+	if n := len(api.calls().creates); n != 1 {
+		t.Errorf("%d posts after the failure cleared, want 1", n)
+	}
+}
+
+// A reaction that arrives while a post attempt reads the count, which comes
+// back below the threshold, gets the count read again instead of being lost.
+func TestStarboardReactionDuringCountReadIsNotLost(t *testing.T) {
+	b, api, st, _ := newStarboardTest(t)
+	started, gate := make(chan struct{}), make(chan struct{})
+	api.mu.Lock()
+	api.getStarted, api.getGate = started, gate
+	api.mu.Unlock()
+	msgID := recentID(time.Hour)
+	api.setSource(msgID, 1)
+	// The counter has drifted one above the message's 1 ⭐.
+	st.Entries[msgID] = starboardEntry{ChannelID: sbSource, Count: 1}
+
+	done := make(chan struct{})
+	go func() {
+		b.onReactionAdd(reactionAdd(msgID, "⭐")) // counter 2: tries to post, reads 1
+		close(done)
+	}()
+	<-started
+	api.setSource(msgID, 2)
+	b.onReactionAdd(reactionAdd(msgID, "⭐")) // a real second ⭐, during the read
+	close(gate)
+	<-done
+
+	creates := api.calls().creates
+	if len(creates) != 1 {
+		t.Fatalf("%d posts, want the message posted once it has 2 ⭐", len(creates))
+	}
+	if got := creates[0].Embeds[0].Footer.Text; got != "⭐ 2 | #coffee" {
+		t.Errorf("footer = %q, want the real count 2", got)
+	}
+	if e, _ := entryOf(st, msgID); e.Count != 2 {
+		t.Errorf("counter = %d, want 2", e.Count)
+	}
+	if n := workCount(st); n != 0 {
+		t.Errorf("%d work records left behind", n)
 	}
 }
 
@@ -413,11 +546,8 @@ func TestStarboardSourceDeleteRemovesPost(t *testing.T) {
 	// The output channel has changed since the post; the post's own channel is used.
 	st.Settings.OutputChannelID = 601
 
-	del := &events.GuildMessageDelete{GenericGuildMessage: &events.GenericGuildMessage{
-		GuildID: sbGuild, ChannelID: sbSource, MessageID: msgID,
-	}}
-	b.onStarboardSourceDelete(del)
-	b.onStarboardSourceDelete(del)
+	b.onStarboardSourceDelete(messageDelete(msgID))
+	b.onStarboardSourceDelete(messageDelete(msgID))
 
 	if deletes := api.calls().deletes; !slices.Equal(deletes, []string{postKey}) {
 		t.Errorf("deletes = %v, want only %s", deletes, postKey)
@@ -425,21 +555,15 @@ func TestStarboardSourceDeleteRemovesPost(t *testing.T) {
 	if _, ok := entryOf(st, msgID); ok {
 		t.Error("entry kept after its message was deleted")
 	}
-	fakeS3.Mu.Lock()
-	defer fakeS3.Mu.Unlock()
-	if len(fakeS3.Objects) == 0 {
-		t.Error("starboard not persisted after the delete")
-	}
-	for key, data := range fakeS3.Objects {
-		if strings.Contains(string(data), msgID.String()) {
-			t.Errorf("persisted %s still holds the deleted message", key)
-		}
+	if persistedHolds(t, fakeS3, msgID) {
+		t.Error("persisted starboard still holds the deleted message")
 	}
 }
 
-// A message deleted while its post is being created gets that post deleted.
+// A message deleted while its post is being created gets that post deleted,
+// even when a reaction sent before the delete is handled after it.
 func TestStarboardSourceDeleteDuringPost(t *testing.T) {
-	b, api, st, _ := newStarboardTest(t)
+	b, api, st, fakeS3 := newStarboardTest(t)
 	started, gate := make(chan struct{}), make(chan struct{})
 	api.mu.Lock()
 	api.createStarted, api.createGate = started, gate
@@ -454,9 +578,8 @@ func TestStarboardSourceDeleteDuringPost(t *testing.T) {
 		close(done)
 	}()
 	<-started
-	b.onStarboardSourceDelete(&events.GuildMessageDelete{GenericGuildMessage: &events.GenericGuildMessage{
-		GuildID: sbGuild, ChannelID: sbSource, MessageID: msgID,
-	}})
+	b.onStarboardSourceDelete(messageDelete(msgID))
+	b.onReactionAdd(reactionAdd(msgID, "⭐"))
 	close(gate)
 	<-done
 
@@ -465,7 +588,176 @@ func TestStarboardSourceDeleteDuringPost(t *testing.T) {
 		t.Errorf("creates=%d deletes=%v, want the new post deleted", len(calls.creates), calls.deletes)
 	}
 	if _, ok := entryOf(st, msgID); ok {
-		t.Error("entry recreated for a deleted message")
+		t.Error("entry kept for a deleted message")
+	}
+	if persistedHolds(t, fakeS3, msgID) {
+		t.Error("persisted starboard still holds the deleted message")
+	}
+}
+
+// A post delete that fails keeps the entry, flagged, until a retry deletes
+// the post; meanwhile reactions don't touch it.
+func TestStarboardSourceDeleteRetriesFailedPostDelete(t *testing.T) {
+	b, api, st, fakeS3 := newStarboardTest(t)
+	msgID := recentID(time.Hour)
+	api.setSource(msgID, 5)
+	api.addPost(8000, "⭐ 5 | #coffee")
+	st.Entries[msgID] = starboardEntry{ChannelID: sbSource, Count: 5, StarboardMsgID: 8000, PostChannelID: sbOutput}
+	api.mu.Lock()
+	api.deleteStatus = http.StatusBadGateway
+	api.mu.Unlock()
+
+	b.onStarboardSourceDelete(messageDelete(msgID))
+	if e, ok := entryOf(st, msgID); !ok || !e.SourceDeleted {
+		t.Fatalf("entry = %+v (exists %v), want it kept and flagged", e, ok)
+	}
+	if !persistedHolds(t, fakeS3, msgID) {
+		t.Error("flagged entry not persisted; a restart would lose the post")
+	}
+	b.onReactionAdd(reactionAdd(msgID, "⭐"))
+	if e, _ := entryOf(st, msgID); e.Count != 5 || len(api.calls().edits) != 0 {
+		t.Errorf("a reaction changed the deleted message's entry: %+v, edits %q", e, api.calls().edits)
+	}
+
+	api.mu.Lock()
+	api.deleteStatus = 0
+	api.mu.Unlock()
+	b.retryStarboardDeletes()
+	if deletes := api.calls().deletes; !slices.Equal(deletes, []string{fmt.Sprintf("%d/8000", sbOutput)}) {
+		t.Errorf("deletes = %v, want the post deleted on retry", deletes)
+	}
+	if _, ok := entryOf(st, msgID); ok {
+		t.Error("entry kept after the retry deleted its post")
+	}
+	if persistedHolds(t, fakeS3, msgID) {
+		t.Error("persisted starboard still holds the deleted message")
+	}
+}
+
+// A post from before PostChannelID was stored, with the starboard disabled,
+// has no known channel: its entry stays flagged rather than dropped.
+func TestStarboardSourceDeleteKeepsPostOfUnknownChannel(t *testing.T) {
+	b, api, st, _ := newStarboardTest(t)
+	msgID := recentID(time.Hour)
+	st.Entries[msgID] = starboardEntry{ChannelID: sbSource, Count: 5, StarboardMsgID: 8000}
+	st.Settings.OutputChannelID = 0
+
+	b.onStarboardSourceDelete(messageDelete(msgID))
+	if e, ok := entryOf(st, msgID); !ok || !e.SourceDeleted {
+		t.Errorf("entry = %+v (exists %v), want it kept and flagged", e, ok)
+	}
+	if deletes := api.calls().deletes; len(deletes) != 0 {
+		t.Errorf("deletes = %v, want none without a channel", deletes)
+	}
+}
+
+func TestBackfillPostChannels(t *testing.T) {
+	st := &starboardState{
+		Settings: starboardSettings{OutputChannelID: sbOutput},
+		Entries: map[snowflake.ID]starboardEntry{
+			1: {StarboardMsgID: 8000},                     // posted before PostChannelID
+			2: {StarboardMsgID: 8001, PostChannelID: 601}, // already recorded
+			3: {Count: 2},                                 // not posted
+		},
+	}
+	backfillPostChannels(st)
+	for id, want := range map[snowflake.ID]snowflake.ID{1: sbOutput, 2: 601, 3: 0} {
+		if got := st.Entries[id].PostChannelID; got != want {
+			t.Errorf("entry %d PostChannelID = %d, want %d", id, got, want)
+		}
+	}
+
+	disabled := &starboardState{Entries: map[snowflake.ID]starboardEntry{1: {StarboardMsgID: 8000}}}
+	backfillPostChannels(disabled)
+	if got := disabled.Entries[1].PostChannelID; got != 0 {
+		t.Errorf("PostChannelID = %d with no output channel, want 0", got)
+	}
+}
+
+// Posted entries outlive the reaction cutoff, so deleting an old message
+// still deletes its post.
+func TestStarboardOldPostDeletedWithSource(t *testing.T) {
+	b, api, st, _ := newStarboardTest(t)
+	old := recentID(starboardMaxAge + 10*24*time.Hour)
+	api.addPost(8000, "⭐ 5 | #coffee")
+	st.Entries[old] = starboardEntry{ChannelID: sbSource, Count: 5, StarboardMsgID: 8000, PostChannelID: sbOutput}
+
+	b.saveStarboard()
+	b.onStarboardSourceDelete(messageDelete(old))
+	if deletes := api.calls().deletes; !slices.Equal(deletes, []string{fmt.Sprintf("%d/8000", sbOutput)}) {
+		t.Errorf("deletes = %v, want the old post deleted", deletes)
+	}
+}
+
+// Deleting a channel or thread deletes the posts of its messages, including
+// those in the channel's cached threads; Discord sends no message deletes.
+func TestStarboardChannelDeleteRemovesPosts(t *testing.T) {
+	b, api, st, _ := newStarboardTest(t)
+	threadJSON := `{"id":"%d","type":11,"guild_id":"%d","name":"t","parent_id":"%d","thread_metadata":{}}`
+	b.Client.Caches.AddChannel(testChannel(t, fmt.Sprintf(threadJSON, 800, sbGuild, sbSource)))
+	b.Client.Caches.AddChannel(testChannel(t, fmt.Sprintf(threadJSON, 801, sbGuild, 502)))
+	inChannel, inThread, elsewhere, inOtherThread := recentID(time.Hour), recentID(2*time.Hour), recentID(3*time.Hour), recentID(4*time.Hour)
+	for i, e := range []struct {
+		msgID, channelID snowflake.ID
+	}{{inChannel, sbSource}, {inThread, 800}, {elsewhere, 502}, {inOtherThread, 801}} {
+		postID := snowflake.ID(8000 + i)
+		api.addPost(postID, "⭐ 5 | #coffee")
+		st.Entries[e.msgID] = starboardEntry{ChannelID: e.channelID, Count: 5, StarboardMsgID: postID, PostChannelID: sbOutput}
+	}
+
+	b.onStarboardChannelDelete(&events.GuildChannelDelete{GenericGuildChannel: &events.GenericGuildChannel{
+		GuildID: sbGuild, ChannelID: sbSource,
+	}})
+	deletes := api.calls().deletes
+	slices.Sort(deletes)
+	if want := []string{fmt.Sprintf("%d/8000", sbOutput), fmt.Sprintf("%d/8001", sbOutput)}; !slices.Equal(deletes, want) {
+		t.Errorf("deletes = %v, want %v", deletes, want)
+	}
+	for msgID, want := range map[snowflake.ID]bool{inChannel: false, inThread: false, elsewhere: true, inOtherThread: true} {
+		if _, ok := entryOf(st, msgID); ok != want {
+			t.Errorf("entry %d kept = %v, want %v", msgID, ok, want)
+		}
+	}
+
+	b.onStarboardThreadDelete(&events.ThreadDelete{GenericThread: &events.GenericThread{
+		GuildID: sbGuild, ThreadID: 801, ParentID: 502,
+	}})
+	if _, ok := entryOf(st, inOtherThread); ok {
+		t.Error("entry kept after its thread was deleted")
+	}
+	if _, ok := entryOf(st, elsewhere); !ok {
+		t.Error("deleting a thread removed an entry from its parent channel")
+	}
+}
+
+// When channel visibility can't be determined, reactions are skipped: nothing
+// is stored or posted.
+func TestStarboardFailsClosedWhenVisibilityUnknown(t *testing.T) {
+	tests := []struct {
+		name   string
+		remove func(b *Bot)
+	}{
+		{"@everyone role not cached", func(b *Bot) { b.Client.Caches.RemoveRole(sbGuild, sbGuild) }},
+		{"source channel not cached or fetchable", func(b *Bot) { b.Client.Caches.RemoveChannel(sbSource) }},
+		{"output channel not cached or fetchable", func(b *Bot) { b.Client.Caches.RemoveChannel(sbOutput) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, api, st, _ := newStarboardTest(t)
+			tt.remove(b)
+			msgID := recentID(time.Hour)
+			api.setSource(msgID, 5)
+
+			for range 3 {
+				b.onReactionAdd(reactionAdd(msgID, "⭐"))
+			}
+			if _, ok := entryOf(st, msgID); ok {
+				t.Error("stored a reaction whose channel visibility is unknown")
+			}
+			if n := len(api.calls().creates); n != 0 {
+				t.Errorf("%d posts, want none", n)
+			}
+		})
 	}
 }
 
@@ -533,9 +825,10 @@ func TestResolveChannelParents(t *testing.T) {
 
 func TestStarboardAudienceOK(t *testing.T) {
 	const (
-		access snowflake.ID = 10
-		staff  snowflake.ID = 20
-		admin  snowflake.ID = 30
+		access   snowflake.ID = 10
+		staff    snowflake.ID = 20
+		admin    snowflake.ID = 30
+		restrict snowflake.ID = 40
 	)
 	view := discord.PermissionViewChannel
 	everyoneRole := discord.Role{ID: sbGuild, Permissions: view}
@@ -562,6 +855,10 @@ func TestStarboardAudienceOK(t *testing.T) {
 	// @everyone denied, one member allowed: the member overwrite is ignored.
 	memberOnly := testChannel(t, fmt.Sprintf(`{"id":"1","type":0,"guild_id":"%d","name":"c","permission_overwrites":[`+
 		`{"id":"%d","type":0,"deny":"%d","allow":"0"},{"id":"99","type":1,"allow":"%d","deny":"0"}]}`, sbGuild, sbGuild, view, view))
+	ageRestricted := testChannel(t, fmt.Sprintf(`{"id":"1","type":0,"guild_id":"%d","name":"c","nsfw":true}`, sbGuild))
+	// @everyone can't view anything; an access role grants View Channel
+	// guild-wide, and a restriction role grants nothing.
+	gatedRoles := []discord.Role{{ID: sbGuild}, {ID: access, Permissions: view}, {ID: restrict}}
 
 	tests := []struct {
 		name                   string
@@ -588,6 +885,23 @@ func TestStarboardAudienceOK(t *testing.T) {
 			// output (explicit allow) but not the source (@everyone denied).
 			source: accessOnly, output: channel(deny(sbGuild), allow(access), allow(admin)), want: true,
 		},
+		{
+			// Access alone sees both and the restriction role alone sees
+			// neither, but a member with both sees the output and not the source.
+			name:   "source denies a restriction role, access role grants the output",
+			roles:  gatedRoles,
+			source: channel(deny(restrict)), output: public,
+		},
+		{name: "restriction role denied both channels", roles: gatedRoles, source: channel(deny(restrict)), output: channel(deny(restrict)), want: true},
+		{
+			name:   "source denies a restriction role, access-gated output",
+			roles:  append(baseRoles[:3:3], discord.Role{ID: restrict}),
+			source: channel(deny(restrict)), output: accessOnly,
+		},
+		{name: "age-restricted source, unrestricted output", roles: baseRoles, source: ageRestricted, output: public},
+		{name: "age-restricted source and output", roles: baseRoles, source: ageRestricted, output: ageRestricted, want: true},
+		{name: "unrestricted source, age-restricted output", roles: baseRoles, source: public, output: ageRestricted, want: true},
+		{name: "thread in an age-restricted channel", roles: baseRoles, source: thread(discord.ChannelTypeGuildPublicThread), parent: ageRestricted, output: public},
 		{name: "public thread in public channel", roles: baseRoles, source: thread(discord.ChannelTypeGuildPublicThread), parent: public, output: public, want: true},
 		{name: "public thread in staff channel", roles: baseRoles, source: thread(discord.ChannelTypeGuildPublicThread), parent: staffOnly, output: public},
 		{name: "private thread", roles: baseRoles, source: thread(discord.ChannelTypeGuildPrivateThread), parent: public, output: public},
@@ -657,6 +971,8 @@ func TestApplyReaction(t *testing.T) {
 		{name: "remove on unknown message stores nothing", change: reactionRemoved},
 		{name: "clear zeroes a posted entry and edits", entry: &starboardEntry{Count: 5, StarboardMsgID: 9}, change: reactionsCleared,
 			want: starboardUpdate, wantExists: true, wantWork: starboardWork{updating: true}},
+		{name: "add on a deleted message changes nothing", entry: &starboardEntry{Count: 5, StarboardMsgID: 9, SourceDeleted: true},
+			change: reactionAdded, wantCount: 5, wantExists: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -692,25 +1008,25 @@ func TestPruneStarboardEntries(t *testing.T) {
 	now := time.Now()
 	recentUnposted := snowflake.New(now.Add(-1 * time.Hour))
 	oldUnposted := snowflake.New(now.Add(-31 * 24 * time.Hour))
-	postedKept := snowflake.New(now.Add(-60 * 24 * time.Hour))
-	postedExpired := snowflake.New(now.Add(-91 * 24 * time.Hour))
-	expiredInFlight := snowflake.New(now.Add(-92 * 24 * time.Hour))
+	oldInFlight := snowflake.New(now.Add(-32 * 24 * time.Hour))
+	postedRecent := snowflake.New(now.Add(-60 * 24 * time.Hour))
+	postedOld := snowflake.New(now.Add(-400 * 24 * time.Hour))
 
 	st := &starboardState{
 		Entries: map[snowflake.ID]starboardEntry{
-			recentUnposted:  {ChannelID: 1, Count: 2},
-			oldUnposted:     {ChannelID: 1, Count: 3},
-			postedKept:      {ChannelID: 1, Count: 5, StarboardMsgID: 777},
-			postedExpired:   {ChannelID: 1, Count: 5, StarboardMsgID: 778},
-			expiredInFlight: {ChannelID: 1, Count: 5, StarboardMsgID: 779},
+			recentUnposted: {ChannelID: 1, Count: 2},
+			oldUnposted:    {ChannelID: 1, Count: 3},
+			oldInFlight:    {ChannelID: 1, Count: 5},
+			postedRecent:   {ChannelID: 1, Count: 5, StarboardMsgID: 777},
+			postedOld:      {ChannelID: 1, Count: 5, StarboardMsgID: 778},
 		},
 	}
-	st.startWork(expiredInFlight).updating = true
+	st.startWork(oldInFlight).posting = true
 
 	pruneStarboardEntries(st, now)
 
 	for id, want := range map[snowflake.ID]bool{
-		recentUnposted: true, oldUnposted: false, postedKept: true, postedExpired: false, expiredInFlight: true,
+		recentUnposted: true, oldUnposted: false, oldInFlight: true, postedRecent: true, postedOld: true,
 	} {
 		if _, ok := st.Entries[id]; ok != want {
 			t.Errorf("entry %d kept = %v, want %v", id, ok, want)
@@ -718,8 +1034,8 @@ func TestPruneStarboardEntries(t *testing.T) {
 	}
 }
 
-// Reactions on messages past starboardMaxAge are ignored, so a pruned post
-// can't be posted again or edited.
+// Reactions on messages past starboardMaxAge are ignored: they aren't posted
+// and their posts aren't edited.
 func TestStarboardIgnoresMessagesPastMaxAge(t *testing.T) {
 	b, api, st, _ := newStarboardTest(t)
 	old := recentID(starboardMaxAge + time.Hour)
@@ -818,7 +1134,7 @@ func TestStarboardStateJSONRoundTrip(t *testing.T) {
 			Blacklist:       []snowflake.ID{111, 222},
 		},
 		Entries: map[snowflake.ID]starboardEntry{
-			999: {ChannelID: 100, AuthorID: 200, Count: 5, StarboardMsgID: 888, PostChannelID: 123456},
+			999: {ChannelID: 100, AuthorID: 200, Count: 5, StarboardMsgID: 888, PostChannelID: 123456, SourceDeleted: true},
 		},
 	}
 	st.startWork(999).posting = true
@@ -853,7 +1169,7 @@ func TestStarboardStateJSONRoundTrip(t *testing.T) {
 		t.Errorf("expected 1 entry, got %d", len(loaded.Entries))
 	}
 	entry := loaded.Entries[999]
-	if entry.Count != 5 || entry.ChannelID != 100 || entry.AuthorID != 200 || entry.StarboardMsgID != 888 || entry.PostChannelID != 123456 {
+	if entry.Count != 5 || entry.ChannelID != 100 || entry.AuthorID != 200 || entry.StarboardMsgID != 888 || entry.PostChannelID != 123456 || !entry.SourceDeleted {
 		t.Errorf("unexpected entry data: %+v", entry)
 	}
 }
