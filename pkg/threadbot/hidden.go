@@ -181,28 +181,36 @@ func (b *Bot) handleHide(e *events.ApplicationCommandInteractionCreate, hide boo
 		return
 	}
 
+	// Defer: loading and saving the list in S3 can outlast the interaction's
+	// 3-second deadline.
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer hide response", "error", err)
+		return
+	}
+	reply := func(content string) { botutil.FollowupEphemeral(b.Client, e.Token(), content) }
+
 	changed, err := b.setHidden(guildID, thread.ID, hide)
 	if errors.Is(err, errHiddenNotLoaded) {
 		b.Log.Error("Hidden thread list not loaded", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Couldn't load the hidden thread list, so it can't be changed right now. Please try again in a minute.")
+		reply("Couldn't load the hidden thread list, so it can't be changed right now. Please try again in a minute.")
 		return
 	}
 	if err != nil {
 		b.Log.Error("Failed to save hidden threads", "guild_id", guildID, "thread_id", thread.ID, "error", err)
-		botutil.RespondEphemeral(e, "Something went wrong saving that, please try again.")
+		reply("Something went wrong saving that, please try again.")
 		return
 	}
 	b.Log.Info("Set thread hidden", "user_id", e.User().ID, "guild_id", guildID, "thread_id", thread.ID, "hidden", hide, "changed", changed)
 
 	switch {
 	case hide && changed:
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> is now hidden from thread reminders and `/threads`.", thread.ID))
+		reply(fmt.Sprintf("<#%d> is now hidden from thread reminders and `/threads`.", thread.ID))
 	case hide:
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> was already hidden.", thread.ID))
+		reply(fmt.Sprintf("<#%d> was already hidden.", thread.ID))
 	case changed:
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> can be promoted again.", thread.ID))
+		reply(fmt.Sprintf("<#%d> can be promoted again.", thread.ID))
 	default:
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> wasn't hidden.", thread.ID))
+		reply(fmt.Sprintf("<#%d> wasn't hidden.", thread.ID))
 	}
 }
 

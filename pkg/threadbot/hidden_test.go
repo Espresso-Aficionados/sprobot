@@ -7,8 +7,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
@@ -175,5 +177,66 @@ func TestSetHiddenNeverOverwritesUnloadedList(t *testing.T) {
 	}
 	if set := stored(prodGuild); len(set) != 2 {
 		t.Errorf("prod guild stored list = %v, want threads 10 and 30", set)
+	}
+}
+
+// slowPutS3 holds every S3 PUT until release is closed.
+type slowPutS3 struct {
+	*testutil.FakeS3
+	putStarted chan struct{}
+	release    chan struct{}
+}
+
+func (f *slowPutS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPut {
+		f.putStarted <- struct{}{}
+		<-f.release
+	}
+	f.FakeS3.ServeHTTP(w, r)
+}
+
+// /threadbot hide acknowledges the interaction before touching S3, so a slow
+// save can't make it miss Discord's 3-second deadline, then reports the
+// outcome in a follow-up.
+func TestHideDefersBeforeSaving(t *testing.T) {
+	s3 := &slowPutS3{FakeS3: testutil.NewFakeS3(), putStarted: make(chan struct{}, 1), release: make(chan struct{})}
+	s3srv := httptest.NewServer(s3)
+	defer s3srv.Close()
+	defer close(s3.release)
+	api := newFakeThreadAPI()
+	b := newThreadListBot(t, api)
+	b.S3 = testutil.NewTestS3Client(t, s3srv)
+
+	e, responses := commandEvent(t, devGuild, `{"id":"3","name":"threadbot","type":1,
+		"options":[{"name":"hide","type":1,"options":[{"name":"thread","type":7,"value":"101"}]}],
+		"resolved":{"channels":{"101":{"id":"101","name":"t","type":11,"permissions":"0","parent_id":"500"}}}}`)
+	done := make(chan struct{})
+	go func() {
+		b.onCommand(e)
+		close(done)
+	}()
+
+	select {
+	case <-s3.putStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hide never saved")
+	}
+	select {
+	case m := <-responses:
+		if m.Flags != discord.MessageFlagEphemeral || m.Content != "" {
+			t.Errorf("first response = %+v, want an ephemeral deferral", m)
+		}
+	default:
+		t.Fatal("hide did not answer the interaction before saving")
+	}
+
+	s3.release <- struct{}{}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hide did not finish after the save")
+	}
+	if sent := api.sentFollowups(); len(sent) != 1 || !strings.Contains(sent[0].Content, "is now hidden") {
+		t.Errorf("follow-ups = %+v, want the outcome", sent)
 	}
 }
