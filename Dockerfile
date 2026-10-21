@@ -1,6 +1,4 @@
-ARG TARGET_DIST="gcr.io/distroless/static-debian12"
-
-FROM golang:1.27 AS base
+FROM golang:1.27.3 AS base
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -24,14 +22,14 @@ FROM base AS build-threadbot
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /threadbot ./cmd/threadbot
 
-FROM ${TARGET_DIST} AS prod
+FROM gcr.io/distroless/static-debian12 AS prod
 COPY --from=build-sprobot /sprobot /sprobot
 COPY --from=base --chown=nonroot:nonroot /empty-dir /sprobot-cache
 VOLUME /sprobot-cache
 USER nonroot:nonroot
 CMD ["/sprobot"]
 
-FROM ${TARGET_DIST} AS prodweb
+FROM gcr.io/distroless/static-debian12 AS prodweb
 ENV PORT=9001
 COPY --from=build-sprobot-web /sprobot-web /sprobot-web
 USER nonroot:nonroot
@@ -46,7 +44,7 @@ ENV WEB_ENDPOINT=http://localhost:8080/
 ENV PORT=8080
 CMD ["/sprobot-web"]
 
-FROM ${TARGET_DIST} AS prodstickybot
+FROM gcr.io/distroless/static-debian12 AS prodstickybot
 COPY --from=build-stickybot /stickybot /stickybot
 USER nonroot:nonroot
 CMD ["/stickybot"]
@@ -54,7 +52,7 @@ CMD ["/stickybot"]
 FROM build-stickybot AS devstickybot
 CMD ["/stickybot"]
 
-FROM ${TARGET_DIST} AS prodthreadbot
+FROM gcr.io/distroless/static-debian12 AS prodthreadbot
 COPY --from=build-threadbot /threadbot /threadbot
 USER nonroot:nonroot
 CMD ["/threadbot"]
