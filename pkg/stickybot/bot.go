@@ -55,6 +55,8 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onCommand),
 		bot.WithEventListenerFunc(b.onModal),
 		bot.WithEventListenerFunc(b.onMessage),
+		bot.WithEventListenerFunc(b.onChannelDelete),
+		bot.WithEventListenerFunc(b.onThreadDelete),
 	)
 	if err != nil {
 		return nil, err
@@ -106,4 +108,26 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	h := s.handle
 	b.mu.Unlock()
 	h.Signal()
+}
+
+func (b *Bot) onChannelDelete(e *events.GuildChannelDelete) {
+	b.dropDeletedChannelSticky(e.GuildID, e.ChannelID)
+}
+
+func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
+	b.dropDeletedChannelSticky(e.GuildID, e.ThreadID)
+}
+
+// dropDeletedChannelSticky removes the sticky of a deleted channel or thread.
+// Left alone, it would keep its repost loop and stay stored as active, to be
+// started again on every boot.
+func (b *Bot) dropDeletedChannelSticky(guildID, channelID snowflake.ID) {
+	s := b.takeSticky(guildID, channelID)
+	if s == nil {
+		return
+	}
+	b.Log.Info("Removing sticky of deleted channel", "guild_id", guildID, "channel_id", channelID)
+	// The message went with the channel; deleting it again fails harmlessly.
+	b.retireSticky(s)
+	b.saveStickiesForGuild(guildID)
 }
