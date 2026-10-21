@@ -23,7 +23,7 @@ type Bot struct {
 	stop                 chan struct{}
 	loops                sync.WaitGroup // the loops started by startLoop
 	searchClient         *http.Client
-	skipList             map[snowflake.ID]string // goroutine-confined to forumReminderLoop
+	forumReminders       forumReminderState
 	topPosters           *guildStateStore[guildPostCounts]
 	posterRole           *guildStateStore[posterRoleState]
 	tickets              *guildStateStore[ticketState]
@@ -71,7 +71,6 @@ func New(token string) (*Bot, error) {
 		BaseBot:          base,
 		stop:             make(chan struct{}),
 		searchClient:     &http.Client{Timeout: 30 * time.Second},
-		skipList:         make(map[snowflake.ID]string),
 		welcomeSent:      make(map[snowflake.ID]time.Time),
 		templates:        sprobot.AllTemplates(),
 		selfroles:        getSelfroleConfig(),
@@ -120,6 +119,8 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onChannelCreate),
 		bot.WithEventListenerFunc(b.onChannelUpdate),
 		bot.WithEventListenerFunc(b.onThreadCreate),
+		bot.WithEventListenerFunc(b.onForumThreadCreate),
+		bot.WithEventListenerFunc(b.onForumThreadMessage),
 		bot.WithEventListenerFunc(b.onThreadUpdate),
 		bot.WithEventListenerFunc(b.onThreadDelete),
 		bot.WithEventListenerFunc(b.onModLogThreadCreate),
