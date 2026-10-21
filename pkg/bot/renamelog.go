@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -146,6 +147,12 @@ func (b *Bot) handleRenameLogSet(e *events.ApplicationCommandInteractionCreate) 
 	ch, ok := data.OptChannel("channel")
 	if !ok {
 		botutil.RespondEphemeral(e, "Channel is required.")
+		return
+	}
+	// The option restricts the picker, but a command registered before it
+	// did, or a client that ignores it, can still send any channel.
+	if !slices.Contains(logChannelTypes, ch.Type) {
+		botutil.RespondEphemeral(e, "Rename logs must go to a text or announcement channel.")
 		return
 	}
 

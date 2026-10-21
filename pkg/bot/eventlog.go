@@ -3,6 +3,7 @@ package bot
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1665,6 +1666,12 @@ func (b *Bot) handleEventLogConfigSet(e *events.ApplicationCommandInteractionCre
 	ch, ok := data.OptChannel("channel")
 	if !ok {
 		botutil.RespondEphemeral(e, "Please provide a channel.")
+		return
+	}
+	// The option restricts the picker, but a command registered before it
+	// did, or a client that ignores it, can still send any channel.
+	if !slices.Contains(logChannelTypes, ch.Type) {
+		botutil.RespondEphemeral(e, "The event log must be a text or announcement channel.")
 		return
 	}
 

@@ -14,6 +14,22 @@ import (
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
+// logChannelTypes are the channels a log or the starboard can post to.
+var logChannelTypes = []discord.ChannelType{discord.ChannelTypeGuildText, discord.ChannelTypeGuildNews}
+
+// messageChannelTypes are the channels messages are posted in directly.
+// Filters that also match a message's parent channel or category (the market
+// and starboard filters) and rename monitoring take any channel.
+var messageChannelTypes = []discord.ChannelType{
+	discord.ChannelTypeGuildText,
+	discord.ChannelTypeGuildNews,
+	discord.ChannelTypeGuildVoice,
+	discord.ChannelTypeGuildStageVoice,
+	discord.ChannelTypeGuildNewsThread,
+	discord.ChannelTypeGuildPublicThread,
+	discord.ChannelTypeGuildPrivateThread,
+}
+
 func (b *Bot) registerAllCommands() error {
 	for _, guildID := range b.GuildIDs() {
 		tmpls := b.templates[guildID]
@@ -179,9 +195,10 @@ func (b *Bot) registerAllCommands() error {
 						Description: "Set the destination channel for rename logs",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
-								Name:        "channel",
-								Description: "Channel to post rename logs in",
-								Required:    true,
+								Name:         "channel",
+								Description:  "Channel to post rename logs in",
+								Required:     true,
+								ChannelTypes: logChannelTypes,
 							},
 						},
 					},
@@ -341,9 +358,10 @@ func (b *Bot) registerAllCommands() error {
 						Description: "Set the event log channel",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
-								Name:        "channel",
-								Description: "Channel to post event logs in",
-								Required:    true,
+								Name:         "channel",
+								Description:  "Channel to post event logs in",
+								Required:     true,
+								ChannelTypes: logChannelTypes,
 							},
 						},
 					},
@@ -366,9 +384,10 @@ func (b *Bot) registerAllCommands() error {
 						Description: "Set the mod log forum channel",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
-								Name:        "channel",
-								Description: "Forum channel for mod logs",
-								Required:    true,
+								Name:         "channel",
+								Description:  "Forum channel for mod logs",
+								Required:     true,
+								ChannelTypes: []discord.ChannelType{discord.ChannelTypeGuildForum},
 							},
 						},
 					},
@@ -464,9 +483,11 @@ func (b *Bot) registerAllCommands() error {
 								Name:        "role",
 								Description: "Role to filter",
 							},
+							// Matched against the channel a message is posted in.
 							discord.ApplicationCommandOptionChannel{
-								Name:        "channel",
-								Description: "Channel to filter",
+								Name:         "channel",
+								Description:  "Channel to filter",
+								ChannelTypes: messageChannelTypes,
 							},
 						},
 					},
@@ -507,8 +528,9 @@ func (b *Bot) registerAllCommands() error {
 						Description: "Update starboard settings",
 						Options: []discord.ApplicationCommandOption{
 							discord.ApplicationCommandOptionChannel{
-								Name:        "channel",
-								Description: "Channel to post starboard entries in",
+								Name:         "channel",
+								Description:  "Channel to post starboard entries in",
+								ChannelTypes: logChannelTypes,
 							},
 							discord.ApplicationCommandOptionString{
 								Name:        "emoji",
@@ -747,13 +769,16 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 }
 
 func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
-	customID := e.Data.CustomID
-
 	if e.GuildID() == nil || b.RejectGuildNotAllowed(e) {
 		return
 	}
-	guildID := *e.GuildID()
-	tmpls := b.templates[guildID]
+	b.handleModalSubmit(e)
+}
+
+// handleModalSubmit routes a guild modal submit by its custom ID.
+func (b *Bot) handleModalSubmit(e *events.ModalSubmitInteractionCreate) {
+	customID := e.Data.CustomID
+	tmpls := b.templates[*e.GuildID()]
 
 	for _, tmpl := range tmpls {
 		if customID == fmt.Sprintf("edit_%s", tmpl.ShortName) {
@@ -775,21 +800,23 @@ func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
 	if strings.HasPrefix(customID, "modlog_") {
 		parts := strings.SplitN(strings.TrimPrefix(customID, "modlog_"), "_", 2)
 		if len(parts) == 2 {
-			channelID, err := snowflake.Parse(parts[0])
-			if err != nil {
-				b.Log.Error("Invalid channel ID in mod log modal", "value", parts[0], "error", err)
+			channelID, chErr := snowflake.Parse(parts[0])
+			messageID, msgErr := snowflake.Parse(parts[1])
+			if chErr == nil && msgErr == nil {
+				b.handleModLogModalSubmit(e, channelID, messageID)
 				return
 			}
-			messageID, err := snowflake.Parse(parts[1])
-			if err != nil {
-				b.Log.Error("Invalid message ID in mod log modal", "value", parts[1], "error", err)
-				return
-			}
-			b.handleModLogModalSubmit(e, channelID, messageID)
-			return
 		}
+		b.Log.Error("Invalid mod log modal ID", "custom_id", customID)
 	}
+
+	// A modal from an older build, or for something since removed.
+	botutil.RespondEphemeral(e, noLongerAvailable)
 }
+
+// noLongerAvailable answers an interaction nothing handles any more, so the
+// user sees why instead of "interaction failed".
+const noLongerAvailable = "This is no longer available."
 
 func (b *Bot) onComponent(e *events.ComponentInteractionCreate) {
 	if b.RejectGuildNotAllowed(e) {

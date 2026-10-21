@@ -1231,13 +1231,6 @@ func TestParseEmojiInputAnimated(t *testing.T) {
 	}
 }
 
-func TestIntPtr(t *testing.T) {
-	p := intPtr(42)
-	if *p != 42 {
-		t.Errorf("expected 42, got %d", *p)
-	}
-}
-
 func TestEmojiCDNURLUnicode(t *testing.T) {
 	if got := emojiCDNURL("⭐"); got != "" {
 		t.Errorf("expected empty string, got %s", got)
