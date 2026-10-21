@@ -320,11 +320,12 @@ type threadInfo struct {
 
 // listedThreads returns the threads a list shows, busiest first: open threads
 // that aren't hidden, under channelID, or anywhere in the server when
-// channelID is 0.
+// channelID is 0. Private threads are never listed: the lists are shown to
+// people who aren't in them.
 func listedThreads(all []discord.GuildThread, channelID snowflake.ID, hidden map[snowflake.ID]struct{}) []threadInfo {
 	var threads []threadInfo
 	for _, t := range all {
-		if _, ok := hidden[t.ID()]; ok || t.ThreadMetadata.Archived {
+		if _, ok := hidden[t.ID()]; ok || t.ThreadMetadata.Archived || t.Type() == discord.ChannelTypeGuildPrivateThread {
 			continue
 		}
 		parentID := t.ParentID()

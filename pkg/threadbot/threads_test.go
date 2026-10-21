@@ -84,6 +84,39 @@ func TestThreadsEmbedChannelAndServerLists(t *testing.T) {
 	}
 }
 
+// Private threads are left out of every list: reminders and /threads in the
+// channel, and fetchall across the server.
+func TestPrivateThreadsNeverListed(t *testing.T) {
+	api := &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}}
+	api.addThread("101", 5, 5)
+	api.addThread("102", 5, 5)
+	api.setField("102", "type", 12) // GUILD_PRIVATE_THREAD
+	api.setField("102", "name", "secret-plans")
+	api.addThread("103", 5, 5)
+	api.setField("103", "type", 10) // GUILD_NEWS_THREAD
+	b := newThreadListBot(t, api)
+
+	for _, channelID := range []snowflake.ID{500, 0} {
+		e, err := b.buildThreadsEmbed(devGuild, channelID)
+		if err != nil || e == nil {
+			t.Fatalf("channel %d: embed = %v, %v", channelID, e, err)
+		}
+		if strings.Contains(e.Description, "secret-plans") || !strings.Contains(e.Description, "thread-101") || !strings.Contains(e.Description, "thread-103") {
+			t.Errorf("channel %d: want public and news threads only:\n%s", channelID, e.Description)
+		}
+		if e.Footer.Text[0] != '2' {
+			t.Errorf("channel %d: footer %q counts the private thread", channelID, e.Footer.Text)
+		}
+	}
+
+	// A channel whose only active thread is private has nothing to show.
+	api.setField("101", "type", 12)
+	api.setField("103", "type", 12)
+	if e, err := b.buildThreadsEmbed(devGuild, 500); e != nil || err != nil {
+		t.Errorf("only private threads: embed = %+v, %v; want none", e, err)
+	}
+}
+
 const (
 	threadsData  = `{"id":"3","name":"threads","type":1}`
 	fetchAllData = `{"id":"3","name":"threadbot","type":1,"options":[{"name":"fetchall","type":1}]}`
