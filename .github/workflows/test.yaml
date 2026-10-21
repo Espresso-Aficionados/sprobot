@@ -2,14 +2,18 @@ name: test
 
 on:
   pull_request:
-  push:
-    branches-ignore:
-      - main # main pushes are tested via publish.yaml's workflow_call
-      - 'dependabot/**' # Dependabot branches get ran through pull_request
-  workflow_call:
+  workflow_call: # publish.yaml tests main before pushing images
+  workflow_dispatch: # test a branch that has no PR
 
 permissions:
   contents: read
+
+# A new push to a PR cancels that PR's older run. Every other run gets a group
+# of its own and is never cancelled; under workflow_call, github.event and
+# github.event_name are publish.yaml's push or schedule.
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -43,3 +47,13 @@ jobs:
 
       - name: Run vet and tests
         run: docker run --platform ${{ matrix.platform }} sprobot-test
+
+      # Catch a broken prod stage before merge. The builder already holds the
+      # base stage from the test image. publish.yaml builds and pushes these
+      # itself, so they are skipped when it calls this workflow.
+      - name: Build prod images (amd64, not pushed)
+        if: matrix.platform == 'linux/amd64' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+        run: |
+          for target in prod prodweb prodstickybot prodthreadbot; do
+            docker buildx build --platform linux/amd64 --target "$target" .
+          done
