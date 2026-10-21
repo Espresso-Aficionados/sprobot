@@ -10,6 +10,13 @@ on:
 permissions:
   contents: read
 
+# One publish at a time, so an older commit's run cannot finish after a newer
+# one. A running publish is never cancelled; a newer run replaces one that is
+# still waiting.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
 jobs:
   test:
     uses: ./.github/workflows/test.yaml
@@ -81,6 +88,7 @@ jobs:
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          labels: org.opencontainers.image.revision=${{ github.sha }}
           cache-from: |
             type=gha,scope=${{ matrix.platform }}
             type=gha,scope=${{ matrix.cache-scope }}
@@ -140,11 +148,33 @@ jobs:
           name: ${{ matrix.artifact-prefix }}-linux-arm64
           path: /tmp/digests/arm64
 
+      # A re-run of an old run, or a run that main moved past while it built,
+      # must not move :latest back. Such runs push only the sha- tag; the run
+      # for main's tip moves :latest.
+      - name: Check commit is still the tip of main
+        id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tip=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
+          if [ "$tip" = "$GITHUB_SHA" ]; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::main is at ${tip}, not ${GITHUB_SHA}; not moving ${{ matrix.image }}:latest"
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create manifest and push
+        env:
+          IMAGE: ${{ matrix.image }}
+          LATEST: ${{ steps.tip.outputs.latest }}
         run: |
           AMD64_DIGEST=$(cat /tmp/digests/amd64/digest.txt)
           ARM64_DIGEST=$(cat /tmp/digests/arm64/digest.txt)
-          docker buildx imagetools create \
-            -t ${{ matrix.image }}:latest \
-            ${{ matrix.image }}@${AMD64_DIGEST} \
-            ${{ matrix.image }}@${ARM64_DIGEST}
+          tags=(-t "${IMAGE}:sha-${GITHUB_SHA::7}")
+          if [ "$LATEST" = true ]; then
+            tags+=(-t "${IMAGE}:latest")
+          fi
+          docker buildx imagetools create "${tags[@]}" \
+            "${IMAGE}@${AMD64_DIGEST}" \
+            "${IMAGE}@${ARM64_DIGEST}"
