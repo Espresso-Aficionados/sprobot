@@ -1,14 +1,18 @@
 package botutil
 
 import (
+	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"sync/atomic"
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/s3client"
@@ -27,6 +31,7 @@ type BaseBot struct {
 	TestGuildIDsOverride []snowflake.ID // override for tests without a gateway
 	healthcheckEndpoint  string
 	httpClient           *http.Client
+	gatewayFailed        chan error // receives the error when the gateway closes for good
 }
 
 // NewBaseBot creates a BaseBot by reading env vars and initializing S3.
@@ -43,13 +48,19 @@ func NewBaseBot(envVarPrefix string) (*BaseBot, error) {
 		Log:                 slog.Default(),
 		healthcheckEndpoint: os.Getenv(envVarPrefix + "_HEALTHCHECK_ENDPOINT"),
 		httpClient:          &http.Client{Timeout: 10 * time.Second},
+		gatewayFailed:       make(chan error, 1),
 	}, nil
 }
 
-// PingHealthcheck sends a GET to the configured healthcheck endpoint.
-// It is a no-op if no endpoint is configured.
+// PingHealthcheck sends a GET to the configured healthcheck endpoint, but only
+// while the gateway is connected and ready, so a bot that has lost Discord
+// stops reporting healthy. It is a no-op if no endpoint is configured.
 func (b *BaseBot) PingHealthcheck() {
 	if b.healthcheckEndpoint == "" {
+		return
+	}
+	if status := b.gatewayStatus(); status != gateway.StatusReady {
+		b.Log.Warn("Skipping healthcheck ping, gateway not ready", "status", status)
 		return
 	}
 	resp, err := b.httpClient.Get(b.healthcheckEndpoint)
@@ -58,6 +69,41 @@ func (b *BaseBot) PingHealthcheck() {
 		return
 	}
 	resp.Body.Close()
+}
+
+func (b *BaseBot) gatewayStatus() gateway.Status {
+	if b.Client == nil || b.Client.Gateway == nil {
+		return gateway.StatusUnconnected
+	}
+	return b.Client.Gateway.Status()
+}
+
+// OnGatewayClose is the gateway close handler for all bots. disgo calls it
+// when it stops reconnecting, e.g. on close code 4004 (bad token) or 4014
+// (disallowed intents). That bot would otherwise sit offline, so it shuts
+// down: WaitForShutdown returns the error, the bot saves its state, and the
+// process exits non-zero for the container to restart it.
+func (b *BaseBot) OnGatewayClose(_ gateway.Gateway, err error, reconnect bool) {
+	if !gatewayCloseFatal(err, reconnect) {
+		b.Log.Warn("Gateway closed", "error", err, "reconnect", reconnect)
+		return
+	}
+	b.Log.Error("Gateway closed and will not reconnect, shutting down", "error", err)
+	select {
+	case b.gatewayFailed <- err:
+	default: // a failure is already pending
+	}
+}
+
+// gatewayCloseFatal reports whether a gateway close leaves the bot offline
+// for good. disgo retries reconnectable closes itself. ErrGatewayAlreadyConnected
+// means a concurrent reconnect won, and net.ErrClosed means we closed the
+// connection ourselves, as on shutdown.
+func gatewayCloseFatal(err error, reconnect bool) bool {
+	if reconnect {
+		return false
+	}
+	return !errors.Is(err, discord.ErrGatewayAlreadyConnected) && !errors.Is(err, net.ErrClosed)
 }
 
 // GuildIDs returns the IDs of all guilds in the gateway cache.

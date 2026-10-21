@@ -44,6 +44,7 @@ func New(token string) (*Bot, error) {
 				gateway.IntentGuildMessages,
 			),
 			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
+			gateway.WithCloseHandler(b.OnGatewayClose),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.onCommand),
@@ -76,11 +77,11 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveAllStickies)
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
-	botutil.WaitForShutdown(b.Log, "Stickybot")
+	shutdownErr := b.WaitForShutdown("Stickybot")
 	close(b.stop)
 	b.stopAllStickyGoroutines()
 	b.saveAllStickies()
-	return nil
+	return shutdownErr
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {

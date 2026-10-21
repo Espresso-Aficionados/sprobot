@@ -57,6 +57,7 @@ func New(token string) (*Bot, error) {
 				gateway.IntentGuildMembers,
 			),
 			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
+			gateway.WithCloseHandler(b.OnGatewayClose),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.onCommand),
@@ -96,12 +97,12 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveAllReminders)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCounts)
 
-	botutil.WaitForShutdown(b.Log, "Threadbot")
+	shutdownErr := b.WaitForShutdown("Threadbot")
 	close(b.stop)
 	b.stopAllReminderGoroutines()
 	b.saveAllReminders()
 	b.saveMemberCounts()
-	return nil
+	return shutdownErr
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {

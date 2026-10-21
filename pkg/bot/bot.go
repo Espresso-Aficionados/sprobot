@@ -249,6 +249,7 @@ func New(token string) (*Bot, error) {
 				gateway.IntentGuildScheduledEvents,
 			),
 			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
+			gateway.WithCloseHandler(b.OnGatewayClose),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.onCommand),
@@ -355,7 +356,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.tempRoles.save)
 	go botutil.RunSaveLoop(&b.Ready, 1*time.Minute, b.stop, b.processTempRoleExpiries)
 
-	botutil.WaitForShutdown(b.Log, "Bot")
+	shutdownErr := b.WaitForShutdown("Bot")
 	close(b.stop)
 	b.autoRole.save()
 	b.eventLog.save()
@@ -381,5 +382,5 @@ func (b *Bot) Run() error {
 	b.saveStageInstanceCache()
 	b.saveScheduledEventCache()
 	b.saveSoundboardSoundCache()
-	return nil
+	return shutdownErr
 }
