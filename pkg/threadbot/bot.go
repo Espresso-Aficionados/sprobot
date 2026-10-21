@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/disgoorg/disgo"
@@ -26,9 +25,8 @@ type Bot struct {
 	sessionStart time.Time                                         // when the current gateway session began
 	hidden       map[snowflake.ID]map[snowflake.ID]struct{}        // guild -> threads never promoted
 
-	hiddenSaveMu     sync.Mutex            // orders hidden-list saves
-	hiddenLoaded     atomic.Bool           // loadHiddenThreads has run
-	hiddenLoadFailed map[snowflake.ID]bool // guilds whose hidden list failed to load; changes refused
+	hiddenSaveMu sync.Mutex            // orders hidden-list loads and saves
+	hiddenLoaded map[snowflake.ID]bool // guilds whose hidden list has loaded from S3
 }
 
 func New(token string) (*Bot, error) {

@@ -49,10 +49,6 @@ func TestHiddenThreadsExcludedPersistedAndPruned(t *testing.T) {
 	api.addThread("201", 5, 5)
 	api.addThread("202", 5, 5)
 
-	// Changes are refused until the stored list has loaded.
-	if _, err := b.setHidden(guildID, 202, true); !errors.Is(err, errHiddenNotLoaded) {
-		t.Fatalf("hide before load: err=%v, want errHiddenNotLoaded", err)
-	}
 	b.loadHiddenThreads()
 
 	if changed, err := b.setHidden(guildID, 202, true); !changed || err != nil {
@@ -138,32 +134,49 @@ func TestSetHiddenRollsBackFailedSave(t *testing.T) {
 	}
 }
 
-func TestSetHiddenRefusedAfterFailedLoad(t *testing.T) {
+func TestSetHiddenNeverOverwritesUnloadedList(t *testing.T) {
 	fs := &flakyS3{FakeS3: testutil.NewFakeS3()}
 	srv := httptest.NewServer(fs)
 	defer srv.Close()
 	s3c := testutil.NewTestS3Client(t, srv)
-	guildID := snowflake.ID(1013566342345019512)
+	devGuild := snowflake.ID(1013566342345019512) // in the test bot's GuildIDs
+	prodGuild := snowflake.ID(726985544038612993) // not known at startup
 
 	seed := newTestBot(t, s3c)
-	seed.loadHiddenThreads()
-	if _, err := seed.setHidden(guildID, 10, true); err != nil {
-		t.Fatal(err)
+	for _, g := range []snowflake.ID{devGuild, prodGuild} {
+		if _, err := seed.setHidden(g, 10, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stored := func(g snowflake.ID) map[snowflake.ID]struct{} {
+		t.Helper()
+		check := newTestBot(t, s3c)
+		return check.hiddenSet(g)
 	}
 
-	// S3 is unreachable at startup: the stored list must not be overwritten.
+	// S3 is unreachable at startup: changes are refused, not saved over the
+	// stored list.
 	fs.failGet.Store(true)
 	b := newTestBot(t, s3c)
 	b.loadHiddenThreads()
-	fs.failGet.Store(false)
-	if _, err := b.setHidden(guildID, 20, true); !errors.Is(err, errHiddenNotLoaded) {
-		t.Fatalf("hide after failed load: err=%v, want errHiddenNotLoaded", err)
+	if _, err := b.setHidden(devGuild, 20, true); !errors.Is(err, errHiddenNotLoaded) {
+		t.Fatalf("hide while unloaded: err=%v, want errHiddenNotLoaded", err)
 	}
 
-	check := newTestBot(t, s3c)
-	check.loadHiddenThreads()
-	set := check.hiddenSet(guildID)
-	if _, ok := set[10]; !ok || len(set) != 1 {
-		t.Errorf("stored list changed after a failed load: %v", set)
+	// Once S3 is back the load is retried and the change merges with it.
+	fs.failGet.Store(false)
+	if changed, err := b.setHidden(devGuild, 20, true); !changed || err != nil {
+		t.Fatalf("hide after recovery: changed=%v err=%v", changed, err)
+	}
+	if set := stored(devGuild); len(set) != 2 {
+		t.Errorf("dev guild stored list = %v, want threads 10 and 20", set)
+	}
+
+	// A guild that wasn't known at startup loads on first use too.
+	if changed, err := b.setHidden(prodGuild, 30, true); !changed || err != nil {
+		t.Fatalf("hide in late guild: changed=%v err=%v", changed, err)
+	}
+	if set := stored(prodGuild); len(set) != 2 {
+		t.Errorf("prod guild stored list = %v, want threads 10 and 30", set)
 	}
 }
