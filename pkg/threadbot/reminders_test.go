@@ -408,9 +408,32 @@ func TestMemberCountNeedsFetch(t *testing.T) {
 	c.set(fresh, 60, now.Add(-time.Hour))
 	c.set(stale, 70, now.Add(-memberCountTTL))
 
-	got := c.needsFetch([]snowflake.ID{fresh, stale, missing}, now)
+	// No session recorded yet: every count uses the short TTL.
+	got := c.needsFetch([]snowflake.ID{fresh, stale, missing}, now, time.Time{})
 	if len(got) != 2 || got[0] != stale || got[1] != missing {
 		t.Errorf("needsFetch = %v, want [%d %d]", got, stale, missing)
+	}
+}
+
+func TestMemberCountNeedsFetchSessionAware(t *testing.T) {
+	now := time.Now()
+	sessionStart := now.Add(-10 * 24 * time.Hour)
+	const live, liveExpired, preSession = snowflake.ID(1), snowflake.ID(2), snowflake.ID(3)
+	c := newMemberCountCache()
+	// Fetched during the unbroken session: events kept these current.
+	c.set(live, 60, now.Add(-3*24*time.Hour))
+	c.set(liveExpired, 70, now.Add(-memberCountLiveTTL))
+	// Fetched before a reconnect: events may have been missed.
+	c.set(preSession, 80, sessionStart.Add(-time.Minute))
+
+	got := c.needsFetch([]snowflake.ID{live, liveExpired, preSession}, now, sessionStart)
+	if len(got) != 2 || got[0] != liveExpired || got[1] != preSession {
+		t.Errorf("needsFetch = %v, want [%d %d]", got, liveExpired, preSession)
+	}
+
+	// A new session started after the fetch: back to the short TTL.
+	if got := c.needsFetch([]snowflake.ID{live}, now, now.Add(-time.Hour)); len(got) != 1 {
+		t.Errorf("count from before the new session not re-fetched: got %v", got)
 	}
 }
 
@@ -593,5 +616,40 @@ func TestSaveRemindersMultipleChannels(t *testing.T) {
 	r2 := channels[200]
 	if r2 == nil || r2.EnabledBy != 222 || r2.Enabled {
 		t.Errorf("channel 200 mismatch: %+v", r2)
+	}
+}
+
+func TestMemberCountAdjust(t *testing.T) {
+	const cached, failed, uncached = snowflake.ID(1), snowflake.ID(2), snowflake.ID(3)
+	c := &memberCountCache{Counts: map[snowflake.ID]int{cached: 120, failed: 0}}
+
+	if !c.adjust(cached, 1) || c.Counts[cached] != 121 {
+		t.Errorf("join: got %d, want 121", c.Counts[cached])
+	}
+	if !c.adjust(cached, -1) || c.Counts[cached] != 120 {
+		t.Errorf("leave: got %d, want 120", c.Counts[cached])
+	}
+	// 0 marks a failed fetch; adjusting it would replace the member_count
+	// fallback with a tiny wrong number.
+	if c.adjust(failed, 1) || c.Counts[failed] != 0 {
+		t.Errorf("failed fetch adjusted to %d, want untouched 0", c.Counts[failed])
+	}
+	if c.adjust(uncached, 1) {
+		t.Error("uncached thread adjusted, want it left for the next refresh")
+	}
+	if _, ok := c.Counts[uncached]; ok {
+		t.Error("adjust added an uncached thread")
+	}
+}
+
+func TestMemberCountAdjustFloorsAtOne(t *testing.T) {
+	const id = snowflake.ID(1)
+	c := &memberCountCache{Counts: map[snowflake.ID]int{id: 1}}
+	// Drift (a missed join, then a leave) must not reach 0, which would read
+	// as a failed fetch until the next refresh.
+	c.adjust(id, -1)
+	c.adjust(id, -1)
+	if c.Counts[id] != 1 {
+		t.Errorf("got %d, want 1", c.Counts[id])
 	}
 }

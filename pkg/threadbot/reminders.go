@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -23,8 +24,16 @@ import (
 const memberCountCap = 50
 
 const (
-	memberCountTTL    = 24 * time.Hour     // re-fetch an exact count after this
-	memberCountRetain = 7 * 24 * time.Hour // drop counts not re-fetched for this long
+	// memberCountTTL is how long an exact count is used when thread member
+	// events may have been missed since it was fetched (it predates the
+	// current gateway session).
+	memberCountTTL = 24 * time.Hour
+	// memberCountLiveTTL is how long an exact count is used when the gateway
+	// session has been unbroken since it was fetched, so every join and leave
+	// event has been applied. The full re-fetch still corrects changes Discord
+	// sends no event for.
+	memberCountLiveTTL = 7 * 24 * time.Hour
+	memberCountRetain  = 7 * 24 * time.Hour // drop counts not re-fetched for this long
 )
 
 // memberCountCache holds exact member counts for threads at memberCountCap,
@@ -38,16 +47,25 @@ func newMemberCountCache() *memberCountCache {
 	return &memberCountCache{Counts: make(map[snowflake.ID]int), Fetched: make(map[snowflake.ID]time.Time)}
 }
 
-// needsFetch returns the threads whose exact count is missing or older than
-// memberCountTTL.
-func (c *memberCountCache) needsFetch(threadIDs []snowflake.ID, now time.Time) []snowflake.ID {
+// needsFetch returns the threads whose exact count is missing or expired.
+// Counts fetched during the current gateway session (at or after
+// sessionStart) last memberCountLiveTTL; older ones last memberCountTTL.
+func (c *memberCountCache) needsFetch(threadIDs []snowflake.ID, now, sessionStart time.Time) []snowflake.ID {
 	var out []snowflake.ID
 	for _, id := range threadIDs {
-		if fetched, ok := c.Fetched[id]; !ok || now.Sub(fetched) >= memberCountTTL {
+		fetched, ok := c.Fetched[id]
+		if !ok || now.Sub(fetched) >= countTTL(fetched, sessionStart) {
 			out = append(out, id)
 		}
 	}
 	return out
+}
+
+func countTTL(fetched, sessionStart time.Time) time.Duration {
+	if !sessionStart.IsZero() && !fetched.Before(sessionStart) {
+		return memberCountLiveTTL
+	}
+	return memberCountTTL
 }
 
 func (c *memberCountCache) set(threadID snowflake.ID, n int, now time.Time) {
@@ -79,6 +97,46 @@ func (c *memberCountCache) exactCount(threadID snowflake.ID, memberCount int) (i
 	}
 	n, ok := c.Counts[threadID]
 	return n, ok && n > 0
+}
+
+// adjust applies a join (+1) or leave (-1) seen on the gateway, keeping counts
+// current between REST refreshes. Uncached threads are left for the
+// next refresh to fetch, and a cached 0 means the fetch failed, so neither is
+// adjusted. Missed or duplicated events drift until the next refresh.
+func (c *memberCountCache) adjust(threadID snowflake.ID, delta int) bool {
+	n, ok := c.Counts[threadID]
+	if !ok || n <= 0 {
+		return false
+	}
+	c.Counts[threadID] = max(n+delta, 1)
+	return true
+}
+
+// onSessionReady records when the current gateway session began. Join and
+// leave events are complete only from then on: a resume replays missed
+// events, but a new session does not.
+func (b *Bot) onSessionReady(*events.Ready) {
+	b.mu.Lock()
+	b.sessionStart = time.Now()
+	b.mu.Unlock()
+}
+
+func (b *Bot) onThreadMemberAdd(e *events.ThreadMemberAdd) {
+	b.adjustMemberCount(e.GuildID, e.ThreadID, 1)
+}
+
+func (b *Bot) onThreadMemberRemove(e *events.ThreadMemberRemove) {
+	b.adjustMemberCount(e.GuildID, e.ThreadID, -1)
+}
+
+func (b *Bot) adjustMemberCount(guildID, threadID snowflake.ID, delta int) {
+	b.mu.Lock()
+	cache := b.memberCounts[guildID]
+	applied := cache != nil && cache.adjust(threadID, delta)
+	b.mu.Unlock()
+	if applied {
+		b.Log.Info("Adjusted thread member count", "guild_id", guildID, "thread_id", threadID, "delta", delta)
+	}
 }
 
 type threadReminder struct {
@@ -559,7 +617,8 @@ func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID
 		cache = newMemberCountCache()
 		b.memberCounts[guildID] = cache
 	}
-	toFetch := cache.needsFetch(threadIDs, time.Now())
+	sessionStart := b.sessionStart
+	toFetch := cache.needsFetch(threadIDs, time.Now(), sessionStart)
 	b.mu.Unlock()
 
 	if len(toFetch) == 0 {
@@ -578,9 +637,18 @@ func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID
 			continue
 		}
 		b.mu.Lock()
+		prev, hadPrev := cache.Counts[threadID]
+		prevFetched := cache.Fetched[threadID]
 		cache.set(threadID, n, time.Now())
 		b.mu.Unlock()
 		fetched++
+		if hadPrev {
+			// How far the event-adjusted count was off. Persistent drift on
+			// live counts means Discord skips events for some changes.
+			b.Log.Info("Thread member count drift", "guild_id", guildID, "thread_id", threadID,
+				"cached", prev, "fetched", n, "drift", n-prev,
+				"live", countTTL(prevFetched, sessionStart) == memberCountLiveTTL)
+		}
 	}
 	b.mu.Lock()
 	cache.prune(time.Now())
