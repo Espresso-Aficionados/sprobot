@@ -120,6 +120,7 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onChannelUpdate),
 		bot.WithEventListenerFunc(b.onThreadCreate),
 		bot.WithEventListenerFunc(b.onForumThreadCreate),
+		bot.WithEventListenerFunc(b.onForumReminderReady),
 		bot.WithEventListenerFunc(b.onForumThreadMessage),
 		bot.WithEventListenerFunc(b.onThreadUpdate),
 		bot.WithEventListenerFunc(b.onThreadDelete),

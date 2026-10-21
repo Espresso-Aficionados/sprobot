@@ -3,6 +3,7 @@ package bot
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 )
 
 type threadHelpInfo struct {
+	GuildID      snowflake.ID // the forum's guild
 	HelperID     snowflake.ID
 	LinkToPost   string
 	MaxThreadAge time.Duration
@@ -23,12 +25,14 @@ type threadHelpInfo struct {
 func getThreadHelpConfig() map[snowflake.ID]threadHelpInfo {
 	return map[snowflake.ID]threadHelpInfo{
 		1019753326469980262: {
+			GuildID:      726985544038612993,
 			HelperID:     1020401507121774722,
 			LinkToPost:   "https://discord.com/channels/726985544038612993/727325278820368456/1020402429717663854",
 			MaxThreadAge: 24 * time.Hour,
 			HistoryLimit: 50,
 		},
 		1019680268229021807: {
+			GuildID:      1013566342345019512,
 			HelperID:     1015493549430685706,
 			LinkToPost:   "https://discord.com/channels/1013566342345019512/1019680095893471322/1020431232129048667",
 			MaxThreadAge: 5 * time.Minute,
@@ -37,8 +41,8 @@ func getThreadHelpConfig() map[snowflake.ID]threadHelpInfo {
 	}
 }
 
-// forumReminderSync is how often the reminder reads the active-thread list
-// over REST instead of relying on the gateway-fed channel cache.
+// forumReminderSync is how often the reminder checks the gateway-fed channel
+// cache against the active-thread list read over REST.
 const forumReminderSync = 24 * time.Hour
 
 // forumThreadStatus is what the reminder knows of a thread's replies. Statuses
@@ -85,16 +89,32 @@ func (s *forumReminderState) forget(id snowflake.ID) {
 	delete(s.threads, id)
 }
 
+// forgetWaiting drops every waiting thread back to unknown, so each has its
+// history read again before any prompt.
+func (s *forumReminderState) forgetWaiting() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	maps.DeleteFunc(s.threads, func(_ snowflake.ID, st forumThreadStatus) bool { return st == forumThreadWaiting })
+}
+
 // onForumThreadCreate records a thread created in a reminder forum while the
 // bot is online: from here on, replies arrive as message events.
 func (b *Bot) onForumThreadCreate(e *events.ThreadCreate) {
 	if !e.NewlyCreated {
 		return
 	}
-	if _, ok := b.threadHelpConfig[e.ParentID]; !ok {
+	// disgo leaves e.ParentID unset on THREAD_CREATE; the thread carries it.
+	if _, ok := b.threadHelpConfig[*e.Thread.ParentID()]; !ok {
 		return
 	}
 	b.forumReminders.record(e.ThreadID, forumThreadWaiting)
+}
+
+// onForumReminderReady runs at the start of every gateway session. Messages
+// sent while there was none are never delivered, so a thread thought to be
+// waiting may have been answered in the meantime.
+func (b *Bot) onForumReminderReady(*events.Ready) {
+	b.forumReminders.forgetWaiting()
 }
 
 // onForumThreadMessage settles a reminder-forum thread once someone other
@@ -159,25 +179,60 @@ func (b *Bot) sendForumReminders() {
 		b.forumReminders.lastSync = now
 	}
 	for forumID, info := range b.threadHelpConfig {
-		threads := b.forumThreads(forumID, fullSync)
+		if fullSync {
+			b.syncForumThreads(forumID, info.GuildID)
+		}
+		threads := b.Client.Caches.GuildThreadsInChannel(forumID)
 		for _, thread := range forumReminderCandidates(threads, forumID, info.MaxThreadAge, now, b.forumReminders.status) {
 			b.checkThread(thread, info)
 		}
 	}
 }
 
-// forumThreads returns the threads to consider for a forum: the channel
-// cache, which gateway events keep current, or on a sync Discord's list of
-// active threads, in case the cache missed some.
-func (b *Bot) forumThreads(forumID snowflake.ID, fullSync bool) []discord.GuildThread {
-	if forum, ok := b.Client.Caches.GuildForumChannel(forumID); ok && fullSync {
-		active, err := b.Client.Rest.GetActiveGuildThreads(forum.GuildID())
-		if err == nil {
-			return active.Threads
-		}
-		b.Log.Error("Failed to get active threads", "guild_id", forum.GuildID(), "error", err)
+// syncForumThreads brings the channel cache's copy of a forum's threads in
+// line with Discord's list of active threads. Gateway events keep the cache
+// current while connected, but it is saved across restarts, and nothing
+// reports threads archived or deleted while the bot was down, or a thread
+// whose create event was missed.
+func (b *Bot) syncForumThreads(forumID, guildID snowflake.ID) {
+	active, err := b.Client.Rest.GetActiveGuildThreads(guildID)
+	if err != nil {
+		b.Log.Error("Failed to get active threads", "guild_id", guildID, "error", err)
+		return
 	}
-	return b.Client.Caches.GuildThreadsInChannel(forumID)
+	listed := make(map[snowflake.ID]bool)
+	for _, t := range active.Threads {
+		if p := t.ParentID(); p != nil && *p == forumID {
+			listed[t.ID()] = true
+			b.Client.Caches.AddChannel(t)
+		}
+	}
+	// A cached open thread missing from the list was archived, deleted or
+	// hidden from the bot, or created after the list was read: ask which.
+	for _, t := range b.Client.Caches.GuildThreadsInChannel(forumID) {
+		if listed[t.ID()] || t.ThreadMetadata.Archived {
+			continue
+		}
+		ch, err := b.Client.Rest.GetChannel(t.ID())
+		if err != nil {
+			b.Log.Error("Failed to refresh cached thread", "error", err, "thread_id", t.ID())
+			if isPermanentRESTError(err) {
+				b.dropForumThread(t.ID())
+			}
+			continue
+		}
+		if fresh, ok := ch.(discord.GuildThread); ok {
+			b.Client.Caches.AddChannel(fresh)
+		}
+	}
+}
+
+// dropForumThread gives up on a thread Discord says is gone or off limits.
+// The channel cache is saved across restarts, so the thread leaves it too,
+// rather than being offered again after every one.
+func (b *Bot) dropForumThread(id snowflake.ID) {
+	b.forumReminders.record(id, forumThreadDone)
+	b.Client.Caches.RemoveChannel(id)
 }
 
 // forumReminderCandidates returns the forum's threads that may need a
@@ -250,7 +305,7 @@ func (b *Bot) checkThread(thread discord.GuildThread, info threadHelpInfo) {
 	if err != nil {
 		b.Log.Error("Failed to re-check thread before reminder", "error", err, "thread_id", threadID)
 		if isPermanentRESTError(err) {
-			b.forumReminders.record(threadID, forumThreadDone)
+			b.dropForumThread(threadID)
 		}
 		return
 	}
@@ -306,6 +361,9 @@ func (b *Bot) readThreadHistory(thread discord.GuildThread, info threadHelpInfo)
 	messages, err := b.Client.Rest.GetMessages(thread.ID(), 0, 0, 0, info.HistoryLimit)
 	if err != nil {
 		b.Log.Error("Failed to get thread messages", "error", err, "thread_id", thread.ID())
+		if isPermanentRESTError(err) {
+			b.dropForumThread(thread.ID())
+		}
 		return false
 	}
 	status, reason := threadHistoryStatus(messages, thread.OwnerID, info.HistoryLimit)

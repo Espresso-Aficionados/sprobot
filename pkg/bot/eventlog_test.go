@@ -2,6 +2,7 @@ package bot
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 )
 
@@ -153,23 +155,92 @@ func mustChannel(t *testing.T, raw string) discord.GuildChannel {
 	return ch.Channel.(discord.GuildChannel)
 }
 
-func TestThreadCreateLogsOnlyNewThreads(t *testing.T) {
-	b, stub := newEventLogBot(t)
-	thread := mustThread(t, `{"id":"6","type":11,"guild_id":"10","parent_id":"5","owner_id":"30","name":"help","thread_metadata":{}}`)
-	event := func(newlyCreated bool) *events.ThreadCreate {
-		return &events.ThreadCreate{
-			GenericThread: &events.GenericThread{GenericEvent: events.NewGenericEvent(b.Client, 0, 0), ThreadID: 6, GuildID: 10, ParentID: 5, Thread: thread},
-			NewlyCreated:  newlyCreated,
+// threadJSON is thread 6 of channel 5 in guild 10, named name.
+func threadJSON(name string, extra string) string {
+	return `{"id":"6","type":11,"guild_id":"10","parent_id":"5","owner_id":"30","name":` + jsonString(name) + `,"thread_metadata":{}` + extra + `}`
+}
+
+// embedField returns the value of the named field of a posted message's
+// first embed.
+func embedField(t *testing.T, body, name string) string {
+	t.Helper()
+	var m discord.MessageCreate
+	if err := json.Unmarshal([]byte(body), &m); err != nil || len(m.Embeds) == 0 {
+		t.Fatalf("decoding posted embed %q: %v", body, err)
+	}
+	for _, f := range m.Embeds[0].Fields {
+		if f.Name == name {
+			return f.Value
 		}
 	}
+	return ""
+}
 
-	b.onThreadCreate(event(false)) // the bot was added to an existing thread
+func TestThreadCreateLogsOnlyNewThreads(t *testing.T) {
+	b, stub := newEventLogBot(t)
+	event := func(name string, newlyCreated bool) *events.ThreadCreate {
+		return gatewayEvent[*events.ThreadCreate](t, b.Client, gateway.EventTypeThreadCreate,
+			threadJSON(name, fmt.Sprintf(`,"newly_created":%t`, newlyCreated)))
+	}
+
+	b.onThreadCreate(event("help", false)) // the bot was added to an existing thread
 	if got := stub.bodies("POST /channels/15/messages"); len(got) != 0 {
 		t.Fatalf("logged 'Thread Created' for an existing thread: %v", got)
 	}
-	b.onThreadCreate(event(true))
-	if got := stub.bodies("POST /channels/15/messages"); len(got) != 1 || !strings.Contains(got[0], "Thread Created") {
-		t.Errorf("event log posts = %v, want one 'Thread Created'", got)
+	b.onThreadCreate(event("help", true))
+	got := stub.bodies("POST /channels/15/messages")
+	if len(got) != 1 || !strings.Contains(got[0], "Thread Created") {
+		t.Fatalf("event log posts = %v, want one 'Thread Created'", got)
+	}
+	if parent := embedField(t, got[0], "Parent"); parent != "<#5>" {
+		t.Errorf("Parent = %q, want <#5>", parent)
+	}
+
+	stub.reset()
+	b.onThreadCreate(event(hiddenChannelName, true))
+	got = stub.bodies("POST /channels/15/messages")
+	if len(got) != 1 || embedField(t, got[0], "Name") != channelDisplayName(hiddenChannelName) {
+		t.Errorf("event log posts = %v, want the hidden thread's name replaced", got)
+	}
+}
+
+func TestThreadVisibilityChangeIsNotLoggedAsRename(t *testing.T) {
+	b, stub := newEventLogBot(t)
+	update := func(oldName, newName string) *events.ThreadUpdate {
+		b.Client.Caches.AddChannel(mustThread(t, threadJSON(oldName, "")))
+		return gatewayEvent[*events.ThreadUpdate](t, b.Client, gateway.EventTypeThreadUpdate, threadJSON(newName, ""))
+	}
+
+	b.onThreadUpdate(update(hiddenChannelName, "help"))
+	b.onThreadUpdate(update("help", hiddenChannelName))
+	if got := stub.routesCalled(); len(got) != 0 {
+		t.Fatalf("logged a thread becoming visible or hidden as a rename: %v", got)
+	}
+
+	b.onThreadUpdate(update("help", "solved"))
+	if got := stub.bodies("POST /channels/16/messages"); len(got) != 1 || !strings.Contains(got[0], "Thread Renamed") {
+		t.Errorf("rename log posts = %v, want one 'Thread Renamed'", got)
+	}
+	if got := stub.bodies("POST /channels/15/messages"); len(got) != 1 || embedField(t, got[0], "New Name") != "solved" {
+		t.Errorf("event log posts = %v, want the rename logged", got)
+	}
+}
+
+func TestChannelOverwriteOnHiddenChannelUsesID(t *testing.T) {
+	b, stub := newEventLogBot(t)
+	stub.on("GET /channels/5", 200, `{"id":"5","type":0,"guild_id":"10","name":"___hidden___"}`)
+	target := snowflake.ID(5)
+	entry := discord.AuditLogEntry{
+		TargetID:   &target,
+		ActionType: discord.AuditLogEventChannelOverwriteCreate,
+		Changes:    []discord.AuditLogChange{{Key: discord.AuditLogChangeKeyAllow, NewValue: json.RawMessage(`"2048"`)}},
+	}
+
+	b.handleChannelOverwriteEntry(10, entry)
+
+	got := stub.bodies("POST /channels/15/messages")
+	if len(got) != 1 || strings.Contains(got[0], hiddenChannelName) || !strings.Contains(got[0], "Channel Permissions Created: 5") {
+		t.Errorf("event log posts = %v, want the channel titled by its ID", got)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -79,6 +80,10 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 
 	case http.MethodPut:
+		if src := r.Header.Get("X-Amz-Copy-Source"); src != "" {
+			f.copyObject(w, key, src)
+			return
+		}
 		data, _ := io.ReadAll(r.Body)
 		f.Objects[key] = data
 		w.WriteHeader(http.StatusOK)
@@ -92,6 +97,23 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// copyObject answers CopyObject: src is "bucket/key", optionally escaped and
+// with a leading slash.
+func (f *FakeS3) copyObject(w http.ResponseWriter, key, src string) {
+	if unescaped, err := url.PathUnescape(src); err == nil {
+		src = unescaped
+	}
+	data, ok := f.Objects["/"+strings.TrimPrefix(src, "/")]
+	if !ok {
+		writeError(w, http.StatusNotFound, "NoSuchKey")
+		return
+	}
+	f.Objects[key] = slices.Clone(data)
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	io.WriteString(w, xml.Header+`<CopyObjectResult><ETag>"fake"</ETag></CopyObjectResult>`)
 }
 
 // list answers ListObjectsV2 for the bucket in the path, in key order, a page

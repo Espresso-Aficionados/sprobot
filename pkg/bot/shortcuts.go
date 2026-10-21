@@ -358,9 +358,21 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 		if !isImageURL(resp) {
 			continue
 		}
-		// A link to a file we already store needs no copy.
 		if key, ok := b.storedFileKey(resp); ok {
-			responses[i] = key
+			// Reuse one of this guild's own shortcut files; copy any other
+			// saved file. Shortcut files are deleted once their own guild's
+			// shortcuts stop using them, a check that never looks at other
+			// guilds or features, so a shared key could vanish from under us.
+			if kind, gid, _, _ := sprobot.ParseFileKey(key); kind == "shortcut" && gid == guildStr {
+				responses[i] = key
+				continue
+			}
+			copied, err := b.S3.CopyShortcutFile(ctx, guildStr, key)
+			if err != nil {
+				b.Log.Error("Failed to copy saved file for shortcut", "error", err)
+				continue // keep original URL
+			}
+			responses[i] = copied
 			continue
 		}
 		s3URL, err := b.S3.SaveShortcutImage(ctx, guildStr, strings.TrimSpace(resp))

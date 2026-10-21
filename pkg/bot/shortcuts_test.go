@@ -3,12 +3,14 @@ package bot
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"unicode/utf16"
 
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/sprobot"
@@ -354,5 +356,79 @@ func TestShortcutReplaceDeletesUnusedFiles(t *testing.T) {
 	st := b.shortcuts.get(10)
 	if got := st.Shortcuts["a"].Responses; !slices.Equal(got, []string{"text now"}) {
 		t.Errorf("responses = %v, want the new text", got)
+	}
+}
+
+// setShortcutModal builds a modal submit setting shortcut name to response.
+func setShortcutModal(t *testing.T, b *Bot, name, response string) *events.ModalSubmitInteractionCreate {
+	t.Helper()
+	e, _ := modalEvent(t, b.Client, "sconfig_set_"+name,
+		`[{"type":1,"components":[{"type":4,"custom_id":"response_0","value":`+jsonString(response)+`}]}]`)
+	return e
+}
+
+// putsUnder returns the PUT requests made for keys under prefix.
+func putsUnder(fake *testutil.FakeS3, prefix string) []string {
+	fake.Mu.Lock()
+	defer fake.Mu.Unlock()
+	var out []string
+	for _, r := range fake.Requests {
+		if strings.HasPrefix(r, "PUT /test-bucket/"+prefix) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestShortcutSetReusesOwnSavedFile(t *testing.T) {
+	b, _, fake := newShortcutBot(t)
+
+	b.handleShortcutConfigSetModal(setShortcutModal(t, b, "d", sprobot.WebEndpoint+"files/shortcut/10/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"))
+
+	if got := b.shortcuts.get(10).Shortcuts["d"].Responses; !slices.Equal(got, []string{shortcutKeyA}) {
+		t.Errorf("responses = %v, want the bare key of the linked file", got)
+	}
+	if got := putsUnder(fake, "shortcut_files/"); len(got) != 0 {
+		t.Errorf("stored the guild's own file again: %v", got)
+	}
+}
+
+func TestShortcutSetCopiesFilesItDoesNotOwn(t *testing.T) {
+	tests := []struct {
+		name, key string
+		web       bool // linked by its web route, else by its old bucket URL
+	}{
+		{"another guild's shortcut file", "shortcut_files/11/dddddddddddddddddddddddddddddd.png", true},
+		{"a mod file of this guild", "mod_files/10/cccccccccccccccccccccccccccccc.gif", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, _, fake := newShortcutBot(t)
+			fake.Objects["/test-bucket/"+tt.key] = []byte("theirs")
+			link := b.S3.Origin() + "/test-bucket/" + tt.key
+			if tt.web {
+				link = b.S3.FileURL(tt.key)
+			}
+
+			b.handleShortcutConfigSetModal(setShortcutModal(t, b, "d", link))
+
+			got := b.shortcuts.get(10).Shortcuts["d"].Responses
+			if len(got) != 1 || got[0] == tt.key || !strings.HasPrefix(got[0], "shortcut_files/10/") || path.Ext(got[0]) != path.Ext(tt.key) {
+				t.Fatalf("responses = %v, want a copy among guild 10's shortcut files", got)
+			}
+			fake.Mu.Lock()
+			copied := string(fake.Objects["/test-bucket/"+got[0]])
+			fake.Mu.Unlock()
+			if copied != "theirs" {
+				t.Errorf("copy holds %q, want the source's bytes", copied)
+			}
+
+			// Removing the shortcut deletes the copy, never the source.
+			e, _ := commandEvent(t, b.Client, removeShortcutData("d"))
+			b.handleShortcutConfigRemove(e)
+			if objectExists(fake, got[0]) || !objectExists(fake, tt.key) {
+				t.Errorf("after removal: copy exists %v, source exists %v; want only the source", objectExists(fake, got[0]), objectExists(fake, tt.key))
+			}
+		})
 	}
 }

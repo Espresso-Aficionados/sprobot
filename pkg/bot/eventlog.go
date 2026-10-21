@@ -1072,7 +1072,8 @@ func (b *Bot) onThreadCreate(e *events.ThreadCreate) {
 		Fields: []discord.EmbedField{
 			{Name: "Thread", Value: channelMention(e.ThreadID), Inline: boolPtr(true)},
 			{Name: "Name", Value: channelDisplayName(e.Thread.Name()), Inline: boolPtr(true)},
-			{Name: "Parent", Value: channelMention(e.ParentID), Inline: boolPtr(true)},
+			// disgo leaves e.ParentID unset on THREAD_CREATE; the thread carries it.
+			{Name: "Parent", Value: channelMention(*e.Thread.ParentID()), Inline: boolPtr(true)},
 			{Name: "Creator", Value: userMention(e.Thread.OwnerID), Inline: boolPtr(true)},
 		},
 	}

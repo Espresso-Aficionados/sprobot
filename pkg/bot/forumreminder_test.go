@@ -3,11 +3,13 @@ package bot
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 )
 
@@ -43,6 +45,13 @@ func TestGetThreadHelpConfig(t *testing.T) {
 	}
 	if info.HistoryLimit != 50 {
 		t.Errorf("prod HistoryLimit = %d, want 50", info.HistoryLimit)
+	}
+
+	// The sign-up post is in the forum's own guild.
+	for forumID, info := range config {
+		if prefix := fmt.Sprintf("https://discord.com/channels/%d/", info.GuildID); !strings.HasPrefix(info.LinkToPost, prefix) {
+			t.Errorf("forum %d: GuildID %d does not match LinkToPost %s", forumID, info.GuildID, info.LinkToPost)
+		}
 	}
 }
 
@@ -113,32 +122,31 @@ func TestForumReminderStateNeverMovesBack(t *testing.T) {
 }
 
 // newForumBot returns a bot reminding in forum 500 of guild 10 after an hour,
-// with the daily REST sync not yet due.
+// with the daily REST sync not yet due. The forum itself isn't cached.
 func newForumBot(t *testing.T) (*Bot, *discordStub) {
 	t.Helper()
 	b, stub := newStubBot(t)
 	b.threadHelpConfig = map[snowflake.ID]threadHelpInfo{
-		500: {HelperID: 600, LinkToPost: "https://example.com/post", MaxThreadAge: time.Hour, HistoryLimit: 5},
+		500: {GuildID: 10, HelperID: 600, LinkToPost: "https://example.com/post", MaxThreadAge: time.Hour, HistoryLimit: 5},
 	}
 	b.forumReminders.lastSync = time.Now()
-	b.Client.Caches.AddChannel(mustChannel(t, `{"id":"500","type":15,"guild_id":"10","name":"help"}`))
 	return b, stub
 }
 
-// addForumThread caches a thread created age ago, answers GET for it, and,
-// if live, records its creation as seen on the gateway.
+// addForumThread caches a thread created age ago and answers GET for it. If
+// live, the thread arrives as THREAD_CREATE through disgo's handler, as one
+// created while the bot is online would; else it is only cached, as one
+// loaded from the saved cache or sent with GUILD_CREATE would be.
 func addForumThread(t *testing.T, b *Bot, stub *discordStub, age time.Duration, messageCount int, live bool) snowflake.ID {
 	t.Helper()
 	id := snowflake.New(time.Now().Add(-age))
 	raw := forumThreadJSON(id, messageCount, false)
-	thread := mustThread(t, raw)
-	b.Client.Caches.AddChannel(thread)
 	stub.on(fmt.Sprintf("GET /channels/%d", id), 200, raw)
 	if live {
-		b.onForumThreadCreate(&events.ThreadCreate{
-			GenericThread: &events.GenericThread{GenericEvent: events.NewGenericEvent(b.Client, 0, 0), ThreadID: id, GuildID: 10, ParentID: 500, Thread: thread},
-			NewlyCreated:  true,
-		})
+		b.onForumThreadCreate(gatewayEvent[*events.ThreadCreate](t, b.Client, gateway.EventTypeThreadCreate,
+			strings.TrimSuffix(raw, "}")+`,"newly_created":true}`))
+	} else {
+		b.Client.Caches.AddChannel(mustThread(t, raw))
 	}
 	return id
 }
@@ -294,5 +302,76 @@ func TestForumReminderDailySync(t *testing.T) {
 	}
 	if got := stub.bodies(fmt.Sprintf("POST /channels/%d/messages", id)); len(got) != 1 {
 		t.Errorf("prompted the thread found by the sync %d times, want 1", len(got))
+	}
+}
+
+func TestForumReminderSyncReconcilesCache(t *testing.T) {
+	b, stub := newForumBot(t)
+	// Cached as open, but deleted, or archived, while the bot was down.
+	deleted := addForumThread(t, b, stub, 2*time.Hour, 3, false)
+	stub.on(fmt.Sprintf("GET /channels/%d", deleted), 404, discordError(10003, "Unknown Channel"))
+	archived := addForumThread(t, b, stub, 3*time.Hour, 3, false) // distinct age, distinct ID
+	stub.on(fmt.Sprintf("GET /channels/%d", archived), 200, forumThreadJSON(archived, 3, true))
+	// Missed by the cache, and not old enough for a prompt yet.
+	missed := snowflake.New(time.Now().Add(-time.Minute))
+	stub.on("GET /guilds/10/threads/active", 200, `{"threads":[`+forumThreadJSON(missed, 0, false)+`],"members":[]}`)
+
+	b.forumReminders.lastSync = time.Now().Add(-forumReminderSync)
+	b.sendForumReminders()
+
+	if _, ok := b.Client.Caches.GuildThread(deleted); ok {
+		t.Error("deleted thread still cached")
+	}
+	if th, ok := b.Client.Caches.GuildThread(archived); !ok || !th.ThreadMetadata.Archived {
+		t.Error("archived thread not updated in the cache")
+	}
+	if _, ok := b.Client.Caches.GuildThread(missed); !ok {
+		t.Error("thread found by the sync not cached for the rounds until the next one")
+	}
+	for _, id := range []snowflake.ID{deleted, archived} {
+		if got := stub.bodies(fmt.Sprintf("GET /channels/%d/messages", id)); len(got) != 0 {
+			t.Errorf("read the history of stale thread %d", id)
+		}
+	}
+
+	stub.reset()
+	b.sendForumReminders()
+	if got := stub.routesCalled(); len(got) != 0 {
+		t.Errorf("calls after the sync settled the cache: %v", got)
+	}
+}
+
+func TestForumReminderDropsThreadGoneBeforeHistoryRead(t *testing.T) {
+	b, stub := newForumBot(t)
+	// Deleted while the bot was down; the saved cache still has it.
+	id := addForumThread(t, b, stub, 2*time.Hour, 3, false)
+	messages := fmt.Sprintf("GET /channels/%d/messages", id)
+	stub.on(messages, 404, discordError(10003, "Unknown Channel"))
+
+	b.sendForumReminders()
+	b.sendForumReminders()
+
+	if got := stub.bodies(messages); len(got) != 1 {
+		t.Errorf("read the history of a deleted thread %d times, want 1", len(got))
+	}
+	if _, ok := b.Client.Caches.GuildThread(id); ok {
+		t.Error("deleted thread left in the saved cache, to be retried after every restart")
+	}
+}
+
+func TestForumReminderRereadsWaitingThreadsAfterNewSession(t *testing.T) {
+	b, stub := newForumBot(t)
+	id := addForumThread(t, b, stub, 2*time.Hour, 1, true)
+	// A reply sent while the gateway had no session is never delivered.
+	b.onForumReminderReady(&events.Ready{})
+	stub.on(fmt.Sprintf("GET /channels/%d/messages", id), 200, `[{"id":"1","channel_id":"1","author":{"id":"31","username":"bob"}}]`)
+
+	b.sendForumReminders()
+
+	if got := stub.bodies(fmt.Sprintf("GET /channels/%d/messages", id)); len(got) != 1 {
+		t.Errorf("read the history %d times after a new session, want 1", len(got))
+	}
+	if got := stub.bodies(fmt.Sprintf("POST /channels/%d/messages", id)); len(got) != 0 {
+		t.Error("prompted a thread answered while the gateway was down")
 	}
 }

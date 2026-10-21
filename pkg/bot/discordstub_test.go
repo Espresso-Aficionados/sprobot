@@ -9,9 +9,11 @@ import (
 	"testing"
 
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/bot/handlers"
 	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgo/rest"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -72,6 +74,26 @@ func newStubBotWithS3(t *testing.T) (*Bot, *discordStub, *testutil.FakeS3) {
 		Log:    testutil.DiscardLogger(),
 	}}
 	return b, stub, fake
+}
+
+// gatewayEvent feeds a raw gateway payload through disgo's own handler, which
+// also updates the client's cache, and returns the event it dispatches. Tests
+// then see only the fields disgo fills in: THREAD_CREATE, for one, leaves
+// GenericThread.ParentID zero.
+func gatewayEvent[E bot.Event](t *testing.T, client *bot.Client, typ gateway.EventType, raw string) E {
+	t.Helper()
+	data, err := gateway.UnmarshalEventData([]byte(raw), typ)
+	if err != nil {
+		t.Fatalf("decoding %s: %v", typ, err)
+	}
+	var got E
+	seen := false
+	client.EventManager = bot.NewEventManager(client, bot.WithListenerFunc(func(e E) { got, seen = e, true }))
+	handlers.GetGatewayHandlers()[typ].HandleGatewayEvent(client, 0, 0, data)
+	if !seen {
+		t.Fatalf("%s dispatched no %T", typ, got)
+	}
+	return got
 }
 
 // on answers route ("METHOD /path") with status and a JSON body.
