@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -567,11 +568,17 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 	// Step 1: re-host the image if needed
 	submitted := profile[tmpl.Image.Name]
 	userErr, imageURL := c.getImageS3URL(ctx, tmpl, guildID, userID, profile)
+	var replaced string // the user's previous upload, if the new one has another key
 	if imageURL != "" {
 		profile[tmpl.Image.Name] = imageURL
 		if imageURL != submitted {
 			// Freshly re-hosted: bump the version so the stable image URL changes.
 			profile[sprobot.ImageVersionKey] = strconv.FormatInt(time.Now().UnixMilli(), 36)
+			if existing, err := c.FetchProfile(ctx, tmpl, guildID, userID); err == nil {
+				if key, ok := c.ProfileImageKey(tmpl, guildID, userID, existing); ok && key != imageURL {
+					replaced = key
+				}
+			}
 		}
 	} else if userErr != "" {
 		// Validation failed — preserve the previously saved image instead of
@@ -597,6 +604,14 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 	// Step 2: save the JSON profile
 	if err := c.putProfile(ctx, tmpl, guildID, userID, profile); err != nil {
 		return "", "", err
+	}
+
+	// Only now that nothing points at it. A failure leaves an orphan for
+	// cmd/s3-orphans, not a broken profile.
+	if replaced != "" {
+		if err := c.DeleteKeys(ctx, replaced); err != nil {
+			c.log.Error("Failed to delete replaced profile image", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "error", err)
+		}
 	}
 
 	webURL = c.webEndpoint + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
@@ -642,15 +657,59 @@ func (c *Client) putProfile(ctx context.Context, tmpl sprobot.Template, guildID,
 	return nil
 }
 
+// ProfileImageKey returns the bucket key of a profile's image if it is the
+// user's own upload. Anything else the image field may hold, such as an
+// external URL or some other key in the bucket, gives false.
+func (c *Client) ProfileImageKey(tmpl sprobot.Template, guildID, userID string, profile map[string]string) (string, bool) {
+	key, ok := c.objectKey(profile[tmpl.Image.Name])
+	if !ok {
+		return "", false
+	}
+	if i := strings.IndexByte(key, '?'); i >= 0 {
+		key = key[:i]
+	}
+	g, t, u, ok := sprobot.ParseProfileImageKey(key)
+	if !ok || g != guildID || t != tmpl.Name || u != userID {
+		return "", false
+	}
+	return key, true
+}
+
+// DeleteProfileImage deletes the stored copies of a user's profile image: the
+// object their profile points at, and the object for every extension an
+// upload is saved under, which also covers copies earlier uploads left behind.
+// profile may be nil.
+func (c *Client) DeleteProfileImage(ctx context.Context, tmpl sprobot.Template, guildID, userID string, profile map[string]string) error {
+	keys := uploadedImageKeys(guildID, tmpl.Name, userID)
+	if key, ok := c.ProfileImageKey(tmpl, guildID, userID, profile); ok && !slices.Contains(keys, key) {
+		keys = append(keys, key)
+	}
+	if err := c.DeleteKeys(ctx, keys...); err != nil {
+		return fmt.Errorf("deleting profile image: %w", err)
+	}
+	return nil
+}
+
+// DeleteProfile deletes a user's profile and its image.
 func (c *Client) DeleteProfile(ctx context.Context, tmpl sprobot.Template, guildID, userID string) error {
 	c.log.Info("Deleting profile", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 
 	key := cacheKey(tmpl.Name, guildID, userID)
 	c.cache.Remove(key)
 
+	profile, err := c.FetchProfileSimple(ctx, guildID, tmpl.Name, userID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	// The image goes first, so if that fails the profile is still there to
+	// delete again.
+	if err := c.DeleteProfileImage(ctx, tmpl, guildID, userID, profile); err != nil {
+		return err
+	}
+
 	s3Path := sprobot.ProfileS3Path(guildID, tmpl.Name, userID)
 	start := time.Now()
-	_, err := c.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+	_, err = c.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: &c.bucket,
 		Key:    &s3Path,
 	})
@@ -684,16 +743,59 @@ func (c *Client) DeleteKeys(ctx context.Context, keys ...string) error {
 	return errors.Join(errs...)
 }
 
-// saveRemoteFile downloads fileURL whole and stores it under
-// {s3Prefix}/{guildID}/, returning the new key. Files over MaxFileSize fail
-// with ErrFileTooLarge rather than being truncated.
-func (c *Client) saveRemoteFile(ctx context.Context, guildID, fileURL, s3Prefix string) (string, error) {
+// Object is one entry of a bucket listing.
+type Object struct {
+	Key          string
+	Size         int64
+	LastModified time.Time
+}
+
+// ListObjects returns every object whose key starts with prefix, following
+// the listing across pages.
+func (c *Client) ListObjects(ctx context.Context, prefix string) ([]Object, error) {
+	var objects []Object
+	pages := s3.NewListObjectsV2Paginator(c.s3, &s3.ListObjectsV2Input{
+		Bucket: &c.bucket,
+		Prefix: &prefix,
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing %s: %w", prefix, err)
+		}
+		for _, o := range page.Contents {
+			if o.Key == nil {
+				continue
+			}
+			obj := Object{Key: *o.Key}
+			if o.Size != nil {
+				obj.Size = *o.Size
+			}
+			if o.LastModified != nil {
+				obj.LastModified = *o.LastModified
+			}
+			objects = append(objects, obj)
+		}
+	}
+	return objects, nil
+}
+
+// saveRemoteFile downloads fileURL whole and stores it as a saved file of the
+// given kind (sprobot.FileKind*), returning the new key. Files over
+// MaxFileSize fail with ErrFileTooLarge rather than being truncated.
+func (c *Client) saveRemoteFile(ctx context.Context, guildID, fileURL, kind string) (string, error) {
 	if err := urlValidator(fileURL); err != nil {
 		return "", fmt.Errorf("URL validation failed: %w", err)
 	}
 	parsed, err := url.Parse(fileURL)
 	if err != nil {
 		return "", fmt.Errorf("parsing URL: %w", err)
+	}
+	ext := sprobot.SafeFileExt(path.Ext(parsed.Path))
+	// Built by FileKey, so the web viewer serves every key saved here.
+	s3Path, ok := sprobot.FileKey(kind, guildID, randomString(30)+ext)
+	if !ok {
+		return "", fmt.Errorf("no file key for kind %q in guild %q", kind, guildID)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
@@ -732,12 +834,10 @@ func (c *Client) saveRemoteFile(ctx context.Context, guildID, fileURL, s3Prefix 
 		return "", fmt.Errorf("rewinding temp file: %w", err)
 	}
 
-	ext := sprobot.SafeFileExt(path.Ext(parsed.Path))
 	contentType := sprobot.InlineContentType(ext)
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	s3Path := fmt.Sprintf("%s/%s/%s%s", s3Prefix, guildID, randomString(30), ext)
 	_, err = c.s3.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        &c.bucket,
 		Key:           &s3Path,
@@ -753,7 +853,7 @@ func (c *Client) saveRemoteFile(ctx context.Context, guildID, fileURL, s3Prefix 
 
 func (c *Client) SaveModFile(ctx context.Context, guildID string, fileURL string) (string, error) {
 	c.log.Info("Saving file to mod log", "guild_id", guildID)
-	s3Path, err := c.saveRemoteFile(ctx, guildID, fileURL, "mod_files")
+	s3Path, err := c.saveRemoteFile(ctx, guildID, fileURL, sprobot.FileKindMod)
 	if err != nil {
 		return "", err
 	}
@@ -766,7 +866,7 @@ func (c *Client) SaveShortcutImage(ctx context.Context, guildID string, fileURL 
 	if strings.HasPrefix(fileURL, c.endpoint) || !strings.HasPrefix(fileURL, "http") {
 		return fileURL, nil
 	}
-	s3Path, err := c.saveRemoteFile(ctx, guildID, fileURL, "shortcut_files")
+	s3Path, err := c.saveRemoteFile(ctx, guildID, fileURL, sprobot.FileKindShortcut)
 	if err != nil {
 		return "", err
 	}
@@ -799,6 +899,29 @@ func (c *Client) CopyShortcutFile(ctx context.Context, guildID, srcKey string) (
 	return s3Path, nil
 }
 
+// uploadExts maps the image types an upload is sniffed as to the extension it
+// is stored under. Other image types are stored as otherUploadExt.
+var uploadExts = map[string]string{
+	"image/jpeg": ".jpg",
+	"image/png":  ".png",
+	"image/gif":  ".gif",
+	"image/webp": ".webp",
+	"image/bmp":  ".bmp",
+}
+
+const otherUploadExt = ".bin"
+
+// uploadedImageKeys returns every key an upload of the user's profile image
+// can have been stored under, one per extension.
+func uploadedImageKeys(guildID, templateName, userID string) []string {
+	keys := []string{sprobot.ProfileImageS3Path(guildID, templateName, userID, otherUploadExt)}
+	for _, ext := range uploadExts {
+		keys = append(keys, sprobot.ProfileImageS3Path(guildID, templateName, userID, ext))
+	}
+	slices.Sort(keys)
+	return keys
+}
+
 func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guildID, userID string, profile map[string]string) (userErr string, s3URL string) {
 	maybeURL, ok := profile[tmpl.Image.Name]
 	if !ok || maybeURL == "" {
@@ -829,21 +952,11 @@ func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guild
 		return fmt.Sprintf("It looks like you uploaded a %s, but we can only use images. The rest of your profile has been saved. If this looked like a gif, discord probably used a mp4.", ct), ""
 	}
 
-	ext := "bin"
-	switch ct {
-	case "image/jpeg":
-		ext = "jpg"
-	case "image/png":
-		ext = "png"
-	case "image/gif":
-		ext = "gif"
-	case "image/webp":
-		ext = "webp"
-	case "image/bmp":
-		ext = "bmp"
+	ext, ok := uploadExts[ct]
+	if !ok {
+		ext = otherUploadExt
 	}
-
-	s3Path := fmt.Sprintf("images/%s/%s/%s.%s", guildID, tmpl.Name, userID, ext)
+	s3Path := sprobot.ProfileImageS3Path(guildID, tmpl.Name, userID, ext)
 
 	_, err = c.s3.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: &c.bucket,
@@ -924,7 +1037,7 @@ func (c *Client) SaveHiddenThreads(ctx context.Context, guildID string, data []b
 }
 
 func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (string, error) {
-	return c.saveRemoteFile(ctx, guildID, fileURL, "sticky_files")
+	return c.saveRemoteFile(ctx, guildID, fileURL, sprobot.FileKindSticky)
 }
 
 // randomString returns n characters from crypto/rand. Saved-file names are the

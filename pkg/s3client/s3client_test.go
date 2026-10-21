@@ -1331,3 +1331,119 @@ func TestSaveProfileImageVersion(t *testing.T) {
 		t.Errorf("no image: version = %q, want absent", got)
 	}
 }
+
+// A re-upload stored under a new extension deletes the upload it replaces; one
+// under the same key overwrites it in place.
+func TestSaveProfileDeletesReplacedImage(t *testing.T) {
+	disableURLValidation(t)
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	imgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		png.Encode(w, image.NewRGBA(image.Rect(0, 0, 1, 1)))
+	}))
+	defer imgServer.Close()
+
+	c := newTestClient(t, server)
+	tmpl := sprobot.ProfileTemplate
+	const oldKey, newKey = "images/123/Coffee Setup/456.jpg", "images/123/Coffee Setup/456.png"
+	const otherUser = "/test-bucket/images/123/Coffee Setup/789.jpg"
+	seedProfile(t, fake, "test-bucket", "123", tmpl.Name, "456", map[string]string{"Machine": "Rocket", "Gear Picture": oldKey})
+	fake.mu.Lock()
+	fake.objects["/test-bucket/"+oldKey] = []byte("old jpeg")
+	fake.objects[otherUser] = []byte("someone else's upload")
+	fake.mu.Unlock()
+	stored := func(key string) bool {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		_, ok := fake.objects[key]
+		return ok
+	}
+	upload := func() {
+		t.Helper()
+		_, userErr, err := c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{"Machine": "Rocket", "Gear Picture": imgServer.URL + "/a.png"})
+		if err != nil || userErr != "" {
+			t.Fatalf("SaveProfile = %q, %v", userErr, err)
+		}
+	}
+
+	upload()
+	if stored("/test-bucket/" + oldKey) {
+		t.Error("the replaced .jpg upload should be deleted")
+	}
+	if !stored("/test-bucket/"+newKey) || !stored(otherUser) {
+		t.Error("the new upload and other users' images must be kept")
+	}
+
+	// Same extension again: the key is reused, so nothing may be deleted.
+	upload()
+	if !stored("/test-bucket/" + newKey) {
+		t.Error("re-uploading under the same key must not delete it")
+	}
+}
+
+func TestProfileImageKey(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+	tests := []struct{ value, want string }{
+		{"images/1/Coffee Setup/2.png", "images/1/Coffee Setup/2.png"},
+		{server.URL + "/test-bucket/images%2F1%2FCoffee%20Setup%2F2.jpeg", "images/1/Coffee Setup/2.jpeg"},
+		{server.URL + "/test-bucket/images/1/Coffee%20Setup/2.jpg?X-Amz-Expires=300", "images/1/Coffee Setup/2.jpg"},
+		// Not this user's own upload.
+		{"images/1/Coffee Setup/3.png", ""},
+		{"images/1/Roasting Setup/2.png", ""},
+		{"images/9/Coffee Setup/2.png", ""},
+		{"stickies/1.json", ""},
+		{"mod_files/1/abcdefghijABCDEFGHIJ0123456789.png", ""},
+		{"https://cdn.discordapp.com/attachments/1/2/a.png", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got, ok := c.ProfileImageKey(sprobot.ProfileTemplate, "1", "2", map[string]string{"Gear Picture": tt.value})
+		if got != tt.want || ok != (tt.want != "") {
+			t.Errorf("ProfileImageKey(%q) = %q, %v; want %q", tt.value, got, ok, tt.want)
+		}
+	}
+}
+
+// Every writer builds its key with sprobot.FileKey, so it never stores a key
+// the web viewer would refuse to serve.
+func TestSaveFileKeysMatchViewer(t *testing.T) {
+	disableURLValidation(t)
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	fileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("data"))
+	}))
+	defer fileServer.Close()
+
+	c := newTestClient(t, server)
+	ctx := context.Background()
+	src := fileServer.URL + "/a.png"
+	for kind, save := range map[string]func(guildID string) (string, error){
+		sprobot.FileKindMod:      func(g string) (string, error) { return c.SaveModFile(ctx, g, src) },
+		sprobot.FileKindShortcut: func(g string) (string, error) { return c.SaveShortcutImage(ctx, g, src) },
+		sprobot.FileKindSticky:   func(g string) (string, error) { return c.SaveStickyFile(ctx, g, src) },
+	} {
+		key, err := save("123")
+		if err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		if gotKind, guildID, _, ok := sprobot.ParseFileKey(key); !ok || gotKind != kind || guildID != "123" {
+			t.Errorf("%s: key %q parses as kind %q, guild %q (ok=%v)", kind, key, gotKind, guildID, ok)
+		}
+		if key, err := save("not-a-guild"); err == nil {
+			t.Errorf("%s: saved %q for an invalid guild ID, want an error", kind, key)
+		}
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.objects) != 3 {
+		t.Errorf("stored %d objects, want 3 (nothing for the invalid guild)", len(fake.objects))
+	}
+}

@@ -12,7 +12,7 @@ import (
 
 func TestListKeysPages(t *testing.T) {
 	fake := testutil.NewFakeS3()
-	fake.ListPageSize = 2
+	fake.PageSize = 2
 	server := httptest.NewServer(fake)
 	defer server.Close()
 	c := testutil.NewTestS3Client(t, server)

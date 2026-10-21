@@ -56,6 +56,40 @@ func TestParseProfileImageKey(t *testing.T) {
 	}
 }
 
+func TestProfileImageS3PathRoundTrip(t *testing.T) {
+	key := ProfileImageS3Path("1", "Coffee Setup", "2", ".png")
+	if key != "images/1/Coffee Setup/2.png" {
+		t.Errorf("ProfileImageS3Path = %q", key)
+	}
+	if g, tmpl, u, ok := ParseProfileImageKey(key); !ok || g != "1" || tmpl != "Coffee Setup" || u != "2" {
+		t.Errorf("ParseProfileImageKey(%q) = %q %q %q %v", key, g, tmpl, u, ok)
+	}
+}
+
+func TestValidID(t *testing.T) {
+	for s, want := range map[string]bool{
+		"1": true, "726985544038612993": true, "12345678901234567890": true,
+		"": false, "123456789012345678901": false, "12a": false, "..": false, "1/2": false, " 1": false,
+	} {
+		if got := ValidID(s); got != want {
+			t.Errorf("ValidID(%q) = %v, want %v", s, got, want)
+		}
+	}
+}
+
+func TestFilePrefix(t *testing.T) {
+	for kind, want := range map[string]string{
+		FileKindMod: "mod_files", FileKindShortcut: "shortcut_files", FileKindSticky: "sticky_files",
+	} {
+		if got, ok := FilePrefix(kind); !ok || got != want {
+			t.Errorf("FilePrefix(%q) = %q, %v; want %q", kind, got, ok, want)
+		}
+	}
+	if _, ok := FilePrefix("images"); ok {
+		t.Error("FilePrefix(images) should be unknown")
+	}
+}
+
 func TestSafeFileExt(t *testing.T) {
 	for ext, want := range map[string]string{
 		".png": ".png", ".JPEG": ".JPEG", "": "", ".": "", ".tar.gz": "", ".a b": "", ".verylongextension": "",

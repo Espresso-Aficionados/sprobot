@@ -200,18 +200,17 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
-	if err != nil {
-		if errors.Is(err, s3client.ErrNotFound) {
-			respond("Deleted!")
-			return
-		}
-		b.Log.Error("Failed to fetch profile for image delete", "error", err)
-		respond("Something went wrong, please try again.")
-		return
-	}
+	respond(b.deleteProfileImage(ctx, tmpl, guildStr, userStr))
+}
 
-	delete(profile, tmpl.Image.Name)
+// deleteProfileImage deletes a user's profile image from storage, and the
+// whole profile if no field is left in it. It returns the reply to show them.
+func (b *Bot) deleteProfileImage(ctx context.Context, tmpl sprobot.Template, guildStr, userStr string) string {
+	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
+	if err != nil && !errors.Is(err, s3client.ErrNotFound) {
+		b.Log.Error("Failed to fetch profile for image delete", "error", err)
+		return "Something went wrong, please try again."
+	}
 
 	hasFields := false
 	for _, f := range tmpl.Fields {
@@ -222,24 +221,30 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 	}
 
 	if hasFields {
+		// The image goes first, so if that fails the profile still points at
+		// it and deleting again finishes the job.
+		if err := b.S3.DeleteProfileImage(ctx, tmpl, guildStr, userStr, profile); err != nil {
+			b.Log.Error("Failed to delete profile image", "error", err)
+			return "Something went wrong, please try again."
+		}
+		delete(profile, tmpl.Image.Name)
 		_, userErr, err := b.S3.SaveProfile(ctx, tmpl, guildStr, userStr, profile)
 		if err != nil {
 			b.Log.Error("Failed to save profile after image delete", "error", err)
-			respond("Something went wrong, please try again.")
-			return
+			return "Something went wrong, please try again."
 		}
 		if userErr != "" {
-			respond(userErr)
-			return
+			return userErr
 		}
 	} else {
+		// Nothing but the image is left (or no profile at all, but possibly an
+		// old upload): DeleteProfile removes the profile and its image.
 		if err := b.S3.DeleteProfile(ctx, tmpl, guildStr, userStr); err != nil {
 			b.Log.Error("Failed to delete empty profile", "error", err)
-			respond("Something went wrong, please try again.")
-			return
+			return "Something went wrong, please try again."
 		}
 	}
 
 	b.Log.Info("Profile image deleted", "user_id", userStr, "guild_id", guildStr, "template", tmpl.Name)
-	respond("Deleted!")
+	return "Deleted!"
 }
