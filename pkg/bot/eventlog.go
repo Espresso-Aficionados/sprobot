@@ -922,14 +922,10 @@ func (b *Bot) crossPostToModLog(guildID snowflake.ID, user discord.User, embed d
 	if channelID == 0 {
 		return
 	}
-	thread := b.findOrCreateModLogThread(channelID, user)
-	if thread == nil {
-		return
-	}
-	if _, err := b.Client.Rest.CreateMessage(thread.ID(), discord.MessageCreate{
+	if _, _, err := b.postToModLogThread(channelID, user, discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}); err != nil {
-		b.Log.Error("Failed to cross-post to mod log thread", "user_id", user.ID, "error", err)
+		b.Log.Error("Failed to cross-post to mod log thread", "guild_id", guildID, "user_id", user.ID, "error", err)
 	}
 }
 
