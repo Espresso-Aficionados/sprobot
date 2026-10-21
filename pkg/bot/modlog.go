@@ -39,6 +39,7 @@ func (b *Bot) handleModLogMenu(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 	msg := data.TargetMessage()
+	b.modLogPending.Put(msg)
 
 	b.Log.Info("Processing save message to mod log",
 		"user_id", userIDStr(e),
@@ -74,14 +75,18 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		return
 	}
 
-	msg, err := b.Client.Rest.GetMessage(channelID, messageID)
-	if err != nil {
-		b.Log.Error("Failed to fetch original message", "error", err)
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-			Content: "Oops! Something went wrong.",
-			Flags:   discord.MessageFlagEphemeral,
-		})
-		return
+	// Use the message captured when the menu was opened, so it can still be
+	// saved if it is deleted while the mod writes the note. Fall back to REST
+	// for modals submitted across a bot restart.
+	msg, ok := b.modLogPending.Get(messageID)
+	if !ok {
+		fetched, err := b.Client.Rest.GetMessage(channelID, messageID)
+		if err != nil {
+			b.Log.Error("Failed to fetch original message", "error", err)
+			b.ephemeralFollowup(e.Token(), "Couldn't fetch the message. It may have been deleted while the bot restarted.")
+			return
+		}
+		msg = *fetched
 	}
 
 	// Resolve where the entry goes before saving attachments, which can take

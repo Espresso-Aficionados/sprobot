@@ -18,11 +18,10 @@ import (
 
 type Bot struct {
 	*botutil.BaseBot
-	mu        sync.Mutex
-	stop      chan struct{}
-	stickies  map[snowflake.ID]map[snowflake.ID]*stickyMessage // guild -> channel -> sticky
-	pendingMu sync.Mutex
-	pending   map[snowflake.ID]pendingSticky // message ID -> target message awaiting modal submit
+	mu       sync.Mutex
+	stop     chan struct{}
+	stickies map[snowflake.ID]map[snowflake.ID]*stickyMessage // guild -> channel -> sticky
+	pending  botutil.MessageStash                             // context-menu targets awaiting modal submit
 }
 
 func New(token string) (*Bot, error) {
@@ -35,7 +34,6 @@ func New(token string) (*Bot, error) {
 		BaseBot:  base,
 		stop:     make(chan struct{}),
 		stickies: make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
-		pending:  make(map[snowflake.ID]pendingSticky),
 	}
 
 	client, err := disgo.New(token,
