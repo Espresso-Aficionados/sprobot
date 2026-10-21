@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"html/template"
 	"log"
@@ -296,29 +297,31 @@ func TestAccessLogRecords404(t *testing.T) {
 	}
 }
 
-func TestProfileFieldStruct(t *testing.T) {
-	f := profileField{Name: "Machine", Value: "Decent"}
-	if f.Name != "Machine" || f.Value != "Decent" {
-		t.Errorf("profileField = %+v, unexpected", f)
-	}
-}
+func TestBuildProfileData(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	s3 := testutil.NewTestS3Client(t, server)
 
-func TestProfileDataStruct(t *testing.T) {
-	d := profileData{
-		TemplateName: "Coffee Setup",
-		Fields: []profileField{
-			{Name: "Machine", Value: "Linea"},
-		},
-		ImageURL: "https://example.com/img.png",
+	profile := map[string]string{
+		"Location":             "Lisbon",
+		"Machine":              "Linea",
+		"Grinder":              "",
+		"Gear Picture":         "https://example.com/img.png",
+		sprobot.DisplayNameKey: "alice",
 	}
-	if d.TemplateName != "Coffee Setup" {
-		t.Errorf("TemplateName = %q", d.TemplateName)
+	d := buildProfileData(context.Background(), s3, "1", "2", sprobot.ProfileTemplate, profile)
+
+	want := []profileField{{Name: "Machine", Value: "Linea"}, {Name: "Location", Value: "Lisbon"}}
+	if len(d.Fields) != len(want) || d.Fields[0] != want[0] || d.Fields[1] != want[1] {
+		t.Errorf("Fields = %+v, want %+v (template order, empty and reserved fields left out)", d.Fields, want)
 	}
-	if len(d.Fields) != 1 {
-		t.Errorf("len(Fields) = %d", len(d.Fields))
+	if d.TemplateName != "Coffee Setup" || d.Preview.Title != "Coffee Setup for alice" {
+		t.Errorf("TemplateName %q, title %q", d.TemplateName, d.Preview.Title)
 	}
-	if d.ImageURL != "https://example.com/img.png" {
-		t.Errorf("ImageURL = %q", d.ImageURL)
+	// External images aren't ours to presign or proxy.
+	if d.ImageURL != "https://example.com/img.png" || d.Preview.ImageURL != "https://example.com/img.png" {
+		t.Errorf("ImageURL %q, preview image %q; want the external URL unchanged", d.ImageURL, d.Preview.ImageURL)
 	}
 }
 
@@ -414,15 +417,7 @@ func newTestServer(t *testing.T) (*testutil.FakeS3, *http.ServeMux) {
 	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
-	s3 := testutil.NewTestS3Client(t, server)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}", handleProfile(s3))
-	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}/{file}", handleProfileImage(s3))
-	mux.HandleFunc("GET /files/{kind}/{guildID}/{name}", handleFile(s3))
-	mux.HandleFunc("GET /files/{kind}/{guildID}/{name}/view", handleFileView(s3))
-	mux.HandleFunc("GET /"+sprobot.AvatarWebPath, handleAvatar)
-	return fake, mux
+	return fake, newMux(testutil.NewTestS3Client(t, server))
 }
 
 func putObject(fake *testutil.FakeS3, key string, data []byte) {
@@ -664,17 +659,73 @@ func TestTruncateBytes(t *testing.T) {
 	}
 }
 
-func TestLookupTemplateUnknownFallsBack(t *testing.T) {
-	tmpl := lookupTemplate("Retired Template", map[string]string{
-		"Zed":                  "z",
-		"Alpha":                "a",
-		sprobot.ImageField:     "images/x.png",
-		sprobot.DisplayNameKey: "alice",
-	})
-	if len(tmpl.Fields) != 2 || tmpl.Fields[0].Name != "Alpha" || tmpl.Fields[1].Name != "Zed" {
-		t.Errorf("fallback fields = %+v, want [Alpha Zed]", tmpl.Fields)
+// Path values reach an S3 key, so anything but two Discord IDs and a known
+// template is a 404 without touching the bucket, even when an object exists
+// at the key the values would build.
+func TestProfileRoutesRejectBadPaths(t *testing.T) {
+	fake, mux := newTestServer(t)
+	body, _ := json.Marshal(map[string]string{"Machine": "leaked", "Gear Picture": "images/1/Coffee Setup/2.png"})
+	for _, key := range []string{
+		"profiles/1/../stickies/2.json",
+		"profiles/1/Coffee Setup/../../stickies/1.json",
+		"profiles/../stickies/Coffee Setup/2.json",
+		"profiles/1/Retired Setup/2.json",
+		"profiles/1/Coffee Setup/2a.json",
+	} {
+		putObject(fake, key, body)
 	}
-	if tmpl.Image.Name != sprobot.ImageField {
-		t.Errorf("fallback image field = %q", tmpl.Image.Name)
+	putObject(fake, "images/1/Coffee Setup/2.png", []byte("\x89PNG\r\n\x1a\nfake"))
+
+	for _, path := range []string{
+		"/profiles/1/..%2Fstickies/2",
+		"/profiles/1/Coffee%20Setup/..%2F..%2Fstickies%2F1",
+		"/profiles/..%2Fstickies/Coffee%20Setup/2",
+		"/profiles/1/Retired%20Setup/2",
+		"/profiles/1/Coffee%20Setup/2a",
+		"/profiles/123456789012345678901/Coffee%20Setup/2",
+	} {
+		for _, target := range []string{path, path + "/image.png"} {
+			rec := get(mux, target, discordUA)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("%s: status = %d, want 404", target, rec.Code)
+			}
+			if strings.Contains(rec.Body.String(), "leaked") || strings.Contains(rec.Body.String(), "fake") {
+				t.Errorf("%s: served a stored object", target)
+			}
+		}
+	}
+
+	// The legacy .json suffix on the user ID still works.
+	putProfile(t, fake, map[string]string{"Machine": "Rocket"})
+	if rec := get(mux, "/profiles/1/Coffee%20Setup/2.json", "Mozilla/5.0"); rec.Code != http.StatusOK {
+		t.Errorf("legacy .json link: status = %d, want 200", rec.Code)
+	}
+}
+
+// Only a missing object is a 404. Any other S3 failure is a 502, so an outage
+// doesn't look like deleted profiles and files.
+func TestS3ErrorsAreBadGateway(t *testing.T) {
+	fake, mux := newTestServer(t)
+	putProfile(t, fake, map[string]string{"Machine": "Rocket", "Gear Picture": "images/1/Coffee Setup/2.png"})
+	putObject(fake, "images/1/Coffee Setup/2.png", []byte("png"))
+	putObject(fake, "mod_files/1/"+testFileName+".png", []byte("png"))
+
+	tests := []struct {
+		name, failPath, target, ua string
+	}{
+		{"profile page", "/test-bucket/profiles/1/Coffee Setup/2.json", "/profiles/1/Coffee%20Setup/2", "Mozilla/5.0"},
+		{"profile image, profile fetch", "/test-bucket/profiles/1/Coffee Setup/2.json", "/profiles/1/Coffee%20Setup/2/image.png", discordUA},
+		{"profile image, image fetch", "/test-bucket/images/1/Coffee Setup/2.png", "/profiles/1/Coffee%20Setup/2/image.png", discordUA},
+		{"file viewer", "/test-bucket/mod_files/1/" + testFileName + ".png", "/files/mod/1/" + testFileName + ".png/view", "Mozilla/5.0"},
+	}
+	for _, tt := range tests {
+		for status, want := range map[int]int{http.StatusForbidden: http.StatusBadGateway, http.StatusNotFound: http.StatusNotFound} {
+			fake.Mu.Lock()
+			fake.Fail = map[string]int{tt.failPath: status}
+			fake.Mu.Unlock()
+			if rec := get(mux, tt.target, tt.ua); rec.Code != want {
+				t.Errorf("%s with S3 answering %d: status = %d, want %d", tt.name, status, rec.Code, want)
+			}
+		}
 	}
 }
