@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/disgoorg/disgo/discord"
@@ -166,87 +165,43 @@ func TestAggregateCountsSingleUserMultipleDays(t *testing.T) {
 	}
 }
 
-func TestGuildPostCountsConcurrent(t *testing.T) {
-	gc := &guildPostCounts{
-		Counts:    make(map[string]map[string]int),
-		Usernames: make(map[string]string),
-	}
+func TestRecordCountsAndKeepsLatestUsername(t *testing.T) {
+	// Usernames is nil, as in data saved before usernames were stored.
+	gc := &guildPostCounts{Counts: make(map[string]map[string]int)}
 
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			gc.mu.Lock()
-			if gc.Counts["2026-02-16"] == nil {
-				gc.Counts["2026-02-16"] = make(map[string]int)
-			}
-			gc.Counts["2026-02-16"]["user1"]++
-			gc.Usernames["user1"] = "testuser"
-			gc.mu.Unlock()
-		}()
-	}
-	wg.Wait()
+	gc.record("2026-02-16", "1", "alice")
+	gc.record("2026-02-16", "1", "alice_new")
+	gc.record("2026-02-17", "1", "alice_new")
+	gc.record("2026-02-17", "2", "bob")
 
-	if gc.Counts["2026-02-16"]["user1"] != 100 {
-		t.Errorf("concurrent count = %d, want 100", gc.Counts["2026-02-16"]["user1"])
+	if got := gc.Counts["2026-02-16"]["1"]; got != 2 {
+		t.Errorf("day 1 count = %d, want 2", got)
 	}
-	if gc.Usernames["user1"] != "testuser" {
-		t.Errorf("username = %q, want %q", gc.Usernames["user1"], "testuser")
+	if got := aggregateCounts(gc.Counts); got["1"] != 3 || got["2"] != 1 {
+		t.Errorf("totals = %v, want 1:3 2:1", got)
+	}
+	if gc.Usernames["1"] != "alice_new" || gc.Usernames["2"] != "bob" {
+		t.Errorf("usernames = %v, want the latest name per user", gc.Usernames)
 	}
 }
 
-func TestUsernameRecording(t *testing.T) {
+func TestPruneDropsUsernamesWithoutCounts(t *testing.T) {
 	gc := &guildPostCounts{
-		Counts:    make(map[string]map[string]int),
-		Usernames: make(map[string]string),
+		Counts: map[string]map[string]int{
+			"2026-02-01": {"1": 5, "2": 1},
+			"2026-02-10": {"2": 3},
+		},
+		Usernames: map[string]string{"1": "alice", "2": "bob", "3": "carol"},
 	}
 
-	// Simulate recording a username
-	gc.Usernames["123"] = "alice"
-	if gc.Usernames["123"] != "alice" {
-		t.Errorf("username = %q, want %q", gc.Usernames["123"], "alice")
-	}
+	gc.prune("2026-02-09")
 
-	// Simulate username update (user changed their name)
-	gc.Usernames["123"] = "alice_new"
-	if gc.Usernames["123"] != "alice_new" {
-		t.Errorf("username = %q, want %q", gc.Usernames["123"], "alice_new")
+	if _, ok := gc.Counts["2026-02-01"]; ok {
+		t.Error("the day before the cutoff should be pruned")
 	}
-}
-
-func TestUsernameNilInitGuard(t *testing.T) {
-	gc := &guildPostCounts{
-		Counts: make(map[string]map[string]int),
-		// Usernames intentionally nil — simulates loading old data without usernames
-	}
-
-	// This mirrors the nil check in onMessage
-	if gc.Usernames == nil {
-		gc.Usernames = make(map[string]string)
-	}
-	gc.Usernames["456"] = "bob"
-
-	if gc.Usernames["456"] != "bob" {
-		t.Errorf("username = %q, want %q", gc.Usernames["456"], "bob")
-	}
-}
-
-func TestUsernameLookupFallback(t *testing.T) {
-	usernames := map[string]string{
-		"100": "alice",
-		"200": "bob",
-	}
-
-	// User in the map
-	if name, ok := usernames["100"]; !ok || name != "alice" {
-		t.Errorf("expected alice, got %q", name)
-	}
-
-	// User not in the map — should fall back gracefully
-	name := usernames["999"]
-	if name != "" {
-		t.Errorf("expected empty string for missing user, got %q", name)
+	// 1 only posted on the pruned day, and 3 has no counts at all.
+	if len(gc.Usernames) != 1 || gc.Usernames["2"] != "bob" {
+		t.Errorf("usernames = %v, want only 2:bob", gc.Usernames)
 	}
 }
 
