@@ -1,7 +1,10 @@
 package stickybot
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/disgoorg/disgo/discord"
 )
 
 func TestValidateStickyParams(t *testing.T) {
@@ -32,4 +35,39 @@ func TestValidateStickyParams(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An attachment that can't be saved is left out of the sticky, and the
+// moderator is told which one. Loopback URLs are refused before any fetch.
+func TestCreateStickyReportsUnsavedAttachments(t *testing.T) {
+	unsaved := discord.Attachment{Filename: "my_photo.png", ProxyURL: "http://127.0.0.1/my_photo.png"}
+
+	t.Run("sticky without the attachment", func(t *testing.T) {
+		f := &fakeDiscord{}
+		b, _ := newFakeBot(t, f)
+		s := &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
+
+		reply := b.createSticky(s, discord.Message{Content: "hello", Attachments: []discord.Attachment{unsaved}})
+
+		if !strings.HasPrefix(reply, "Sticky created") || !strings.Contains(reply, "`my_photo.png`") {
+			t.Errorf("reply = %q, want a confirmation naming `my_photo.png`", reply)
+		}
+		if posts := f.postsMade(); len(posts) != 1 || posts[0].Content != "hello" || len(posts[0].Embeds) != 0 {
+			t.Errorf("posts = %+v, want one with just the text", posts)
+		}
+	})
+	t.Run("nothing left to sticky", func(t *testing.T) {
+		f := &fakeDiscord{}
+		b, _ := newFakeBot(t, f)
+		s := &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
+
+		reply := b.createSticky(s, discord.Message{Attachments: []discord.Attachment{unsaved}})
+
+		if strings.HasPrefix(reply, "Sticky created") {
+			t.Errorf("reply = %q, want a failure", reply)
+		}
+		if posts := f.postsMade(); len(posts) != 0 {
+			t.Errorf("posted %d empty stickies", len(posts))
+		}
+	})
 }

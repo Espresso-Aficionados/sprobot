@@ -283,14 +283,19 @@ func (b *Bot) createSticky(s *stickyMessage, msg discord.Message) string {
 	// Saved files follow the message's own embeds, as image embeds.
 	s.Content = msg.Content
 	s.Embeds = slices.Clone(msg.Embeds)
+	var failed []string
 	for _, att := range msg.Attachments {
 		key, err := b.S3.SaveStickyFile(ctx, s.GuildID.String(), att.ProxyURL)
 		if err != nil {
 			b.Log.Error("Failed to re-host attachment", "error", err, "url", att.ProxyURL)
+			failed = append(failed, att.Filename)
 			continue
 		}
 		s.FileURLs = append(s.FileURLs, key)
 		s.Embeds = append(s.Embeds, discord.Embed{Image: &discord.EmbedResource{URL: key}})
+	}
+	if s.Content == "" && len(s.Embeds) == 0 {
+		return "Couldn't save the message's attachments, so there is nothing to sticky."
 	}
 
 	if err := b.installSticky(s); err != nil {
@@ -298,7 +303,18 @@ func (b *Bot) createSticky(s *stickyMessage, msg discord.Message) string {
 		return "Failed to post the sticky message."
 	}
 	b.Log.Info("Sticky created", "user_id", s.CreatedBy, "guild_id", s.GuildID, "channel_id", s.ChannelID, "min_idle", s.MinIdleMins, "max_idle", s.MaxIdleMins, "msg_threshold", s.MsgThreshold, "time_threshold", s.TimeThresholdMins, "buffer", s.Buffer)
-	return fmt.Sprintf("Sticky created in <#%d>! Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", s.ChannelID, s.MinIdleMins, s.MaxIdleMins, s.MsgThreshold, s.TimeThresholdMins)
+	return createdReply(s, failed)
+}
+
+// createdReply confirms a new sticky to the moderator, naming the attachments
+// that couldn't be saved and so are left out of it.
+func createdReply(s *stickyMessage, failed []string) string {
+	reply := fmt.Sprintf("Sticky created in <#%d>! Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", s.ChannelID, s.MinIdleMins, s.MaxIdleMins, s.MsgThreshold, s.TimeThresholdMins)
+	if len(failed) > 0 {
+		// Code spans, so underscores in file names don't turn into italics.
+		reply += "\nCouldn't save these attachments, so the sticky leaves them out: `" + strings.Join(failed, "`, `") + "`"
+	}
+	return reply
 }
 
 // installSticky posts s and makes it its channel's sticky, retiring any
