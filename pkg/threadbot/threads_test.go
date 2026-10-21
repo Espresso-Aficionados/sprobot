@@ -87,33 +87,37 @@ func TestThreadsEmbedChannelAndServerLists(t *testing.T) {
 
 // A thread name is masked link text in the bot's public reminder, so a
 // crafted name must not be able to end the text early and attach a link of
-// its own. However the name is built, the only "](" on its line must be the
-// one that leads to the thread, and unescaped it must read as typed.
+// its own. Discord's link parser may end the text at any "]", escaped or not,
+// so the text must hold no square brackets, and no URL that could be linked
+// on its own. Unescaped, it reads as typed, with fullwidth brackets.
 func TestThreadNamesCannotInjectLinks(t *testing.T) {
 	names := []string{
 		"x](https://phish.example) [y",
+		"x\\](https://phish.example) \\[y",
 		"[Free nitro](https://phish.example)",
 		`a\](https://phish.example)`,
 		`\\](https://phish.example)\`,
+		"see https://phish.example or <https://phish.example>",
 		"**bold** _it_ <@&123> <t:0:R> ||spoiler|| `code` ~~gone~~ > quote",
 	}
 	unescape := regexp.MustCompile(`\\(.)`)
+	scheme := regexp.MustCompile(`[A-Za-z0-9]://`)
+	brackets := strings.NewReplacer("[", "［", "]", "］")
 	for i, name := range names {
 		threadID := 2000 + i
 		e := threadsEmbed(devGuild, 0, []threadInfo{{Name: name, ID: snowflake.ID(threadID), ParentID: 500, CreatedAt: time.Now()}}, 1, time.Now())
 		line := listLines(e.Description)[0]
 
-		if n := strings.Count(line, "]("); n != 1 {
-			t.Errorf("name %q: line has %d \"](\", want 1:\n%s", name, n, line)
-		}
-		target := fmt.Sprintf("](https://discord.com/channels/%d/%d)", devGuild, threadID)
-		text, _, ok := strings.Cut(strings.TrimPrefix(line, "- ["), target)
-		if !ok {
+		text, rest, _ := strings.Cut(strings.TrimPrefix(line, "- ["), "](")
+		if !strings.HasPrefix(rest, fmt.Sprintf("https://discord.com/channels/%d/%d)", devGuild, threadID)) {
 			t.Errorf("name %q: link doesn't lead to the thread:\n%s", name, line)
 			continue
 		}
-		if got := unescape.ReplaceAllString(text, "$1"); got != name {
-			t.Errorf("name %q renders as %q", name, got)
+		if strings.ContainsAny(text, "[]") || scheme.MatchString(text) {
+			t.Errorf("name %q: link text %q holds a bracket or a linkable URL", name, text)
+		}
+		if got, want := unescape.ReplaceAllString(text, "$1"), brackets.Replace(name); got != want {
+			t.Errorf("name %q renders as %q, want %q", name, got, want)
 		}
 	}
 }

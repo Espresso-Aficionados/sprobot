@@ -30,6 +30,11 @@ type Bot struct {
 
 	hiddenSaveMu sync.Mutex            // orders hidden-list loads and saves
 	hiddenLoaded map[snowflake.ID]bool // guilds whose hidden list has loaded from S3
+
+	// saveMu orders reminder and member-count saves: held from snapshot to
+	// PUT, so an older snapshot never lands in S3 after a newer one.
+	saveMu      sync.Mutex
+	readyGuilds map[snowflake.ID]bool // guilds whose GuildReady has arrived: the bot is in them
 }
 
 func New(token string) (*Bot, error) {
@@ -68,6 +73,7 @@ func New(token string) (*Bot, error) {
 		),
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.OnGuildJoin),
+		bot.WithEventListenerFunc(b.onGuildReady),
 		bot.WithEventListenerFunc(b.onCommand),
 		bot.WithEventListenerFunc(b.onMessage),
 		bot.WithEventListenerFunc(b.onSessionReady),

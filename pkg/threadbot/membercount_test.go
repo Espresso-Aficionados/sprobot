@@ -31,10 +31,12 @@ type fakeThreadAPI struct {
 
 	pages         map[string]int // thread ID -> List Thread Members calls
 	withoutMember int            // List Thread Members calls without with_member=true
+
+	channelErrs map[string]int // channel ID -> JSON error code Get Channel fails with; others exist
 }
 
 func newFakeThreadAPI() *fakeThreadAPI {
-	return &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}, pages: map[string]int{}}
+	return &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}, pages: map[string]int{}, channelErrs: map[string]int{}}
 }
 
 func (f *fakeThreadAPI) sentFollowups() []discord.MessageCreate {
@@ -84,6 +86,17 @@ func (f *fakeThreadAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"threads": f.threads, "members": []any{}})
+	case r.Method == http.MethodGet && len(parts) == 2 && parts[0] == "channels":
+		if code, ok := f.channelErrs[parts[1]]; ok {
+			status := http.StatusForbidden // 50001 Missing Access
+			if code == int(rest.JSONErrorCodeUnknownChannel) {
+				status = http.StatusNotFound
+			}
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "error", "code": code})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": parts[1], "type": 0, "guild_id": "1013566342345019512", "name": "coffee"})
 	case r.Method == http.MethodPost && parts[0] == "webhooks":
 		var m discord.MessageCreate
 		_ = json.NewDecoder(r.Body).Decode(&m)

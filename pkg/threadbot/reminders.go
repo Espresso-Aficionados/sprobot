@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -158,10 +159,17 @@ type threadReminder struct {
 	Buffer            int          `json:"buffer"`
 }
 
+// settingsError returns why r's settings are invalid, or "". Until
+// applyDefaults was removed, every load rewrote zero settings and saved them
+// back, which can leave stored settings that enable would reject.
+func (r *threadReminder) settingsError() string {
+	return validateReminderParams(r.MinIdleMins, r.MaxIdleMins, r.MsgThreshold, r.TimeThresholdMins, r.Buffer)
+}
+
 // loadReminders loads the stored reminders of every allowed guild that hasn't
-// loaded yet and starts their loops. Run calls it before the gateway opens and
-// again from the save loop, so a failed load is retried; so does the next
-// command that needs the guild's reminders.
+// loaded yet. Run calls it before the gateway opens and again from the save
+// loop, so a failed load is retried; so does the next command that needs the
+// guild's reminders.
 func (b *Bot) loadReminders() {
 	for _, guildID := range botutil.AllowedGuildIDs {
 		if err := b.ensureRemindersLoaded(guildID); err != nil {
@@ -171,9 +179,10 @@ func (b *Bot) loadReminders() {
 }
 
 // ensureRemindersLoaded loads a guild's stored reminders, unless they have
-// loaded already, and starts their loops. A guild gets its b.reminders entry
-// only from a load that succeeded or found nothing stored, and never loses
-// it, so stored reminders that failed to load are never saved over.
+// loaded already. A guild gets its b.reminders entry only from a load that
+// succeeded or found nothing stored, and never loses it, so stored reminders
+// that failed to load are never saved over. Their loops start once the bot is
+// in the guild: on its GuildReady, or here if that has already arrived.
 func (b *Bot) ensureRemindersLoaded(guildID snowflake.ID) error {
 	b.mu.Lock()
 	_, loaded := b.reminders[guildID]
@@ -195,6 +204,9 @@ func (b *Bot) ensureRemindersLoaded(guildID snowflake.ID) error {
 		}
 		for _, r := range stored {
 			channels[r.ChannelID] = r
+			if msg := r.settingsError(); msg != "" {
+				b.Log.Warn("Stored thread reminder has invalid settings; re-run /threadbot enable there", "guild_id", guildID, "channel_id", r.ChannelID, "reason", msg)
+			}
 		}
 	}
 
@@ -204,15 +216,73 @@ func (b *Bot) ensureRemindersLoaded(guildID snowflake.ID) error {
 		return nil // a concurrent load got there first
 	}
 	b.reminders[guildID] = channels
-	for _, r := range channels {
-		b.startReminderGoroutine(r)
-	}
+	ready := b.readyGuilds[guildID]
 	b.mu.Unlock()
 	b.Log.Info("Loaded thread reminders", "guild_id", guildID, "count", len(channels))
+	if ready {
+		b.startGuildReminders(guildID)
+	}
 	return nil
 }
 
+// onGuildReady starts the guild's reminder loops. Every allowed guild loads
+// before the gateway opens, but another deployment of the bot (prod or dev)
+// may be the one serving a guild this one isn't in, so loops start only for
+// guilds the gateway says the bot is in. GuildReady fires again for every new
+// gateway session.
+func (b *Bot) onGuildReady(e *events.GuildReady) {
+	if !botutil.GuildAllowed(e.GuildID) {
+		return
+	}
+	b.mu.Lock()
+	if b.readyGuilds == nil {
+		b.readyGuilds = make(map[snowflake.ID]bool)
+	}
+	b.readyGuilds[e.GuildID] = true
+	_, loaded := b.reminders[e.GuildID]
+	b.mu.Unlock()
+	// Otherwise the load failed, and the retry that loads them starts them.
+	if loaded {
+		b.startGuildReminders(e.GuildID)
+	}
+}
+
+// startGuildReminders drops the guild's reminders whose channel no longer
+// exists and starts the loops of the rest that aren't running. Discord never
+// replays a channel delete, so this catches channels deleted while nothing
+// was listening: the bot was down, its session was replaced rather than
+// resumed, or the guild's reminders hadn't loaded.
+func (b *Bot) startGuildReminders(guildID snowflake.ID) {
+	b.mu.Lock()
+	channelIDs := slices.Collect(maps.Keys(b.reminders[guildID]))
+	b.mu.Unlock()
+
+	var dropped bool
+	for _, channelID := range channelIDs {
+		// Only Unknown Channel means deleted; a channel the bot can't see is
+		// Missing Access.
+		var restErr *rest.Error
+		if _, err := b.Client.Rest.GetChannel(channelID); errors.As(err, &restErr) && restErr.Code == rest.JSONErrorCodeUnknownChannel && b.dropReminder(guildID, channelID) {
+			b.Log.Info("Dropped reminder of deleted channel", "guild_id", guildID, "channel_id", channelID)
+			dropped = true
+		}
+	}
+
+	b.mu.Lock()
+	for _, r := range b.reminders[guildID] {
+		if r.handle == nil {
+			b.startReminderGoroutine(r)
+		}
+	}
+	b.mu.Unlock()
+	if dropped {
+		b.saveRemindersForGuild(guildID)
+	}
+}
+
 func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) {
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
 	b.mu.Lock()
 	channels, ok := b.reminders[guildID]
 	if !ok {
@@ -288,20 +358,26 @@ func (b *Bot) stopReminderGoroutine(r *threadReminder) {
 
 // onChannelDelete drops a deleted channel's reminder. Otherwise its loop keeps
 // running, it stays enabled in S3 and restarts on every boot, and no command
-// can disable it since the channel is gone.
+// can disable it since the channel is gone. Deletes this misses are caught by
+// startGuildReminders.
 func (b *Bot) onChannelDelete(e *events.GuildChannelDelete) {
+	if b.dropReminder(e.GuildID, e.ChannelID) {
+		b.saveRemindersForGuild(e.GuildID)
+		b.Log.Info("Dropped reminder of deleted channel", "guild_id", e.GuildID, "channel_id", e.ChannelID)
+	}
+}
+
+// dropReminder removes a channel's reminder and stops its loop, waiting out a
+// repost in flight. It reports whether there was one; the caller saves.
+func (b *Bot) dropReminder(guildID, channelID snowflake.ID) bool {
 	b.mu.Lock()
-	r, ok := b.reminders[e.GuildID][e.ChannelID]
-	if ok {
-		delete(b.reminders[e.GuildID], e.ChannelID)
-	}
+	r, ok := b.reminders[guildID][channelID]
+	delete(b.reminders[guildID], channelID)
 	b.mu.Unlock()
-	if !ok {
-		return
+	if ok {
+		b.stopReminderGoroutine(r)
 	}
-	b.stopReminderGoroutine(r)
-	b.saveRemindersForGuild(e.GuildID)
-	b.Log.Info("Dropped reminder of deleted channel", "guild_id", e.GuildID, "channel_id", e.ChannelID)
+	return ok
 }
 
 func (b *Bot) stopAllReminderGoroutines() {
@@ -372,11 +448,15 @@ func listedThreads(all []discord.GuildThread, channelID snowflake.ID, hidden map
 // of the busiest: up to 10 under channelID, or with channelID 0, up to 25
 // across the server. The embed is nil if there are none to show.
 func (b *Bot) buildThreadsEmbed(guildID, channelID snowflake.ID) (*discord.Embed, error) {
+	hidden, err := b.hiddenSet(guildID)
+	if err != nil {
+		return nil, err
+	}
 	result, err := b.Client.Rest.GetActiveGuildThreads(guildID)
 	if err != nil {
 		return nil, fmt.Errorf("fetching active threads: %w", err)
 	}
-	threads := listedThreads(result.Threads, channelID, b.hiddenSet(guildID))
+	threads := listedThreads(result.Threads, channelID, hidden)
 	if len(threads) == 0 {
 		return nil, nil
 	}
@@ -411,15 +491,17 @@ func (b *Bot) buildThreadsEmbed(guildID, channelID snowflake.ID) (*discord.Embed
 	return &embed, nil
 }
 
-// linkTextEscaper backslash-escapes Discord markdown in a thread name used as
-// masked link text. Anyone can name a thread, and a name like
-// "x](https://phish.example) [y" would otherwise put a link of its choosing
-// in the bot's message. With every "(" escaped, the only "](" in a line is
-// the one ending the name, so the link always goes to the thread. The rest
-// keeps names from rendering as formatting, mentions or timestamps. Discord
-// drops a backslash before punctuation, so the name reads as typed.
+// linkTextEscaper makes a thread name safe as masked link text. Anyone can
+// name a thread, and a name like "x](https://phish.example) [y" would
+// otherwise put a link of its choosing in the bot's message. Discord's link
+// parser can end the text at a "]" whatever escapes come before it, so square
+// brackets become fullwidth ones: with none in the text, the first "](" on the
+// line is the one leading to the thread. ":" is escaped so no URL in a name is
+// linked on its own, and the rest keeps names from rendering as formatting,
+// mentions or timestamps. Discord drops a backslash before punctuation, so
+// the name otherwise reads as typed.
 var linkTextEscaper = strings.NewReplacer(
-	`\`, `\\`, `[`, `\[`, `]`, `\]`, `(`, `\(`, `)`, `\)`,
+	`[`, `［`, `]`, `］`, `\`, `\\`, `(`, `\(`, `)`, `\)`, `:`, `\:`,
 	`*`, `\*`, `_`, `\_`, "`", "\\`", `~`, `\~`, `|`, `\|`, `<`, `\<`, `>`, `\>`,
 )
 
@@ -593,6 +675,8 @@ func (b *Bot) saveMemberCounts() {
 // saveMemberCountsForGuild persists a guild's member counts. A guild whose
 // counts haven't loaded has nothing to save.
 func (b *Bot) saveMemberCountsForGuild(guildID snowflake.ID) {
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
 	b.mu.Lock()
 	cache, ok := b.memberCounts[guildID]
 	if !ok {

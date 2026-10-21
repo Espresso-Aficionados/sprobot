@@ -3,6 +3,7 @@ package threadbot
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -45,15 +46,18 @@ func TestRemindersNeverSavedOverFailedLoad(t *testing.T) {
 	fs.Objects[devRemindersKey] = stored
 
 	fs.failGet.Store(true)
-	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
+	api := newFakeThreadAPI()
+	b := newThreadListBot(t, api)
+	b.S3 = testutil.NewTestS3Client(t, srv)
 	defer b.stopAllReminderGoroutines()
 	b.loadReminders()
 	b.saveAllReminders()
 
 	e, responses := commandEvent(t, devGuild, enableData)
 	b.onCommand(e)
-	if m := <-responses; !strings.Contains(m.Content, "Couldn't load") {
-		t.Errorf("enable while unloaded answered %q, want a load failure notice", m.Content)
+	<-responses // deferred
+	if sent := api.sentFollowups(); len(sent) != 1 || !strings.Contains(sent[0].Content, "Couldn't load") {
+		t.Errorf("enable while unloaded answered %+v, want a load failure notice", sent)
 	}
 	if got := fs.object(devRemindersKey); !bytes.Equal(got, stored) {
 		t.Fatalf("stored reminders overwritten while unloaded: %s", got)
@@ -97,9 +101,10 @@ func TestMemberCountsNeverSavedOverFailedLoad(t *testing.T) {
 	})
 	fs.Objects[devCountsKey] = stored
 
-	fs.failGet.Store(true)
 	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
 	b.Client = &bot.Client{Rest: rest.New(rest.NewClient("test", rest.WithURL(apiSrv.URL)))}
+	b.loadHiddenThreads() // only the counts fail to load
+	fs.failGet.Store(true)
 	b.loadMemberCounts()
 
 	// Unloaded: member_count is shown, nothing is fetched or saved.
@@ -221,4 +226,185 @@ func TestLoadRacesWithEvents(t *testing.T) {
 	b.loadReminders()
 	b.loadMemberCounts()
 	<-done
+}
+
+func guildReady(guildID snowflake.ID) *events.GuildReady {
+	return &events.GuildReady{GenericGuild: &events.GenericGuild{GuildID: guildID}}
+}
+
+// running reports which of the guild's reminders have a loop.
+func running(b *Bot, guildID snowflake.ID) map[snowflake.ID]bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := map[snowflake.ID]bool{}
+	for id, r := range b.reminders[guildID] {
+		out[id] = r.handle != nil
+	}
+	return out
+}
+
+// seedReminders stores enabled reminders for channels 500, 600 and 700 of
+// the dev guild and one for the prod guild.
+func seedReminders(fake *testutil.FakeS3) {
+	r := func(guildID, channelID snowflake.ID) *threadReminder {
+		return &threadReminder{ChannelID: channelID, GuildID: guildID, Enabled: true, MinIdleMins: 30, MaxIdleMins: 720, MsgThreshold: 500, TimeThresholdMins: 720, Buffer: 5}
+	}
+	dev, _ := json.Marshal(map[string]*threadReminder{"500": r(devGuild, 500), "600": r(devGuild, 600), "700": r(devGuild, 700)})
+	prod, _ := json.Marshal(map[string]*threadReminder{"800": r(prodGuild, 800)})
+	fake.Mu.Lock()
+	defer fake.Mu.Unlock()
+	fake.Objects[devRemindersKey] = dev
+	fake.Objects["/test-bucket/threadreminders/726985544038612993.json"] = prod
+}
+
+// Reminders load for every allowed guild before the gateway opens, but loops
+// start only once the gateway says the bot is in the guild. Discord never
+// replays a channel delete, so then a reminder whose channel was deleted
+// meanwhile is dropped; one whose channel the bot can't see is kept.
+func TestGuildReadyStartsLoopsAndDropsDeletedChannels(t *testing.T) {
+	api := newFakeThreadAPI()
+	api.channelErrs["600"] = int(rest.JSONErrorCodeUnknownChannel)
+	api.channelErrs["700"] = 50001 // Missing Access
+	b := newThreadListBot(t, api)
+	fake := testutil.NewFakeS3()
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	b.S3 = testutil.NewTestS3Client(t, srv)
+	seedReminders(fake)
+	defer b.stopAllReminderGoroutines()
+
+	b.loadReminders()
+	if got := running(b, devGuild); len(got) != 3 || got[500] || got[600] || got[700] {
+		t.Fatalf("after load: running = %v, want three loaded and none running", got)
+	}
+
+	b.onGuildReady(guildReady(devGuild))
+	if got := running(b, devGuild); len(got) != 2 || !got[500] || !got[700] {
+		t.Errorf("after GuildReady: running = %v, want 500 and 700 running and 600 dropped", got)
+	}
+	// No GuildReady for prod: this bot isn't in it.
+	if got := running(b, prodGuild); len(got) != 1 || got[800] {
+		t.Errorf("prod: running = %v, want loaded and not running", got)
+	}
+
+	restarted := newTestBot(t, b.S3)
+	restarted.loadReminders()
+	if got := running(restarted, devGuild); len(got) != 2 {
+		t.Errorf("stored reminders after restart = %v, want 500 and 700", got)
+	}
+}
+
+// A guild whose reminders load only after its GuildReady, because the
+// startup load failed, starts them, and drops deleted channels, on that load.
+func TestLateLoadStartsReadyGuild(t *testing.T) {
+	api := newFakeThreadAPI()
+	api.channelErrs["600"] = int(rest.JSONErrorCodeUnknownChannel)
+	b := newThreadListBot(t, api)
+	fs := &flakyS3{FakeS3: testutil.NewFakeS3()}
+	srv := httptest.NewServer(fs)
+	defer srv.Close()
+	b.S3 = testutil.NewTestS3Client(t, srv)
+	seedReminders(fs.FakeS3)
+	defer b.stopAllReminderGoroutines()
+
+	fs.failGet.Store(true)
+	b.loadReminders()
+	b.onGuildReady(guildReady(devGuild))
+	fs.failGet.Store(false)
+	b.loadReminders()
+
+	if got := running(b, devGuild); len(got) != 2 || !got[500] || !got[700] {
+		t.Errorf("running = %v, want 500 and 700 running and 600 dropped", got)
+	}
+}
+
+// While a guild's reminders are unloaded, a command defers before retrying
+// the load, so a slow S3 can't make it miss Discord's 3-second deadline. A
+// load that then succeeds carries out the command.
+func TestReminderCommandDefersBeforeLoading(t *testing.T) {
+	s3 := newSlowS3(http.MethodGet)
+	srv := httptest.NewServer(s3)
+	defer srv.Close()
+	defer close(s3.release)
+	api := newFakeThreadAPI()
+	b := newThreadListBot(t, api)
+	b.S3 = testutil.NewTestS3Client(t, srv)
+	defer b.stopAllReminderGoroutines()
+
+	e, responses := commandEvent(t, devGuild, enableData)
+	done := make(chan struct{})
+	go func() {
+		b.onCommand(e)
+		close(done)
+	}()
+	select {
+	case <-s3.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("enable never loaded the reminders")
+	}
+	select {
+	case m := <-responses:
+		if m.Flags != discord.MessageFlagEphemeral || m.Content != "" {
+			t.Errorf("first response = %+v, want an ephemeral deferral", m)
+		}
+	default:
+		t.Fatal("enable did not answer the interaction before loading")
+	}
+
+	s3.release <- struct{}{}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("enable did not finish after the load")
+	}
+	if sent := api.sentFollowups(); len(sent) != 1 || !strings.Contains(sent[0].Content, "enabled") {
+		t.Errorf("follow-ups = %+v, want the outcome", sent)
+	}
+	if s3.object(devRemindersKey) == nil {
+		t.Error("enabled reminder not saved")
+	}
+}
+
+// Saves are ordered: a save that snapshots the reminders after a change
+// can't be overwritten by one that snapshotted them before it.
+func TestReminderSavesLandInOrder(t *testing.T) {
+	s3 := newSlowS3(http.MethodPut)
+	srv := httptest.NewServer(s3)
+	defer srv.Close()
+	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
+	b.reminders[devGuild] = map[snowflake.ID]*threadReminder{
+		500: {ChannelID: 500, GuildID: devGuild},
+		600: {ChannelID: 600, GuildID: devGuild},
+	}
+
+	first := make(chan struct{})
+	go func() {
+		b.saveRemindersForGuild(devGuild)
+		close(first)
+	}()
+	<-s3.started // the snapshot with 500 and 600 is in flight
+	b.mu.Lock()
+	delete(b.reminders[devGuild], 500)
+	b.mu.Unlock()
+	second := make(chan struct{})
+	go func() {
+		b.saveRemindersForGuild(devGuild)
+		close(second)
+	}()
+	select {
+	case <-s3.started:
+		t.Error("second save sent while the first was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(s3.release)
+	<-first
+	<-second
+
+	var saved map[string]*threadReminder
+	if err := json.Unmarshal(s3.object(devRemindersKey), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 1 || saved["600"] == nil {
+		t.Errorf("stored reminders = %v, want only 600", saved)
+	}
 }

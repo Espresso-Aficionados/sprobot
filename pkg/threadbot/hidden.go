@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -83,21 +84,19 @@ func (b *Bot) ensureHiddenLoaded(guildID snowflake.ID) error {
 }
 
 // hiddenSet returns a copy of the guild's hidden thread IDs, safe to use
-// without holding b.mu.
-func (b *Bot) hiddenSet(guildID snowflake.ID) map[snowflake.ID]struct{} {
+// without holding b.mu. It fails if the stored list can't be loaded: listing
+// threads as if none were hidden would promote the ones mods hid.
+func (b *Bot) hiddenSet(guildID snowflake.ID) (map[snowflake.ID]struct{}, error) {
 	b.hiddenSaveMu.Lock()
-	if err := b.ensureHiddenLoaded(guildID); err != nil {
-		b.Log.Error("Failed to load hidden threads", "guild_id", guildID, "error", err)
-	}
+	err := b.ensureHiddenLoaded(guildID)
 	b.hiddenSaveMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := make(map[snowflake.ID]struct{}, len(b.hidden[guildID]))
-	for id := range b.hidden[guildID] {
-		out[id] = struct{}{}
-	}
-	return out
+	return maps.Clone(b.hidden[guildID]), nil
 }
 
 // setHidden hides or unhides a thread and persists the change. It reports
@@ -215,9 +214,23 @@ func (b *Bot) handleHide(e *events.ApplicationCommandInteractionCreate, hide boo
 }
 
 func (b *Bot) handleHiddenList(e *events.ApplicationCommandInteractionCreate) {
-	set := b.hiddenSet(*e.GuildID())
+	guildID := *e.GuildID()
+	// Defer: loading the list from S3 can outlast the interaction's 3-second
+	// deadline.
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer hidden list response", "error", err)
+		return
+	}
+	reply := func(content string) { botutil.FollowupEphemeral(b.Client, e.Token(), content) }
+
+	set, err := b.hiddenSet(guildID)
+	if err != nil {
+		b.Log.Error("Hidden thread list not loaded", "guild_id", guildID, "error", err)
+		reply("Couldn't load the hidden thread list. Please try again in a minute.")
+		return
+	}
 	if len(set) == 0 {
-		botutil.RespondEphemeral(e, "No hidden threads in this server.")
+		reply("No hidden threads in this server.")
 		return
 	}
 	ids := make([]snowflake.ID, 0, len(set))
@@ -235,5 +248,5 @@ func (b *Bot) handleHiddenList(e *events.ApplicationCommandInteractionCreate) {
 		}
 		sb.WriteString(line)
 	}
-	botutil.RespondEphemeral(e, sb.String())
+	reply(sb.String())
 }
