@@ -124,6 +124,21 @@ func TestDeleteProfileImageFailureKeepsProfile(t *testing.T) {
 	}
 }
 
+// A profile that can't be read is still deleted, with its uploads.
+func TestDeleteProfileUnreadableProfile(t *testing.T) {
+	fake, c := newDeleteTest(t, "")
+	fake.Mu.Lock()
+	fake.Objects[profileJSON] = []byte("not json")
+	fake.Mu.Unlock()
+
+	if err := c.DeleteProfile(context.Background(), sprobot.ProfileTemplate, "1", "2"); err != nil {
+		t.Fatalf("DeleteProfile: %v", err)
+	}
+	if left := remaining(fake); left[profileJSON] || left[imagePNG] {
+		t.Error("the profile and its upload should be deleted")
+	}
+}
+
 // With no profile left, deleting still clears any image an earlier version left.
 func TestDeleteProfileWithoutProfileClearsImages(t *testing.T) {
 	fake, c := newDeleteTest(t, "")

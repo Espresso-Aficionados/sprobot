@@ -606,8 +606,8 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 		return "", "", err
 	}
 
-	// Only now that nothing points at it. A failure leaves an orphan for
-	// cmd/s3-orphans, not a broken profile.
+	// Deleted only once the saved profile no longer points at it, so a failure
+	// leaves an orphan for cmd/s3-orphans rather than a broken profile.
 	if replaced != "" {
 		if err := c.DeleteKeys(ctx, replaced); err != nil {
 			c.log.Error("Failed to delete replaced profile image", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "error", err)
@@ -697,9 +697,11 @@ func (c *Client) DeleteProfile(ctx context.Context, tmpl sprobot.Template, guild
 	key := cacheKey(tmpl.Name, guildID, userID)
 	c.cache.Remove(key)
 
+	// The profile only adds an image key that uploads no longer use, so one
+	// that can't be read must not block its own deletion.
 	profile, err := c.FetchProfileSimple(ctx, guildID, tmpl.Name, userID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
-		return err
+		c.log.Error("Failed to read profile before deleting it", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "error", err)
 	}
 	// The image goes first, so if that fails the profile is still there to
 	// delete again.
