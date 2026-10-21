@@ -2,10 +2,17 @@ package bot
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/sprobot"
+	"github.com/sadbox/sprobot/pkg/testutil"
 )
 
 func TestShortcutStateJSONRoundTrip(t *testing.T) {
@@ -44,208 +51,147 @@ func TestShortcutStateJSONRoundTrip(t *testing.T) {
 	}
 }
 
-func TestShortcutRoundRobinAdvances(t *testing.T) {
-	st := &shortcutState{
-		Shortcuts: map[string]shortcutEntry{
-			"faq": {Responses: []string{"A", "B", "C"}},
-		},
-		indices: map[string]int{"faq": 0},
-	}
+func newShortcutState(shortcuts map[string]shortcutEntry) *shortcutState {
+	return &shortcutState{Shortcuts: shortcuts, indices: map[string]int{}}
+}
+
+func TestShortcutNextRotates(t *testing.T) {
+	st := newShortcutState(map[string]shortcutEntry{"faq": {Responses: []string{"A", "B", "C"}}})
+	st.indices["faq"] = 0
 
 	var got []string
 	for range 6 {
-		n := len(st.Shortcuts["faq"].Responses)
-		idx := st.indices["faq"] % n
-		got = append(got, st.Shortcuts["faq"].Responses[idx])
-		st.indices["faq"] = (st.indices["faq"] + 1) % n
+		r, ok := st.next("faq")
+		if !ok {
+			t.Fatal("next(faq) found nothing")
+		}
+		got = append(got, r)
 	}
+	if want := []string{"A", "B", "C", "A", "B", "C"}; !slices.Equal(got, want) {
+		t.Errorf("responses = %v, want %v", got, want)
+	}
+}
 
-	want := []string{"A", "B", "C", "A", "B", "C"}
-	for i, g := range got {
-		if g != want[i] {
-			t.Errorf("call %d: got %q, want %q", i, g, want[i])
+func TestShortcutNextStartsAnywhereThenCycles(t *testing.T) {
+	st := newShortcutState(map[string]shortcutEntry{"faq": {Responses: []string{"A", "B", "C"}}})
+
+	var got []string
+	for range 4 {
+		r, _ := st.next("faq")
+		got = append(got, r)
+	}
+	first3 := slices.Clone(got[:3])
+	slices.Sort(first3)
+	if !slices.Equal(first3, []string{"A", "B", "C"}) || got[3] != got[0] {
+		t.Errorf("responses = %v, want each response once per cycle", got)
+	}
+}
+
+func TestShortcutNextMissing(t *testing.T) {
+	st := newShortcutState(map[string]shortcutEntry{"empty": {}})
+	for _, name := range []string{"nope", "empty"} {
+		if _, ok := st.next(name); ok {
+			t.Errorf("next(%q) found a response", name)
 		}
 	}
 }
 
-func TestShortcutRoundRobinRandomStart(t *testing.T) {
-	// When indices has no entry for a shortcut, the first call should not
-	// always start at 0. We can't test randomness deterministically, but we
-	// can verify the "not started" detection works.
-	st := &shortcutState{
-		Shortcuts: map[string]shortcutEntry{
-			"faq": {Responses: []string{"A", "B", "C"}},
-		},
-		indices: map[string]int{},
-	}
+func TestShortcutSetRestartsRotation(t *testing.T) {
+	st := newShortcutState(map[string]shortcutEntry{"faq": {Responses: []string{"A", "B"}}})
+	st.indices["faq"] = 1
 
-	_, started := st.indices["faq"]
-	if started {
-		t.Error("expected faq index to not be started")
+	replaced, ok := st.set("faq", []string{"X", "Y", "Z"})
+	if !ok || !slices.Equal(replaced, []string{"A", "B"}) {
+		t.Errorf("set = %v, %v; want the old responses", replaced, ok)
 	}
-
-	// After setting an index, it should be detected as started
-	st.indices["faq"] = 0
-	_, started = st.indices["faq"]
-	if !started {
-		t.Error("expected faq index to be started after setting to 0")
+	if r, _ := st.next("faq"); r != "X" {
+		t.Errorf("first response after set = %q, want X", r)
 	}
 }
 
-func TestShortcutRoundRobinSingleResponse(t *testing.T) {
-	st := &shortcutState{
-		Shortcuts: map[string]shortcutEntry{
-			"faq": {Responses: []string{"only one"}},
-		},
-		indices: map[string]int{"faq": 0},
-	}
-
-	for range 3 {
-		n := len(st.Shortcuts["faq"].Responses)
-		idx := st.indices["faq"] % n
-		got := st.Shortcuts["faq"].Responses[idx]
-		st.indices["faq"] = (st.indices["faq"] + 1) % n
-		if got != "only one" {
-			t.Errorf("expected 'only one', got %q", got)
-		}
-	}
-}
-
-func TestShortcutIndexResetOnReSet(t *testing.T) {
-	st := &shortcutState{
-		Shortcuts: map[string]shortcutEntry{
-			"faq": {Responses: []string{"A", "B"}},
-		},
-		indices: map[string]int{"faq": 5},
-	}
-
-	// Simulate re-setting the shortcut
-	st.Shortcuts["faq"] = shortcutEntry{Responses: []string{"X", "Y", "Z"}}
-	st.indices["faq"] = 0
-
-	idx := st.indices["faq"] % len(st.Shortcuts["faq"].Responses)
-	if idx != 0 {
-		t.Errorf("expected index 0 after reset, got %d", idx)
-	}
-	if st.Shortcuts["faq"].Responses[idx] != "X" {
-		t.Errorf("expected 'X', got %q", st.Shortcuts["faq"].Responses[idx])
-	}
-}
-
-func TestShortcutAutocompleteFilters(t *testing.T) {
-	st := &shortcutState{
-		Shortcuts: map[string]shortcutEntry{
-			"faq":      {Responses: []string{"A"}},
-			"FAQ-long": {Responses: []string{"B"}},
-			"rules":    {Responses: []string{"C"}},
-		},
-		indices: map[string]int{},
-	}
-
-	got := shortcutAutocomplete(st, "faq")
-	if len(got) != 2 {
-		t.Fatalf("expected 2 matches for 'faq', got %d: %v", len(got), got)
-	}
-	for _, name := range got {
-		if !strings.Contains(strings.ToLower(name), "faq") {
-			t.Errorf("unexpected match %q for 'faq'", name)
-		}
-	}
-}
-
-func TestShortcutAutocompleteCaseInsensitive(t *testing.T) {
-	st := &shortcutState{
-		Shortcuts: map[string]shortcutEntry{
-			"FAQ": {Responses: []string{"A"}},
-		},
-		indices: map[string]int{},
-	}
-
-	got := shortcutAutocomplete(st, "faq")
-	if len(got) != 1 || got[0] != "FAQ" {
-		t.Errorf("expected [FAQ], got %v", got)
-	}
-}
-
-func TestShortcutAutocompleteEmptyInput(t *testing.T) {
-	st := &shortcutState{
-		Shortcuts: map[string]shortcutEntry{
-			"faq":   {Responses: []string{"A"}},
-			"rules": {Responses: []string{"B"}},
-		},
-		indices: map[string]int{},
-	}
-
-	got := shortcutAutocomplete(st, "")
-	if len(got) != 2 {
-		t.Errorf("expected 2 matches for empty input, got %d", len(got))
-	}
-}
-
-func TestShortcutAutocompleteNoMatch(t *testing.T) {
-	st := &shortcutState{
-		Shortcuts: map[string]shortcutEntry{
-			"faq": {Responses: []string{"A"}},
-		},
-		indices: map[string]int{},
-	}
-
-	got := shortcutAutocomplete(st, "zzzzz")
-	if len(got) != 0 {
-		t.Errorf("expected 0 matches, got %d", len(got))
-	}
-}
-
-func TestShortcutAutocompleteLimitsTo25(t *testing.T) {
+func TestShortcutSetLimit(t *testing.T) {
 	shortcuts := make(map[string]shortcutEntry)
+	for i := range maxShortcutsPerGuild {
+		shortcuts[fmt.Sprint(i)] = shortcutEntry{Responses: []string{"x"}}
+	}
+	st := newShortcutState(shortcuts)
+
+	if _, ok := st.set("new", []string{"x"}); ok {
+		t.Error("added a shortcut past the limit")
+	}
+	if _, ok := st.set("0", []string{"y"}); !ok {
+		t.Error("refused to replace an existing shortcut at the limit")
+	}
+}
+
+func TestShortcutRemove(t *testing.T) {
+	st := newShortcutState(map[string]shortcutEntry{"faq": {Responses: []string{"A"}}})
+	if removed, ok := st.remove("faq"); !ok || !slices.Equal(removed, []string{"A"}) {
+		t.Errorf("remove = %v, %v", removed, ok)
+	}
+	if _, ok := st.remove("faq"); ok {
+		t.Error("removed a shortcut twice")
+	}
+}
+
+func TestShortcutChoices(t *testing.T) {
+	shortcuts := map[string]shortcutEntry{
+		"faq":      {Responses: []string{"A"}},
+		"FAQ-long": {Responses: []string{"B"}},
+		"rules":    {Responses: []string{"C"}},
+	}
+	if got := shortcutChoices(shortcuts, "faq"); !slices.Equal(got, []string{"FAQ-long", "faq"}) {
+		t.Errorf("choices for faq = %v, want both, sorted", got)
+	}
+	if got := shortcutChoices(shortcuts, "zzz"); len(got) != 0 {
+		t.Errorf("choices for zzz = %v, want none", got)
+	}
+}
+
+func TestShortcutChoicesSortedBeforeCap(t *testing.T) {
+	shortcuts := make(map[string]shortcutEntry)
+	var all []string
 	for i := range 30 {
-		shortcuts[strings.Repeat("a", i+1)] = shortcutEntry{Responses: []string{"x"}}
-	}
-	st := &shortcutState{
-		Shortcuts: shortcuts,
-		indices:   map[string]int{},
+		name := fmt.Sprintf("s%02d", i)
+		shortcuts[name] = shortcutEntry{Responses: []string{"x"}}
+		all = append(all, name)
 	}
 
-	got := shortcutAutocomplete(st, "a")
-	if len(got) > 25 {
-		t.Errorf("autocomplete returned %d choices, max should be 25", len(got))
+	// Map order varies between runs; the choices must not.
+	for range 5 {
+		if got := shortcutChoices(shortcuts, ""); !slices.Equal(got, all[:autocompleteMax]) {
+			t.Fatalf("choices = %v, want the first %d names in order", got, autocompleteMax)
+		}
 	}
 }
 
-func TestShortcutResponseFilterWhitespace(t *testing.T) {
-	inputs := []string{
-		"hello world",
-		"",
-		"   ",
-		"\t\n",
-		"goodbye",
-	}
-
-	got := filterShortcutResponses(inputs)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 non-blank responses, got %d: %v", len(got), got)
-	}
-	if got[0] != "hello world" || got[1] != "goodbye" {
-		t.Errorf("unexpected filtered responses: %v", got)
+func TestNonBlankResponses(t *testing.T) {
+	got := nonBlankResponses([]string{"hello world", "", "   ", "\t\n", "line 1\nline 2"})
+	if want := []string{"hello world", "line 1\nline 2"}; !slices.Equal(got, want) {
+		t.Errorf("responses = %q, want %q", got, want)
 	}
 }
 
-func TestShortcutResponseFilterAllBlank(t *testing.T) {
-	inputs := []string{"", "   ", "\n"}
-	got := filterShortcutResponses(inputs)
-	if len(got) != 0 {
-		t.Errorf("expected 0 responses, got %d: %v", len(got), got)
+func TestShortcutModalTitle(t *testing.T) {
+	utf16Units := func(s string) int { return len(utf16.Encode([]rune(s))) }
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"faq", "Set shortcut: faq"},
+		{strings.Repeat("a", 31), "Set shortcut: " + strings.Repeat("a", 31)},
+		{strings.Repeat("a", 80), "Set shortcut: " + strings.Repeat("a", 30) + "…"},
+		// Emoji take two UTF-16 units each.
+		{strings.Repeat("☕️🫘", 10), ""},
 	}
-}
-
-func TestShortcutResponseFilterPreservesMultiline(t *testing.T) {
-	inputs := []string{"line 1\nline 2\nline 3"}
-	got := filterShortcutResponses(inputs)
-	if len(got) != 1 {
-		t.Fatalf("expected 1 response, got %d", len(got))
-	}
-	if got[0] != "line 1\nline 2\nline 3" {
-		t.Errorf("multiline response should be preserved, got %q", got[0])
+	for _, tt := range tests {
+		got := shortcutModalTitle(tt.name)
+		if n := utf16Units(got); n > modalTitleMax {
+			t.Errorf("title %q is %d units, over %d", got, n, modalTitleMax)
+		}
+		if tt.want != "" && got != tt.want {
+			t.Errorf("shortcutModalTitle(%q) = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }
 
@@ -268,32 +214,6 @@ func TestExpandShortcutVars(t *testing.T) {
 			}
 		})
 	}
-}
-
-// shortcutAutocomplete extracts the autocomplete logic for testing.
-func shortcutAutocomplete(st *shortcutState, current string) []string {
-	current = strings.ToLower(current)
-	var choices []string
-	for name := range st.Shortcuts {
-		if len(choices) >= 25 {
-			break
-		}
-		if strings.Contains(strings.ToLower(name), current) {
-			choices = append(choices, name)
-		}
-	}
-	return choices
-}
-
-// filterShortcutResponses extracts the response filtering logic for testing.
-func filterShortcutResponses(inputs []string) []string {
-	var responses []string
-	for _, text := range inputs {
-		if strings.TrimSpace(text) != "" {
-			responses = append(responses, text)
-		}
-	}
-	return responses
 }
 
 func TestIsImageURL(t *testing.T) {
@@ -324,5 +244,115 @@ func TestIsImageURL(t *testing.T) {
 				t.Errorf("isImageURL(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// Saved shortcut files: 30 random characters plus an extension.
+const (
+	shortcutKeyA = "shortcut_files/10/" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"
+	shortcutKeyB = "shortcut_files/10/" + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"
+)
+
+func TestStoredFileKey(t *testing.T) {
+	b, _, _ := newStubBotWithS3(t)
+	web := sprobot.WebEndpoint + "files/shortcut/10/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"
+	bucket := strings.TrimSuffix(b.S3.Origin(), "/") + "/test-bucket/" + shortcutKeyA
+
+	tests := []struct {
+		ref    string
+		want   string
+		wantOK bool
+	}{
+		{shortcutKeyA, shortcutKeyA, true},
+		{web, shortcutKeyA, true},
+		{web + "/view", shortcutKeyA, true},
+		{web + "?v=1", shortcutKeyA, true},
+		{bucket, shortcutKeyA, true},
+		{"https://elsewhere.example/files/shortcut/10/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", "", false},
+		{"https://example.com/cat.png", "", false},
+		{"Be nice", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := b.storedFileKey(tt.ref)
+		if got != tt.want || ok != tt.wantOK {
+			t.Errorf("storedFileKey(%q) = %q, %v; want %q, %v", tt.ref, got, ok, tt.want, tt.wantOK)
+		}
+	}
+}
+
+func TestUnusedShortcutFiles(t *testing.T) {
+	b, _, _ := newStubBotWithS3(t)
+	modFile := "mod_files/10/cccccccccccccccccccccccccccccc.png"
+	otherGuild := "shortcut_files/11/dddddddddddddddddddddddddddddd.png"
+	old := []string{shortcutKeyA, shortcutKeyB, modFile, otherGuild, "plain text", shortcutKeyA}
+	// Another shortcut still links to B through its web link.
+	remaining := []string{"hello", sprobot.WebEndpoint + "files/shortcut/10/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"}
+
+	got := unusedShortcutFiles(old, remaining, "10", b.storedFileKey)
+	if want := []string{shortcutKeyA}; !slices.Equal(got, want) {
+		t.Errorf("unused = %v, want %v", got, want)
+	}
+}
+
+// newShortcutBot returns a bot whose guild 10 has shortcuts a (file A),
+// b (file B) and c (a link to file B).
+func newShortcutBot(t *testing.T) (*Bot, *discordStub, *testutil.FakeS3) {
+	t.Helper()
+	b, stub, fake := newStubBotWithS3(t)
+	b.shortcuts = newGuildStateStore(b.S3, b.Log, "shortcuts",
+		func() *shortcutState { return newShortcutState(map[string]shortcutEntry{}) },
+		func(st *shortcutState) *sync.Mutex { return &st.mu })
+	b.shortcuts.set(10, newShortcutState(map[string]shortcutEntry{
+		"a": {Responses: []string{shortcutKeyA}},
+		"b": {Responses: []string{shortcutKeyB}},
+		"c": {Responses: []string{sprobot.WebEndpoint + "files/shortcut/10/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"}},
+	}))
+	for _, key := range []string{shortcutKeyA, shortcutKeyB} {
+		fake.Objects["/test-bucket/"+key] = []byte("img")
+	}
+	return b, stub, fake
+}
+
+func removeShortcutData(name string) string {
+	return `{"id":"100","name":"config","type":1,"options":[{"name":"shortcuts","type":2,"options":[` +
+		`{"name":"remove","type":1,"options":[{"name":"shortcut","type":3,"value":` + jsonString(name) + `}]}]}]}`
+}
+
+func objectExists(fake *testutil.FakeS3, key string) bool {
+	fake.Mu.Lock()
+	defer fake.Mu.Unlock()
+	_, ok := fake.Objects["/test-bucket/"+key]
+	return ok
+}
+
+func TestShortcutRemoveDeletesUnusedFiles(t *testing.T) {
+	b, _, fake := newShortcutBot(t)
+
+	e, _ := commandEvent(t, b.Client, removeShortcutData("a"))
+	b.handleShortcutConfigRemove(e)
+	if objectExists(fake, shortcutKeyA) {
+		t.Error("file A outlived the only shortcut using it")
+	}
+
+	e, _ = commandEvent(t, b.Client, removeShortcutData("b"))
+	b.handleShortcutConfigRemove(e)
+	if !objectExists(fake, shortcutKeyB) {
+		t.Error("deleted file B although shortcut c still links to it")
+	}
+}
+
+func TestShortcutReplaceDeletesUnusedFiles(t *testing.T) {
+	b, _, fake := newShortcutBot(t)
+
+	e, _ := modalEvent(t, b.Client, "sconfig_set_a",
+		`[{"type":1,"components":[{"type":4,"custom_id":"response_0","value":"text now"}]}]`)
+	b.handleShortcutConfigSetModal(e)
+
+	if objectExists(fake, shortcutKeyA) {
+		t.Error("the replaced response's file was kept")
+	}
+	st := b.shortcuts.get(10)
+	if got := st.Shortcuts["a"].Responses; !slices.Equal(got, []string{"text now"}) {
+		t.Errorf("responses = %v, want the new text", got)
 	}
 }

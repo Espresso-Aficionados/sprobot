@@ -207,11 +207,15 @@ func componentEvent(t *testing.T, client *bot.Client, customID, roles, message s
 	}, replies
 }
 
-// modalEvent builds a modal submit with customID in guild 10 by member 30.
-func modalEvent(t *testing.T, client *bot.Client, customID string) (*events.ModalSubmitInteractionCreate, *interactionReplies) {
+// modalEvent builds a modal submit with customID and the given components (a
+// JSON array, or "" for none) in guild 10 by member 30.
+func modalEvent(t *testing.T, client *bot.Client, customID, components string) (*events.ModalSubmitInteractionCreate, *interactionReplies) {
 	t.Helper()
+	if components == "" {
+		components = "[]"
+	}
 	raw := `{` + interactionJSON(discord.InteractionTypeModalSubmit, "") +
-		`,"data":{"custom_id":` + jsonString(customID) + `,"components":[]}}`
+		`,"data":{"custom_id":` + jsonString(customID) + `,"components":` + components + `}}`
 	var mi discord.ModalSubmitInteraction
 	if err := json.Unmarshal([]byte(raw), &mi); err != nil {
 		t.Fatalf("building modal interaction: %v", err)
