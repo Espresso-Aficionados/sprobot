@@ -394,6 +394,18 @@ func (b *Bot) buildThreadsEmbed(guildID, channelID snowflake.ID) (*discord.Embed
 	return &embed, nil
 }
 
+// linkTextEscaper backslash-escapes Discord markdown in a thread name used as
+// masked link text. Anyone can name a thread, and a name like
+// "x](https://phish.example) [y" would otherwise put a link of its choosing
+// in the bot's message. With every "(" escaped, the only "](" in a line is
+// the one ending the name, so the link always goes to the thread. The rest
+// keeps names from rendering as formatting, mentions or timestamps. Discord
+// drops a backslash before punctuation, so the name reads as typed.
+var linkTextEscaper = strings.NewReplacer(
+	`\`, `\\`, `[`, `\[`, `]`, `\]`, `(`, `\(`, `)`, `\)`,
+	`*`, `\*`, `_`, `\_`, "`", "\\`", `~`, `\~`, `|`, `\|`, `<`, `\<`, `>`, `\>`,
+)
+
 // threadsEmbed formats a thread list: threads are the ones to show out of
 // total listed, and channelID 0 marks a server-wide list.
 func threadsEmbed(guildID, channelID snowflake.ID, threads []threadInfo, total int, now time.Time) discord.Embed {
@@ -406,7 +418,7 @@ func threadsEmbed(guildID, channelID snowflake.ID, threads []threadInfo, total i
 			parent = fmt.Sprintf(" in <#%d>", t.ParentID)
 		}
 		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d)%s — %d msgs, %d members, %s old\n",
-			t.Name, guildID, t.ID, parent, t.MessageCount, t.MemberCount, botutil.FormatAge(now.Sub(t.CreatedAt)))
+			linkTextEscaper.Replace(t.Name), guildID, t.ID, parent, t.MessageCount, t.MemberCount, botutil.FormatAge(now.Sub(t.CreatedAt)))
 		if desc.Len()+len(line) > maxDescLen {
 			break
 		}
