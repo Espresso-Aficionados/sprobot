@@ -34,6 +34,25 @@ type stickyMessage struct {
 	Buffer            int             `json:"buffer"`
 }
 
+// messageCreate builds the message that posts s. Image embeds hold saved
+// files as bare keys, which fileURL (s3client.Client.FileURL) turns into
+// their web links; Discord rejects an embed image that isn't a URL. The
+// message pings no one: mentions in it would ping again on every repost.
+func (s *stickyMessage) messageCreate(fileURL func(string) string) discord.MessageCreate {
+	embeds := make([]discord.Embed, len(s.Embeds))
+	copy(embeds, s.Embeds)
+	for i := range embeds {
+		if embeds[i].Image != nil {
+			embeds[i].Image = &discord.EmbedResource{URL: fileURL(embeds[i].Image.URL)}
+		}
+	}
+	return discord.MessageCreate{
+		Content:         s.Content,
+		Embeds:          embeds,
+		AllowedMentions: &discord.AllowedMentions{},
+	}
+}
+
 func (b *Bot) loadStickies() {
 	ctx := context.Background()
 	for _, guildID := range b.GuildIDs() {
@@ -196,22 +215,7 @@ func (b *Bot) repostSticky(s *stickyMessage) bool {
 		_ = b.Client.Rest.DeleteMessage(s.ChannelID, s.LastMessageID)
 	}
 
-	embeds := make([]discord.Embed, len(s.Embeds))
-	copy(embeds, s.Embeds)
-	for i := range embeds {
-		if embeds[i].Image != nil {
-			embeds[i].Image = &discord.EmbedResource{
-				URL: b.S3.FileURL(embeds[i].Image.URL),
-			}
-		}
-	}
-
-	msg := discord.MessageCreate{
-		Content: s.Content,
-		Embeds:  embeds,
-	}
-
-	sent, err := botutil.PostWithRetry(b.Client.Rest, s.ChannelID, msg, b.Log)
+	sent, err := botutil.PostWithRetry(b.Client.Rest, s.ChannelID, s.messageCreate(b.S3.FileURL), b.Log)
 	if err != nil {
 		b.Log.Error("Failed to repost sticky after retries", "channel_id", s.ChannelID, "error", err)
 		return false

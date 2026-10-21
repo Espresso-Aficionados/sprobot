@@ -3,6 +3,7 @@ package stickybot
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -243,51 +244,25 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		fetched, err := b.Client.Rest.GetMessage(channelID, messageID)
 		if err != nil {
 			b.Log.Error("Failed to fetch target message", "error", err)
-			b.followup(e, "Failed to fetch the target message.")
+			botutil.FollowupEphemeral(b.Client, e.Token(), "Failed to fetch the target message.")
 			return
 		}
 		msg = *fetched
 	}
 	if msg.Content == "" && len(msg.Embeds) == 0 && len(msg.Attachments) == 0 {
 		if ok {
-			b.followup(e, "This message has no text, embeds, or attachments to sticky.")
+			botutil.FollowupEphemeral(b.Client, e.Token(), "This message has no text, embeds, or attachments to sticky.")
 		} else {
 			// REST strips content fields without the message content intent;
 			// the context-menu resolved data is exempt.
-			b.followup(e, "Couldn't read the target message — please run \"Sticky this message\" again.")
+			botutil.FollowupEphemeral(b.Client, e.Token(), "Couldn't read the target message — please run \"Sticky this message\" again.")
 		}
 		return
-	}
-
-	// Re-host attachments to S3
-	ctx, cancel := context.WithTimeout(context.Background(), botutil.DeferredWorkBudget)
-	defer cancel()
-	guildStr := fmt.Sprintf("%d", guildID)
-	var fileURLs []string
-	for _, att := range msg.Attachments {
-		s3URL, err := b.S3.SaveStickyFile(ctx, guildStr, att.ProxyURL)
-		if err != nil {
-			b.Log.Error("Failed to re-host attachment", "error", err, "url", att.ProxyURL)
-			continue
-		}
-		fileURLs = append(fileURLs, s3URL)
-	}
-
-	// Build embeds: copy original embeds, then add file URLs as image embeds
-	embeds := make([]discord.Embed, len(msg.Embeds))
-	copy(embeds, msg.Embeds)
-	for _, u := range fileURLs {
-		embeds = append(embeds, discord.Embed{
-			Image: &discord.EmbedResource{URL: u},
-		})
 	}
 
 	s := &stickyMessage{
 		ChannelID:         channelID,
 		GuildID:           guildID,
-		Content:           msg.Content,
-		Embeds:            embeds,
-		FileURLs:          fileURLs,
 		CreatedBy:         e.User().ID,
 		Active:            true,
 		MinIdleMins:       minIdle,
@@ -296,27 +271,51 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		TimeThresholdMins: timeThreshold,
 		Buffer:            buffer,
 	}
+	botutil.FollowupEphemeral(b.Client, e.Token(), b.createSticky(s, msg))
+}
 
-	// Post the sticky immediately
-	sent, err := b.Client.Rest.CreateMessage(channelID, discord.MessageCreate{
-		Content: s.Content,
-		Embeds:  s.Embeds,
-	})
-	if err != nil {
-		b.Log.Error("Failed to post initial sticky", "error", err)
-		b.followup(e, "Failed to post the sticky message.")
-		return
+// createSticky fills in s from msg, re-hosting msg's attachments to S3, and
+// posts it as its channel's sticky. It returns the reply for the moderator.
+func (b *Bot) createSticky(s *stickyMessage, msg discord.Message) string {
+	ctx, cancel := context.WithTimeout(context.Background(), botutil.DeferredWorkBudget)
+	defer cancel()
+
+	// Saved files follow the message's own embeds, as image embeds.
+	s.Content = msg.Content
+	s.Embeds = slices.Clone(msg.Embeds)
+	for _, att := range msg.Attachments {
+		key, err := b.S3.SaveStickyFile(ctx, s.GuildID.String(), att.ProxyURL)
+		if err != nil {
+			b.Log.Error("Failed to re-host attachment", "error", err, "url", att.ProxyURL)
+			continue
+		}
+		s.FileURLs = append(s.FileURLs, key)
+		s.Embeds = append(s.Embeds, discord.Embed{Image: &discord.EmbedResource{URL: key}})
 	}
 
+	if err := b.installSticky(s); err != nil {
+		b.Log.Error("Failed to post initial sticky", "error", err)
+		return "Failed to post the sticky message."
+	}
+	b.Log.Info("Sticky created", "user_id", s.CreatedBy, "guild_id", s.GuildID, "channel_id", s.ChannelID, "min_idle", s.MinIdleMins, "max_idle", s.MaxIdleMins, "msg_threshold", s.MsgThreshold, "time_threshold", s.TimeThresholdMins, "buffer", s.Buffer)
+	return fmt.Sprintf("Sticky created in <#%d>! Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", s.ChannelID, s.MinIdleMins, s.MaxIdleMins, s.MsgThreshold, s.TimeThresholdMins)
+}
+
+// installSticky posts s and makes it its channel's sticky, replacing any
+// sticky already there.
+func (b *Bot) installSticky(s *stickyMessage) error {
+	sent, err := b.Client.Rest.CreateMessage(s.ChannelID, s.messageCreate(b.S3.FileURL))
+	if err != nil {
+		return err
+	}
 	s.LastMessageID = sent.ID
 
-	// Replace any existing sticky in this channel
 	b.mu.Lock()
-	if b.stickies[guildID] == nil {
-		b.stickies[guildID] = make(map[snowflake.ID]*stickyMessage)
+	if b.stickies[s.GuildID] == nil {
+		b.stickies[s.GuildID] = make(map[snowflake.ID]*stickyMessage)
 	}
-	old := b.stickies[guildID][channelID]
-	b.stickies[guildID][channelID] = s
+	old := b.stickies[s.GuildID][s.ChannelID]
+	b.stickies[s.GuildID][s.ChannelID] = s
 	b.startStickyGoroutine(s)
 	b.mu.Unlock()
 
@@ -324,16 +323,11 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 		b.stopStickyGoroutine(old)
 		// Read only after the stop: a repost in flight replaces the message.
 		if old.LastMessageID != 0 {
-			_ = b.Client.Rest.DeleteMessage(channelID, old.LastMessageID)
+			_ = b.Client.Rest.DeleteMessage(s.ChannelID, old.LastMessageID)
 		}
 	}
-
-	// Save to S3 immediately
-	b.saveStickiesForGuild(guildID)
-
-	b.Log.Info("Sticky created", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", threshold, "time_threshold", timeThreshold, "buffer", buffer)
-
-	b.followup(e, fmt.Sprintf("Sticky created in <#%d>! Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", channelID, minIdle, maxIdle, threshold, timeThreshold))
+	b.saveStickiesForGuild(s.GuildID)
+	return nil
 }
 
 func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {
@@ -452,13 +446,6 @@ func (b *Bot) getSticky(guildID, channelID snowflake.ID) *stickyMessage {
 		return nil
 	}
 	return channels[channelID]
-}
-
-func (b *Bot) followup(e *events.ModalSubmitInteractionCreate, content string) {
-	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-		Content: content,
-		Flags:   discord.MessageFlagEphemeral,
-	})
 }
 
 // validateStickyParams checks cross-field constraints for sticky message settings.
