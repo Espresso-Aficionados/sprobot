@@ -39,6 +39,10 @@ const modFileSaveConcurrency = 2
 
 var errNotForum = errors.New("mod log channel is not a forum channel")
 
+// errNotSent marks a mod log post that failed before its message was sent, so
+// it can't have been posted.
+var errNotSent = errors.New("mod log entry not sent")
+
 type modLogState struct {
 	mu        sync.Mutex
 	ChannelID snowflake.ID `json:"channel_id"`
@@ -386,13 +390,13 @@ func attachmentFields(lines []string) []discord.EmbedField {
 	return fields
 }
 
-// postModLogEntry posts a saved message's entry in its author's thread. If
-// Discord rejects the post, the files saved for it are deleted, since nothing
-// links to them. Other failures may have posted it anyway, so the files are
-// kept.
+// postModLogEntry posts a saved message's entry in its author's thread. If the
+// entry wasn't posted (its thread couldn't be found or created, or Discord
+// rejected the post), the files saved for it are deleted, since nothing links
+// to them. Other failures may have posted it anyway, so the files are kept.
 func (b *Bot) postModLogEntry(forumID snowflake.ID, author discord.User, embed discord.Embed, keys []string) (snowflake.ID, *discord.Message, error) {
 	threadID, sent, err := b.postToModLogThread(forumID, author, discord.MessageCreate{Embeds: []discord.Embed{embed}})
-	if err != nil && len(keys) > 0 && !mayHavePosted(err) {
+	if err != nil && len(keys) > 0 && (errors.Is(err, errNotSent) || !mayHavePosted(err)) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		if delErr := b.S3.DeleteKeys(ctx, keys...); delErr != nil {
@@ -414,12 +418,13 @@ func mayHavePosted(err error) bool {
 
 // postToModLogThread posts msg in author's thread in the mod log forum,
 // creating the thread if needed. If the thread turns out to be gone, the forum
-// is rescanned and the post retried once.
+// is rescanned and the post retried once. Failures to find or create the
+// thread are wrapped in errNotSent.
 func (b *Bot) postToModLogThread(forumID snowflake.ID, author discord.User, msg discord.MessageCreate) (snowflake.ID, *discord.Message, error) {
 	for attempt := 0; ; attempt++ {
 		threadID, err := b.findOrCreateModLogThread(forumID, author)
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, fmt.Errorf("%w: %w", errNotSent, err)
 		}
 		sent, err := b.Client.Rest.CreateMessage(threadID, msg)
 		if err == nil {
@@ -472,21 +477,35 @@ func (b *Bot) findModLogThread(forumID snowflake.ID, author discord.User) (snowf
 
 	unlock := b.modLogThreads.lock(modLogLockKey{forumID: forumID, scan: true})
 	defer unlock()
-	if threadID, found, indexed := b.modLogThreads.find(forumID, author); indexed {
-		return threadID, found, nil
+	for attempt := 0; ; attempt++ {
+		if threadID, found, indexed := b.modLogThreads.find(forumID, author); indexed {
+			return threadID, found, nil
+		}
+		if attempt == 3 {
+			return 0, false, errors.New("the mod log forum kept changing while it was scanned")
+		}
+		if err := b.scanModLogForum(forumID); err != nil {
+			return 0, false, err
+		}
 	}
+}
+
+// scanModLogForum lists the forum's threads and indexes them. Threads created
+// or renamed during the listing are added to the result; a thread deleted
+// during it, or a reset, discards the result.
+func (b *Bot) scanModLogForum(forumID snowflake.ID) error {
 	forum, err := b.modLogForumChannel(forumID)
 	if err != nil {
-		return 0, false, err
+		return err
 	}
+	b.modLogThreads.startScan(forumID)
 	threads, err := b.listModLogThreads(forum)
 	if err != nil {
-		return 0, false, err
+		b.modLogThreads.abortScan(forumID)
+		return err
 	}
-	idx := newModLogForum(threads)
-	threadID, found := idx.find(author)
-	b.modLogThreads.store(forumID, idx)
-	return threadID, found, nil
+	b.modLogThreads.finishScan(forumID, newModLogForum(threads))
+	return nil
 }
 
 // modLogForumChannel returns the mod log forum from the channel cache, or
@@ -526,9 +545,9 @@ func (b *Bot) listModLogThreads(forum discord.GuildForumChannel) ([]discord.Guil
 		}
 	}
 
-	before := time.Time{}
+	var cursor []rest.RequestOpt
 	for {
-		page, err := b.Client.Rest.GetPublicArchivedThreads(forum.ID(), before, 100)
+		page, err := b.Client.Rest.GetPublicArchivedThreads(forum.ID(), time.Time{}, 100, cursor...)
 		if err != nil {
 			return threads, fmt.Errorf("listing archived threads: %w", err)
 		}
@@ -538,8 +557,16 @@ func (b *Bot) listModLogThreads(forum discord.GuildForumChannel) ([]discord.Guil
 		if !page.HasMore || len(page.Threads) == 0 {
 			return threads, nil
 		}
-		before = page.Threads[len(page.Threads)-1].ThreadMetadata.ArchiveTimestamp
+		cursor = []rest.RequestOpt{archivedBefore(page.Threads[len(page.Threads)-1].ThreadMetadata.ArchiveTimestamp)}
 	}
+}
+
+// archivedBefore pages an archived-thread listing to threads archived before
+// t. disgo's own before parameter drops the fraction of a second, which skips
+// threads archived earlier in the same second as the previous page's last one,
+// so callers pass a zero before and this instead.
+func archivedBefore(t time.Time) rest.RequestOpt {
+	return rest.WithQueryParam("before", t.Format(time.RFC3339Nano))
 }
 
 // cachedChannel returns a channel from the cache, or from REST if it isn't
@@ -564,13 +591,22 @@ func (b *Bot) channelNameOrID(channelID snowflake.ID) string {
 // modLogThreadIndex remembers which thread in each mod log forum belongs to
 // which user, so that posting to the mod log doesn't list the whole forum.
 // Each forum is indexed by one full scan, then kept current from thread events
-// and the threads the bot creates. It holds only user and thread IDs, plus the
-// names of legacy threads whose name has no user ID, and is never persisted.
-// The zero value is ready to use.
+// and the threads the bot creates, and forgotten when a new gateway session
+// starts, since events from before it may have been missed. It holds only
+// user and thread IDs, plus the names of legacy threads whose name has no user
+// ID, and is never persisted. The zero value is ready to use.
 type modLogThreadIndex struct {
-	mu     sync.Mutex
-	forums map[snowflake.ID]*modLogForum // forum ID -> index; absent until scanned
-	busy   map[modLogLockKey]chan struct{}
+	mu       sync.Mutex
+	forums   map[snowflake.ID]*modLogForum // forum ID -> index; absent until scanned
+	scanning map[snowflake.ID][]modLogThreadEvent
+	busy     map[modLogLockKey]chan struct{}
+}
+
+// modLogThreadEvent is a thread created or renamed while its forum was being
+// scanned.
+type modLogThreadEvent struct {
+	threadID snowflake.ID
+	name     string
 }
 
 // modLogLockKey names what lock serializes: find-or-create for one user in a
@@ -619,33 +655,66 @@ func (x *modLogThreadIndex) find(forumID snowflake.ID, user discord.User) (threa
 	return threadID, found, true
 }
 
-func (x *modLogThreadIndex) store(forumID snowflake.ID, f *modLogForum) {
+// startScan starts collecting the forum's thread events, to apply to the
+// result of the scan that is about to list its threads.
+func (x *modLogThreadIndex) startScan(forumID snowflake.ID) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	if x.scanning == nil {
+		x.scanning = make(map[snowflake.ID][]modLogThreadEvent)
+	}
+	x.scanning[forumID] = nil
+}
+
+func (x *modLogThreadIndex) abortScan(forumID snowflake.ID) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	delete(x.scanning, forumID)
+}
+
+// finishScan stores f as the forum's index, with the events collected since
+// startScan applied, unless the scan was invalidated meanwhile.
+func (x *modLogThreadIndex) finishScan(forumID snowflake.ID, f *modLogForum) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	events, ok := x.scanning[forumID]
+	if !ok {
+		return
+	}
+	delete(x.scanning, forumID)
+	for _, ev := range events {
+		f.remove(ev.threadID)
+		f.add(ev.threadID, ev.name)
+	}
 	if x.forums == nil {
 		x.forums = make(map[snowflake.ID]*modLogForum)
 	}
 	x.forums[forumID] = f
 }
 
-// update records a thread created or renamed in an indexed forum.
+// update records a thread created or renamed in an indexed forum, or in one
+// being scanned.
 func (x *modLogThreadIndex) update(forumID, threadID snowflake.ID, name string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if f := x.forums[forumID]; f != nil {
 		f.remove(threadID)
 		f.add(threadID, name)
+	} else if events, ok := x.scanning[forumID]; ok {
+		x.scanning[forumID] = append(events, modLogThreadEvent{threadID: threadID, name: name})
 	}
 }
 
 // remove handles a deleted thread. If it was someone's thread, the forum is
-// scanned again on next use, in case they have another one.
+// scanned again on next use, in case they have another one. A scan in
+// progress may have listed the thread, so it is discarded.
 func (x *modLogThreadIndex) remove(forumID, threadID snowflake.ID) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if f := x.forums[forumID]; f != nil && f.remove(threadID) {
 		delete(x.forums, forumID)
 	}
+	delete(x.scanning, forumID)
 }
 
 // reset forgets a forum's index, so it is scanned again on next use.
@@ -653,6 +722,15 @@ func (x *modLogThreadIndex) reset(forumID snowflake.ID) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	delete(x.forums, forumID)
+	delete(x.scanning, forumID)
+}
+
+// resetAll forgets every forum's index.
+func (x *modLogThreadIndex) resetAll() {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.forums = nil
+	x.scanning = nil
 }
 
 func (b *Bot) onModLogThreadCreate(e *events.ThreadCreate) {
@@ -667,6 +745,12 @@ func (b *Bot) onModLogThreadUpdate(e *events.ThreadUpdate) {
 
 func (b *Bot) onModLogThreadDelete(e *events.ThreadDelete) {
 	b.modLogThreads.remove(e.ParentID, e.ThreadID)
+}
+
+// onModLogReady forgets the thread index when a new gateway session starts:
+// unlike a resume, it doesn't replay the thread events missed in between.
+func (b *Bot) onModLogReady(*events.Ready) {
+	b.modLogThreads.resetAll()
 }
 
 // modLogForum indexes one mod log forum's threads. When a user has more than
@@ -821,16 +905,18 @@ func (b *Bot) handleModLogConfigClear(e *events.ApplicationCommandInteractionCre
 	botutil.RespondEphemeral(e, "Mod log disabled.")
 }
 
-var threadUserIDRegex = regexp.MustCompile(`- (\d+)$`)
+var threadUserIDRegex = regexp.MustCompile(`- (\d+)\b`)
 
-// parseThreadUserID returns the user ID at the end of a mod log thread name
-// ("username - 123"), or 0 if there is none.
+// parseThreadUserID returns the user ID in a mod log thread name
+// ("username - 123"), or 0 if there is none. Text a mod added after the ID
+// ("username - 123 (banned)") is allowed. If the name has more than one
+// "- <number>", the last one counts.
 func parseThreadUserID(name string) snowflake.ID {
-	m := threadUserIDRegex.FindStringSubmatch(name)
-	if len(m) < 2 {
+	m := threadUserIDRegex.FindAllStringSubmatch(name, -1)
+	if len(m) == 0 {
 		return 0
 	}
-	id, err := snowflake.Parse(m[1])
+	id, err := snowflake.Parse(m[len(m)-1][1])
 	if err != nil {
 		return 0
 	}

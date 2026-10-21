@@ -53,6 +53,10 @@ func TestParseThreadUserID(t *testing.T) {
 		{"- 12345", 12345},
 		{"name - 111 - 222", 222},
 		{"overflow - 99999999999999999999999", 0},
+		{"renamed by a mod - 123 (banned)", 123},
+		{"renamed by a mod - 123 [alt]", 123},
+		{"renamed by a mod - 123 ✅", 123},
+		{"digits run on - 123abc", 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -85,6 +89,7 @@ func TestModLogForumFindMatchesUserIDExactly(t *testing.T) {
 		testThread(t, 5, "erin (warned)"), // legacy
 		testThread(t, 6, "frank - 77"),
 		testThread(t, 7, "frank - 77"), // duplicate: the first one wins
+		testThread(t, 8, "gina - 88 (banned)"),
 	})
 
 	tests := []struct {
@@ -102,6 +107,8 @@ func TestModLogForumFindMatchesUserIDExactly(t *testing.T) {
 		{"legacy thread needs an exact name", discord.User{ID: 901, Username: "erin"}, 0, false},
 		{"thread with an ID never matches by name", discord.User{ID: 902, Username: "alice - 123"}, 0, false},
 		{"first of duplicate threads", discord.User{ID: 77, Username: "frank"}, 6, true},
+		{"text after the ID", discord.User{ID: 88, Username: "gina"}, 8, true},
+		{"ID that is a prefix of an annotated ID", discord.User{ID: 8, Username: "gin"}, 0, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

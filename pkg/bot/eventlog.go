@@ -911,6 +911,9 @@ func formatPermissionDiff(action discord.AuditLogEvent, oldAllow, oldDeny, newAl
 	return strings.Join(lines, "\n")
 }
 
+// crossPostToModLog posts embed in user's mod log thread in the background:
+// finding the thread can take a scan of the forum, longer than an interaction
+// can wait for its response.
 func (b *Bot) crossPostToModLog(guildID snowflake.ID, user discord.User, embed discord.Embed) {
 	st := b.modLog.get(guildID)
 	if st == nil {
@@ -922,11 +925,13 @@ func (b *Bot) crossPostToModLog(guildID snowflake.ID, user discord.User, embed d
 	if channelID == 0 {
 		return
 	}
-	if _, _, err := b.postToModLogThread(channelID, user, discord.MessageCreate{
-		Embeds: []discord.Embed{embed},
-	}); err != nil {
-		b.Log.Error("Failed to cross-post to mod log thread", "guild_id", guildID, "user_id", user.ID, "error", err)
-	}
+	go func() {
+		if _, _, err := b.postToModLogThread(channelID, user, discord.MessageCreate{
+			Embeds: []discord.Embed{embed},
+		}); err != nil {
+			b.Log.Error("Failed to cross-post to mod log thread", "guild_id", guildID, "user_id", user.ID, "error", err)
+		}
+	}()
 }
 
 // --- Channel events ---

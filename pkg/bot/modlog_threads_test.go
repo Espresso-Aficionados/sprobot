@@ -45,6 +45,7 @@ type fakeModLogAPI struct {
 	failArchived int                  // status for the archived thread listing; 0 = OK
 	postStatus   map[snowflake.ID]int // thread ID -> status for message posts
 	createDelay  time.Duration
+	onArchived   func()         // called once, before the next archived listing is served
 	calls        map[string]int // "channel", "active", "archived", "create"
 	posts        map[snowflake.ID]int
 }
@@ -83,7 +84,7 @@ func (f *fakeModLogAPI) postCount(threadID snowflake.ID) int {
 func threadJSON(t fakeModLogThread) map[string]any {
 	meta := map[string]any{"archived": !t.archivedAt.IsZero(), "auto_archive_duration": 10080}
 	if !t.archivedAt.IsZero() {
-		meta["archive_timestamp"] = t.archivedAt.Format(time.RFC3339)
+		meta["archive_timestamp"] = t.archivedAt.Format(time.RFC3339Nano)
 	}
 	return map[string]any{
 		"id": t.id.String(), "type": 11, "guild_id": testModLogGuild.String(), "parent_id": testModLogForum.String(),
@@ -130,6 +131,13 @@ func (f *fakeModLogAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/threads/archived/public"):
 		f.mu.Lock()
+		hook := f.onArchived
+		f.onArchived = nil
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.calls["archived"]++
 		if f.failArchived != 0 {
@@ -143,7 +151,7 @@ func (f *fakeModLogAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		slices.SortFunc(archived, func(a, b fakeModLogThread) int { return b.archivedAt.Compare(a.archivedAt) })
-		if before, err := time.Parse(time.RFC3339, r.URL.Query().Get("before")); err == nil {
+		if before, err := time.Parse(time.RFC3339Nano, r.URL.Query().Get("before")); err == nil {
 			archived = slices.DeleteFunc(archived, func(t fakeModLogThread) bool { return !t.archivedAt.Before(before) })
 		}
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -339,33 +347,138 @@ func TestListModLogThreadsReturnsPartialResults(t *testing.T) {
 }
 
 func TestFindOrCreateModLogThreadSerializesPerUser(t *testing.T) {
+	// Unindexed, the forum scan lock also lines the calls up. Once the forum
+	// is indexed, lookups skip that lock and only the per-user lock does.
+	for _, indexed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("indexed=%v", indexed), func(t *testing.T) {
+			api := newFakeModLogAPI()
+			api.createDelay = 50 * time.Millisecond
+			b, _ := newModLogTestBot(t, api)
+			cacheForum(t, b)
+			api.addThread(300, "bob - 2", time.Time{})
+			if indexed {
+				if _, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 2, Username: "bob"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Posts about the same user (say, a timeout and a ban) at once.
+			user := discord.User{ID: 1, Username: "alice"}
+			ids := make([]snowflake.ID, 4)
+			var wg sync.WaitGroup
+			for i := range ids {
+				wg.Go(func() {
+					id, err := b.findOrCreateModLogThread(testModLogForum, user)
+					if err != nil {
+						t.Error(err)
+					}
+					ids[i] = id
+				})
+			}
+			wg.Wait()
+
+			if api.count("create") != 1 {
+				t.Errorf("%d threads created for one user, want 1", api.count("create"))
+			}
+			for i, id := range ids {
+				if id != ids[0] {
+					t.Errorf("call %d got thread %d, want %d", i, id, ids[0])
+				}
+			}
+		})
+	}
+}
+
+func TestListModLogThreadsPagesBySubSecondTimestamps(t *testing.T) {
 	api := newFakeModLogAPI()
-	api.createDelay = 50 * time.Millisecond
 	b, _ := newModLogTestBot(t, api)
 	cacheForum(t, b)
 
-	// Two posts about the same user (say, a timeout and a ban) at once.
-	user := discord.User{ID: 1, Username: "alice"}
-	ids := make([]snowflake.ID, 4)
-	var wg sync.WaitGroup
-	for i := range ids {
-		wg.Go(func() {
-			id, err := b.findOrCreateModLogThread(testModLogForum, user)
-			if err != nil {
-				t.Error(err)
-			}
-			ids[i] = id
-		})
+	// The first page of 100 ends with a thread archived at .9 of a second. The
+	// victim's thread was archived earlier in that same second.
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for i := range 99 {
+		api.addThread(snowflake.ID(1000+i), fmt.Sprintf("user%d - %d", i, 10000+i), base.Add(time.Duration(i+2)*time.Second))
 	}
-	wg.Wait()
+	api.addThread(2000, "x - 900", base.Add(900*time.Millisecond))
+	api.addThread(2001, "victim - 777", base.Add(500*time.Millisecond))
 
-	if api.count("create") != 1 {
-		t.Errorf("%d threads created for one user, want 1", api.count("create"))
+	id, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 777, Username: "victim"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for i, id := range ids {
-		if id != ids[0] {
-			t.Errorf("call %d got thread %d, want %d", i, id, ids[0])
-		}
+	if id != 2001 || api.count("create") != 0 {
+		t.Errorf("got thread %d with %d created; want the victim's thread 2001", id, api.count("create"))
+	}
+}
+
+func TestModLogScanKeepsThreadEventsFromDuringIt(t *testing.T) {
+	api := newFakeModLogAPI()
+	b, _ := newModLogTestBot(t, api)
+	cacheForum(t, b)
+	api.addThread(300, "alice - 1", time.Time{})
+
+	// A mod creates bob's thread after the active threads were listed.
+	api.onArchived = func() {
+		api.addThread(400, "bob - 456", time.Time{})
+		b.onModLogThreadCreate(&events.ThreadCreate{GenericThread: &events.GenericThread{
+			ThreadID: 400, GuildID: testModLogGuild, Thread: testThread(t, 400, "bob - 456"),
+		}})
+	}
+	if _, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 1, Username: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 456, Username: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 400 || api.count("create") != 0 || api.count("active") != 1 {
+		t.Errorf("bob -> %d with %d created, %d scans; want 400 from the event, 0 created, 1 scan",
+			id, api.count("create"), api.count("active"))
+	}
+}
+
+func TestModLogScanDiscardedByDeleteDuringIt(t *testing.T) {
+	api := newFakeModLogAPI()
+	b, _ := newModLogTestBot(t, api)
+	cacheForum(t, b)
+	api.addThread(300, "alice - 1", time.Time{})
+	api.addThread(301, "alice - 1", time.Time{})
+
+	// Alice's first thread is deleted after it was listed, so the scan that
+	// listed it must not be used.
+	api.onArchived = func() {
+		api.deleteThread(300)
+		b.onModLogThreadDelete(&events.ThreadDelete{GenericThread: &events.GenericThread{ThreadID: 300, ParentID: testModLogForum}})
+	}
+	id, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 1, Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 301 || api.count("active") != 2 {
+		t.Errorf("alice -> %d after %d scans; want her other thread 301 after a rescan", id, api.count("active"))
+	}
+}
+
+func TestModLogReadyForgetsIndex(t *testing.T) {
+	api := newFakeModLogAPI()
+	b, _ := newModLogTestBot(t, api)
+	cacheForum(t, b)
+	api.addThread(300, "alice - 1", time.Time{})
+	if _, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 1, Username: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Carol's thread was created while the gateway was down. A new session
+	// doesn't replay its event.
+	api.addThread(301, "carol - 3", time.Time{})
+	b.onModLogReady(&events.Ready{})
+	id, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 3, Username: "carol"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 301 || api.count("create") != 0 || api.count("active") != 2 {
+		t.Errorf("carol -> %d with %d created, %d scans; want 301 from a rescan", id, api.count("create"), api.count("active"))
 	}
 }
 
@@ -464,18 +577,21 @@ func TestModLogThreadEventsKeepIndexCurrent(t *testing.T) {
 
 func TestPostModLogEntryDeletesFilesOnlyWhenRejected(t *testing.T) {
 	for _, tc := range []struct {
-		status      int
-		wantDeleted bool
+		name                   string
+		postStatus, listStatus int
+		wantDeleted            bool
 	}{
-		{http.StatusBadRequest, true},           // e.g. an embed over Discord's limits
-		{http.StatusInternalServerError, false}, // the entry may have been posted anyway
+		{"rejected", http.StatusBadRequest, 0, true},               // e.g. an embed over Discord's limits
+		{"server error", http.StatusInternalServerError, 0, false}, // the entry may have been posted anyway
+		{"thread not found", 0, http.StatusBadGateway, true},       // nothing was sent
 	} {
-		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeModLogAPI()
 			b, fakeS3 := newModLogTestBot(t, api)
 			cacheForum(t, b)
 			api.addThread(300, "alice - 1", time.Time{})
-			api.postStatus[300] = tc.status
+			api.postStatus[300] = tc.postStatus
+			api.failActive = tc.listStatus
 			keys := []string{"mod_files/1/a.png", "mod_files/1/b.mov"}
 			for _, k := range keys {
 				fakeS3.Objects["/test-bucket/"+k] = []byte("data")

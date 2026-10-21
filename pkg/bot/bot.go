@@ -125,6 +125,7 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onModLogThreadCreate),
 		bot.WithEventListenerFunc(b.onModLogThreadUpdate),
 		bot.WithEventListenerFunc(b.onModLogThreadDelete),
+		bot.WithEventListenerFunc(b.onModLogReady),
 		bot.WithEventListenerFunc(b.onRoleUpdate),
 		bot.WithEventListenerFunc(b.onGuildUpdate),
 		bot.WithEventListenerFunc(b.onEmojiCreate),
