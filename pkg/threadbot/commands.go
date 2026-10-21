@@ -401,10 +401,14 @@ func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
 func (b *Bot) handleRefreshCounts(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 
+	// Replaced, not deleted, and saved: saves skip a guild with no cache, so
+	// a restart would bring the old counts back. This also replaces stored
+	// counts that failed to load.
 	b.mu.Lock()
-	delete(b.memberCounts, guildID)
+	b.memberCounts[guildID] = newMemberCountCache()
 	b.mu.Unlock()
 
 	b.Log.Info("Member count cache cleared", "user_id", e.User().ID, "guild_id", guildID)
 	botutil.RespondEphemeral(e, "Thread member count cache cleared. Counts will refresh on the next reminder post or `/threads` command.")
+	b.saveMemberCountsForGuild(guildID)
 }

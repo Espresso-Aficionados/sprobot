@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/disgoorg/disgo/discord"
@@ -66,6 +67,34 @@ func TestCommandFromGuildNotAllowedCreatesNoState(t *testing.T) {
 	defer fake.Mu.Unlock()
 	for key := range fake.Objects {
 		t.Errorf("S3 object written: %s", key)
+	}
+}
+
+// /threadbot refreshcounts must clear the stored counts too, or a restart
+// brings them back. It is also how corrupt stored counts get replaced.
+func TestRefreshCountsClearsStoredCounts(t *testing.T) {
+	for _, stored := range []string{
+		`{"counts":{"101":130},"fetched":{"101":"2026-10-21T00:00:00Z"}}`,
+		`not json`,
+	} {
+		fake := testutil.NewFakeS3()
+		srv := httptest.NewServer(fake)
+		fake.Objects[devCountsKey] = []byte(stored)
+		b := newTestBot(t, testutil.NewTestS3Client(t, srv))
+		b.loadMemberCounts()
+
+		e, responses := commandEvent(t, devGuild, `{"id":"3","name":"threadbot","type":1,"options":[{"name":"refreshcounts","type":1}]}`)
+		b.onCommand(e)
+		if m := <-responses; !strings.Contains(m.Content, "cleared") {
+			t.Errorf("stored %s: response %q", stored, m.Content)
+		}
+
+		restarted := newTestBot(t, testutil.NewTestS3Client(t, srv))
+		restarted.loadMemberCounts()
+		if c := restarted.memberCounts[devGuild]; c == nil || len(c.Counts) != 0 {
+			t.Errorf("stored %s: counts after restart = %+v, want an empty cache", stored, c)
+		}
+		srv.Close()
 	}
 }
 
