@@ -614,9 +614,20 @@ func (b *Bot) pruneMessageCache() {
 // New calls it before disgo starts, so nothing else uses the caches yet.
 func (b *Bot) loadCaches() {
 	now := time.Now()
+	expired := 0
 	loadCache(b, messageCacheFile, b.msgCache.cappedGroupedCache, func(m cachedMessage) (cachedMessage, snowflake.ID, snowflake.ID, bool) {
-		return m, m.ChannelID, m.ID, !messageExpired(m.ID, now)
+		if messageExpired(m.ID, now) {
+			expired++
+			return m, 0, 0, false
+		}
+		return m, m.ChannelID, m.ID, true
 	})
+	// Nothing prunes the file while the bot is down. Rewrite it now rather
+	// than at the first save, which waits for the gateway.
+	if expired > 0 {
+		b.Log.Info("Dropped expired messages from the cache file", "removed", expired)
+		saveCache(b, messageCacheFile, b.msgCache.snapshot())
+	}
 	// Guilds before members: members filed under anything else (see
 	// guildMemberCache) are dropped.
 	loadCache(b, guildCacheFile, b.guildCache.cappedGroupedCache, func(g discord.Guild) (discord.Guild, snowflake.ID, snowflake.ID, bool) {

@@ -71,6 +71,15 @@ func TestLoadCaches_DropsExpiredMessages(t *testing.T) {
 			t.Errorf("fresh message %d in channel %d not loaded", m.ID, m.ChannelID)
 		}
 	}
+
+	// The file, which aged while the bot was down, is rewritten at once.
+	var onDisk []snowflake.ID
+	if err := readCacheFile(b.cacheDir, messageCacheFile, func(m discord.Message) { onDisk = append(onDisk, m.ID) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(onDisk) != len(fresh) {
+		t.Errorf("file holds %d messages after load, want the %d fresh ones", len(onDisk), len(fresh))
+	}
 }
 
 func TestSaveCaches_ExcludesExpiredMessages(t *testing.T) {
