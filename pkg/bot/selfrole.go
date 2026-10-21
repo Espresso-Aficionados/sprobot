@@ -8,6 +8,8 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/botutil"
 )
 
 type selfroleButton struct {
@@ -101,26 +103,33 @@ func selfrolePanelButtons(cfg selfroleConfig) []discord.LayoutComponent {
 
 func (b *Bot) ensureSelfrolePanels() {
 	for _, guildID := range b.GuildIDs() {
-		cfgs, ok := b.selfroles[guildID]
-		if !ok {
-			continue
-		}
-		for _, cfg := range cfgs {
-			if cfg.ChannelID == 0 {
+		// Several panels can share a channel, so read each channel's recent
+		// history once.
+		history := make(map[snowflake.ID][]discord.Message)
+		unreadable := make(map[snowflake.ID]bool)
+		for _, cfg := range b.selfroles[guildID] {
+			if cfg.ChannelID == 0 || unreadable[cfg.ChannelID] {
 				continue
 			}
-			b.ensureSelfrolePanel(guildID, cfg)
+			messages, fetched := history[cfg.ChannelID]
+			if !fetched {
+				var err error
+				messages, err = b.Client.Rest.GetMessages(cfg.ChannelID, 0, 0, 0, 25)
+				if err != nil {
+					b.Log.Error("Failed to fetch messages for selfrole panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
+					unreadable[cfg.ChannelID] = true
+					continue
+				}
+				history[cfg.ChannelID] = messages
+			}
+			b.ensureSelfrolePanel(guildID, cfg, messages)
 		}
 	}
 }
 
-func (b *Bot) ensureSelfrolePanel(guildID snowflake.ID, cfg selfroleConfig) {
-	messages, err := b.Client.Rest.GetMessages(cfg.ChannelID, 0, 0, 0, 25)
-	if err != nil {
-		b.Log.Error("Failed to fetch messages for selfrole panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
-		return
-	}
-
+// ensureSelfrolePanel posts or updates cfg's panel, given its channel's
+// recent messages.
+func (b *Bot) ensureSelfrolePanel(guildID snowflake.ID, cfg selfroleConfig, messages []discord.Message) {
 	embed := selfrolePanelEmbed(cfg)
 	components := selfrolePanelButtons(cfg)
 
@@ -148,7 +157,7 @@ func (b *Bot) ensureSelfrolePanel(guildID snowflake.ID, cfg selfroleConfig) {
 		}
 	}
 
-	_, err = b.Client.Rest.CreateMessage(cfg.ChannelID, discord.MessageCreate{
+	_, err := b.Client.Rest.CreateMessage(cfg.ChannelID, discord.MessageCreate{
 		Embeds:     []discord.Embed{embed},
 		Components: components,
 	})
@@ -218,6 +227,8 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 		}
 	}
 	if matchedCfg == nil {
+		// A panel posted for a role that has since been removed from the config.
+		botutil.RespondEphemeral(e, "This button is no longer available.")
 		return
 	}
 
@@ -236,41 +247,34 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 	link := messageLink(*guildID, e.Channel().ID(), e.Message.ID)
 
 	if hasRole && matchedCfg.GrantOnly {
-		e.CreateMessage(discord.MessageCreate{
-			Content: fmt.Sprintf("You already have **%s**.", label),
-			Flags:   discord.MessageFlagEphemeral,
-		})
+		botutil.RespondEphemeral(e, fmt.Sprintf("You already have **%s**.", label))
 		return
 	}
+
+	// Answer before the role change: a slow REST call would otherwise fail
+	// the interaction, and the user's retry would toggle the role back.
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer selfrole toggle", "user_id", e.User().ID, "role_id", roleID, "error", err)
+		return
+	}
+	respond := func(content string) { botutil.FollowupEphemeral(b.Client, e.Token(), content) }
 
 	if hasRole {
 		if err := b.Client.Rest.RemoveMemberRole(*guildID, e.User().ID, roleID, rest.WithReason(fmt.Sprintf("Self-role removal %s", link))); err != nil {
 			b.Log.Error("Failed to remove selfrole", "user_id", e.User().ID, "role_id", roleID, "error", err)
-			e.CreateMessage(discord.MessageCreate{
-				Content: "Something went wrong, please try again.",
-				Flags:   discord.MessageFlagEphemeral,
-			})
+			respond("Something went wrong, please try again.")
 			return
 		}
 		b.Log.Info("Selfrole removed", "user_id", e.User().ID, "guild_id", *guildID, "role_id", roleID, "label", label)
-		e.CreateMessage(discord.MessageCreate{
-			Content: fmt.Sprintf("Removed **%s**", label),
-			Flags:   discord.MessageFlagEphemeral,
-		})
+		respond(fmt.Sprintf("Removed **%s**", label))
 	} else {
 		if err := b.Client.Rest.AddMemberRole(*guildID, e.User().ID, roleID, rest.WithReason(fmt.Sprintf("Self-role assignment %s", link))); err != nil {
 			b.Log.Error("Failed to add selfrole", "user_id", e.User().ID, "role_id", roleID, "error", err)
-			e.CreateMessage(discord.MessageCreate{
-				Content: "Something went wrong, please try again.",
-				Flags:   discord.MessageFlagEphemeral,
-			})
+			respond("Something went wrong, please try again.")
 			return
 		}
 		b.Log.Info("Selfrole added", "user_id", e.User().ID, "guild_id", *guildID, "role_id", roleID, "label", label)
-		e.CreateMessage(discord.MessageCreate{
-			Content: fmt.Sprintf("Added **%s**", label),
-			Flags:   discord.MessageFlagEphemeral,
-		})
+		respond(fmt.Sprintf("Added **%s**", label))
 	}
 }
 
