@@ -17,9 +17,68 @@ import (
 	"github.com/sadbox/sprobot/pkg/s3client"
 )
 
+// memberCountCap is where Discord's thread member_count stops counting. Below
+// it member_count is shown as is; only threads at the cap need an exact count
+// from List Thread Members.
+const memberCountCap = 50
+
+const (
+	memberCountTTL    = 24 * time.Hour     // re-fetch an exact count after this
+	memberCountRetain = 7 * 24 * time.Hour // drop counts not re-fetched for this long
+)
+
+// memberCountCache holds exact member counts for threads at memberCountCap,
+// each with the time it was fetched.
 type memberCountCache struct {
-	Counts      map[snowflake.ID]int `json:"counts"`
-	LastRefresh time.Time            `json:"last_refresh"`
+	Counts  map[snowflake.ID]int       `json:"counts"`
+	Fetched map[snowflake.ID]time.Time `json:"fetched"`
+}
+
+func newMemberCountCache() *memberCountCache {
+	return &memberCountCache{Counts: make(map[snowflake.ID]int), Fetched: make(map[snowflake.ID]time.Time)}
+}
+
+// needsFetch returns the threads whose exact count is missing or older than
+// memberCountTTL.
+func (c *memberCountCache) needsFetch(threadIDs []snowflake.ID, now time.Time) []snowflake.ID {
+	var out []snowflake.ID
+	for _, id := range threadIDs {
+		if fetched, ok := c.Fetched[id]; !ok || now.Sub(fetched) >= memberCountTTL {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func (c *memberCountCache) set(threadID snowflake.ID, n int, now time.Time) {
+	c.Counts[threadID] = n
+	c.Fetched[threadID] = now
+}
+
+// prune drops counts not fetched within memberCountRetain: threads that were
+// archived, fell below the cap, or stopped being shown.
+func (c *memberCountCache) prune(now time.Time) {
+	for id := range c.Counts {
+		if fetched, ok := c.Fetched[id]; !ok || now.Sub(fetched) >= memberCountRetain {
+			delete(c.Counts, id)
+			delete(c.Fetched, id)
+		}
+	}
+	for id := range c.Fetched {
+		if _, ok := c.Counts[id]; !ok {
+			delete(c.Fetched, id)
+		}
+	}
+}
+
+// exactCount returns the cached exact count for a thread whose member_count is
+// at the cap. Callers hold b.mu.
+func (c *memberCountCache) exactCount(threadID snowflake.ID, memberCount int) (int, bool) {
+	if c == nil || memberCount < memberCountCap {
+		return 0, false
+	}
+	n, ok := c.Counts[threadID]
+	return n, ok && n > 0
 }
 
 type threadReminder struct {
@@ -195,12 +254,6 @@ func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
 		return nil
 	}
 
-	threadIDs := make([]snowflake.ID, len(threads))
-	for i, t := range threads {
-		threadIDs[i] = t.ID
-	}
-	b.refreshMemberCounts(guildID, threadIDs)
-
 	sort.Slice(threads, func(i, j int) bool {
 		return threads[i].MessageCount > threads[j].MessageCount
 	})
@@ -210,24 +263,31 @@ func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
 		threads = threads[:10]
 	}
 
+	// Only shown threads at the member_count cap need an exact count.
+	var capped []snowflake.ID
+	for _, t := range threads {
+		if t.MemberCount >= memberCountCap {
+			capped = append(capped, t.ID)
+		}
+	}
+	b.refreshMemberCounts(guildID, capped)
+
+	var cachedCount int
 	b.mu.Lock()
-	cache := b.memberCounts[guildID]
+	for i, t := range threads {
+		if n, ok := b.memberCounts[guildID].exactCount(t.ID, t.MemberCount); ok {
+			threads[i].MemberCount = n
+			cachedCount++
+		}
+	}
 	b.mu.Unlock()
 
 	now := time.Now()
 	const maxDescLen = 3900
 	var desc strings.Builder
-	var cachedCount int
 	for _, t := range threads {
-		memberCount := t.MemberCount
-		if cache != nil {
-			if n, ok := cache.Counts[t.ID]; ok && n > 0 {
-				memberCount = n
-				cachedCount++
-			}
-		}
 		age := botutil.FormatAge(now.Sub(t.CreatedAt))
-		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.MessageCount, memberCount, age)
+		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.MessageCount, t.MemberCount, age)
 		if desc.Len()+len(line) > maxDescLen {
 			break
 		}
@@ -296,12 +356,6 @@ func (b *Bot) buildAllThreadsEmbed(guildID snowflake.ID) *discord.Embed {
 		return nil
 	}
 
-	threadIDs := make([]snowflake.ID, len(threads))
-	for i, t := range threads {
-		threadIDs[i] = t.ID
-	}
-	b.refreshMemberCounts(guildID, threadIDs)
-
 	sort.Slice(threads, func(i, j int) bool {
 		return threads[i].MessageCount > threads[j].MessageCount
 	})
@@ -312,24 +366,31 @@ func (b *Bot) buildAllThreadsEmbed(guildID snowflake.ID) *discord.Embed {
 		threads = threads[:maxShown]
 	}
 
+	// Only shown threads at the member_count cap need an exact count.
+	var capped []snowflake.ID
+	for _, t := range threads {
+		if t.MemberCount >= memberCountCap {
+			capped = append(capped, t.ID)
+		}
+	}
+	b.refreshMemberCounts(guildID, capped)
+
+	var cachedCount int
 	b.mu.Lock()
-	cache := b.memberCounts[guildID]
+	for i, t := range threads {
+		if n, ok := b.memberCounts[guildID].exactCount(t.ID, t.MemberCount); ok {
+			threads[i].MemberCount = n
+			cachedCount++
+		}
+	}
 	b.mu.Unlock()
 
 	now := time.Now()
 	const maxDescLen = 3900
 	var desc strings.Builder
-	var cachedCount int
 	for _, t := range threads {
-		memberCount := t.MemberCount
-		if cache != nil {
-			if n, ok := cache.Counts[t.ID]; ok && n > 0 {
-				memberCount = n
-				cachedCount++
-			}
-		}
 		age := botutil.FormatAge(now.Sub(t.CreatedAt))
-		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) in <#%d> — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.ParentID, t.MessageCount, memberCount, age)
+		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) in <#%d> — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.ParentID, t.MessageCount, t.MemberCount, age)
 		if desc.Len()+len(line) > maxDescLen {
 			break
 		}
@@ -445,6 +506,11 @@ func (b *Bot) loadMemberCounts() {
 		if cache.Counts == nil {
 			cache.Counts = make(map[snowflake.ID]int)
 		}
+		// Files from before per-thread fetch times have none, so every count
+		// reads as stale and is re-fetched (and old ones pruned) on next use.
+		if cache.Fetched == nil {
+			cache.Fetched = make(map[snowflake.ID]time.Time)
+		}
 		b.memberCounts[guildID] = &cache
 		b.Log.Info("Loaded thread member counts", "guild_id", guildID, "count", len(cache.Counts))
 	}
@@ -483,47 +549,43 @@ func (b *Bot) saveMemberCounts() {
 }
 
 func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID) {
+	if len(threadIDs) == 0 {
+		return
+	}
+
 	b.mu.Lock()
 	cache := b.memberCounts[guildID]
 	if cache == nil {
-		cache = &memberCountCache{Counts: make(map[snowflake.ID]int)}
+		cache = newMemberCountCache()
 		b.memberCounts[guildID] = cache
 	}
+	toFetch := cache.needsFetch(threadIDs, time.Now())
+	b.mu.Unlock()
 
-	// Check which threads are missing from the cache
-	var missing []snowflake.ID
-	for _, id := range threadIDs {
-		if _, ok := cache.Counts[id]; !ok {
-			missing = append(missing, id)
-		}
-	}
-
-	// If all threads are cached and the cache is fresh, nothing to do
-	stale := time.Since(cache.LastRefresh) >= 24*time.Hour
-	if len(missing) == 0 && !stale {
-		b.mu.Unlock()
-		b.Log.Info("Member count cache fresh, skipping refresh", "guild_id", guildID, "cached", len(cache.Counts), "age", time.Since(cache.LastRefresh).Round(time.Minute))
+	if len(toFetch) == 0 {
+		b.Log.Info("Member counts fresh, skipping refresh", "guild_id", guildID, "threads", len(threadIDs))
 		return
 	}
-	b.mu.Unlock()
 
-	// If stale, refresh all requested threads; otherwise just the missing ones
-	toFetch := missing
-	if stale {
-		toFetch = threadIDs
-	}
-
-	b.Log.Info("Refreshing thread member counts", "guild_id", guildID, "fetching", len(toFetch), "stale", stale)
+	// List Thread Members is ordered by user ID, not join time, so there is no
+	// watermark to fetch only new members: each refresh lists the whole thread.
+	b.Log.Info("Refreshing thread member counts", "guild_id", guildID, "fetching", len(toFetch))
+	var fetched int
 	for _, threadID := range toFetch {
 		n := b.countThreadMembers(threadID)
+		if n == 0 {
+			// Failed; leave it unrecorded so the next use retries it.
+			continue
+		}
 		b.mu.Lock()
-		cache.Counts[threadID] = n
+		cache.set(threadID, n, time.Now())
 		b.mu.Unlock()
+		fetched++
 	}
 	b.mu.Lock()
-	cache.LastRefresh = time.Now()
+	cache.prune(time.Now())
 	b.mu.Unlock()
-	b.Log.Info("Finished refreshing thread member counts", "guild_id", guildID, "fetched", len(toFetch))
+	b.Log.Info("Finished refreshing thread member counts", "guild_id", guildID, "fetched", fetched, "failed", len(toFetch)-fetched)
 
 	ctx := context.Background()
 	b.mu.Lock()
