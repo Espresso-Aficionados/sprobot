@@ -30,12 +30,14 @@ data, and **that copy is exempt from Message Content**. The catch is that the
 sticky is created later, on modal submit, which is a separate interaction. So
 the bot carries the resolved message across (`pkg/stickybot/commands.go`):
 
-- **Stash:** `handleStickyMenu` stores `data.TargetMessage()` in an in-memory
-  map keyed by message ID (`pendingSticky`, guarded by `pendingMu`).
+- **Stash:** `handleStickyMenu` stores `data.TargetMessage()` in a
+  `botutil.MessageStash` (`pkg/botutil/stash.go`), an in-memory map keyed by
+  message ID. sprobot's "Save message to mod log" uses the same type (PR
+  #248).
 - **Consume:** `handleStickyConfigModal` reads the stash first. It calls
   `Rest.GetMessage` only if the entry is missing, which means the bot
   restarted while the modal was open.
-- **TTL:** entries are kept for `pendingStickyTTL` (20 minutes), which is
+- **TTL:** entries are kept for `botutil.MessageStashTTL` (20 minutes), which is
   longer than the 15-minute modal token lifetime, so no valid submit can
   outlive its entry. Expired entries are pruned on every access.
 - **Non-destructive reads:** reading doesn't remove the entry, so concurrent

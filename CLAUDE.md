@@ -67,6 +67,16 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
 - **sprobot's disgo caches are persisted** to `/sprobot-cache/*.json`
   (`pkg/bot/groupedcache.go`) with size caps. The message cache also has a
   30-day retention limit. See the compliance rules below before touching it.
+  - The enabled caches are an explicit list, `enabledCacheFlags`, never
+    `cache.FlagsAll`. `TestCacheFlagsClassified` fails CI until every disgo
+    cache flag is either persisted or listed in `disabledCacheFlags` with a
+    reason. When a disgo upgrade trips it, the default answer is "disabled".
+  - Flags only gate disgo's default caches. A custom cache passed with
+    `cache.With*Cache` ignores them, so removing a cache means removing its
+    option too.
+- **Context-menu targets** are carried to modal submits with
+  `botutil.MessageStash`, not re-fetched over REST (see
+  `docs/privileged-intents/stickybot.md`).
 - **Slash commands are registered per guild**, not globally.
 - **Component custom IDs** for sprobot are routed in
   `handleComponentInteraction` (`pkg/bot/deleteprofile.go`).
@@ -98,7 +108,9 @@ Read that README before changing anything below.
 
 Current approved set:
 - **sprobot:** Server Members + Message Content.
-- **threadbot:** Server Members (REST List Thread Members only).
+- **threadbot:** Server Members, for exact thread member counts only: the List
+  Thread Members REST endpoint, plus thread member add/remove events on the
+  gateway. Nothing about members is stored.
 - **stickybot:** none.
 - **No bot uses Presence.**
 

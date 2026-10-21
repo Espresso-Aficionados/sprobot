@@ -19,7 +19,7 @@ from S3 only.
 | Event log: message deleted | Cached content and author of the deleted message. Delete events carry no content, so this relies on the message cache (below). | `onMessageDelete`, `pkg/bot/eventlog.go` |
 | Event log: message edited | Old content (from cache) vs new content (`MESSAGE_UPDATE`), shown as Before/After. Without the intent both sides would be empty and every edit log would be dropped. | `onMessageUpdate`, `pkg/bot/eventlog.go` |
 | Starboard | Content and first image attachment of the starred message, fetched with `Rest.GetMessage` after a reaction | `postStarboardEntry`, `pkg/bot/topreactions.go` |
-| "Save message to mod log" context menu | Content (split into fields) and attachments (copied to S3) of the target message | `handleModLogModalSubmit`, `pkg/bot/modlog.go` |
+| "Save message to mod log" context menu | Content (split into fields) and attachments (copied to S3) of the target message. Read from the exempt context-menu resolved target (`botutil.MessageStash`). Only a modal submitted across a bot restart falls back to `Rest.GetMessage`, which needs the intent. | `handleModLogModalSubmit`, `pkg/bot/modlog.go` |
 
 ### The message cache
 
@@ -87,21 +87,32 @@ survives restarts.
 
 ## Open items to resolve before the next renewal
 
-1. **Mod-log save re-fetches through REST.** `handleModLogMenu` already has the
-   exempt resolved target (`data.TargetMessage()`), but only its IDs are
-   carried to the modal submit, which then calls `Rest.GetMessage`. Using
-   stickybot's stash pattern ([stickybot.md](stickybot.md)) would remove one
-   Message Content dependency. It wouldn't remove the intent, since the event
-   log still needs it.
-2. **Persisted caches that nothing reads.** The thread-member and presence
-   caches are written to disk but no sprobot feature reads them. Dropping them
-   is cheap data minimisation and simplifies the review answers.
-3. **Retention of non-message caches.** Only the message cache has a time
-   limit. The member, thread-member and presence caches are size-capped but
-   otherwise persist indefinitely. `PRIVACY.md` doesn't promise otherwise, but
-   expect the question.
-4. **Temp-role detection overlap.** Role adds also arrive as audit-log
-   `MemberRoleUpdate` entries, and `checkTempRolesOnMessage` covers active
-   users. Detection could probably move off `GUILD_MEMBER_UPDATE`, although the
-   nickname log and the join/leave/welcome features would still keep Server
-   Members.
+1. **Member cache entries filed under thread IDs (disgo bug).**
+   - disgo's `THREAD_MEMBERS_UPDATE` handler (`bot/handlers/thread_handler.go`
+     in disgo v0.19.6) sets `Member.GuildID` to the *thread* ID before adding
+     the member to the member cache.
+   - Removal on `GUILD_MEMBER_REMOVE` uses the real guild ID, so those entries
+     are never cleared. Departed users' member data can stay in
+     `membercache.json` until the 100k cap evicts it.
+   - Fix by pruning member entries whose group key isn't a known guild ID
+     (on load and periodically), or by patching disgo upstream.
+2. **Retention of the member cache.** Only the message cache has a time limit.
+   Members are removed when they leave the server (apart from item 1), so the
+   cache holds roughly the current membership. `PRIVACY.md` doesn't promise
+   otherwise, but expect the question.
+
+### Resolved
+
+- **Mod-log save re-fetched through REST.** PR #248: it now uses the
+  context-menu resolved target via `botutil.MessageStash`, and falls back to
+  REST only across a restart. This also fixed losing the evidence when the
+  message was deleted while the mod wrote the note.
+- **Persisted caches nothing read.** PR #249: the presence and thread-member
+  caches were removed, and their files are deleted on startup.
+  - The enabled caches are now an explicit list (`enabledCacheFlags`), and a
+    test fails until any new disgo cache is classified.
+  - The thread-member cache had about 8k memberships across 673 threads
+    before removal.
+- **Temp-role detection overlap.** Dropped. Moving detection to audit-log
+  entries wouldn't remove Server Members, since the join/leave/welcome and
+  nickname features need it. It would only add REST calls.

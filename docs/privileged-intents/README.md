@@ -11,7 +11,7 @@ investigation.
 | Bot | Discord app ID | Server Members | Message Content | Details |
 |---|---|---|---|---|
 | sprobot | 769290355572867082 | Approved | Approved | [sprobot.md](sprobot.md) |
-| threadbot | 1474854517236302015 | Approved | Not used | [threadbot.md](threadbot.md) |
+| threadbot | 1474854517236302015 | Approved (REST + gateway events) | Not used | [threadbot.md](threadbot.md) |
 | stickybot | 1474049801078181888 | Not used | Not used (dropped 2026-08) | [stickybot.md](stickybot.md) |
 
 Presence is not used by any bot, and nothing should add it.
@@ -47,6 +47,11 @@ intent either.
 **Ordering lesson.** When dropping an intent, deploy the code that stops
 depending on it **first**, then turn the portal toggle off. Turning the toggle
 off first breaks the REST paths immediately.
+
+It is worse for an intent in a bot's identify bitmask. Discord then refuses the
+gateway connection outright (close code 4014, disallowed intents), and the bot
+goes offline. That applies to sprobot's Server Members and Message Content, and
+to threadbot's Server Members (since PR #251).
 
 ## Renewal checklist
 
