@@ -2,6 +2,7 @@ package bot
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -81,6 +83,7 @@ const soundboardSoundCacheFile = "soundboardsoundcache.json"
 // initCaches creates the capped caches behind disgo's.
 func (b *Bot) initCaches() {
 	b.msgCache = newCappedGroupedCache[discord.Message](1000000)
+	b.msgCache.loadByID = true
 	b.memberCache = newCappedGroupedCache[discord.Member](100000)
 	b.guildCache = newCappedCache[discord.Guild](100)
 	b.channelCache = newCappedCache[discord.GuildChannel](10000)
@@ -111,10 +114,23 @@ func (b *Bot) cacheConfig() []cache.ConfigOpt {
 	}
 }
 
+// cacheKey is a place in a cappedGroupedCache's insertion order. seq tells a
+// live place from a stale one: an entry that was removed, or removed and put
+// back, no longer has the seq of its old place.
 type cacheKey struct {
 	GroupID snowflake.ID
 	ID      snowflake.ID
+	seq     uint64
 }
+
+type cacheEntry[T any] struct {
+	entity T
+	seq    uint64
+}
+
+// orderSlack is how far order may grow past twice the live size before it is
+// compacted, so small caches don't compact on every removal.
+const orderSlack = 1024
 
 var _ cache.GroupedCache[discord.Message] = (*cappedGroupedCache[discord.Message])(nil)
 var _ cache.GroupedCache[discord.Member] = (*cappedGroupedCache[discord.Member])(nil)
@@ -151,18 +167,27 @@ func (c *cappedCache[T]) All() iter.Seq[T] {
 	return c.GroupAll(0)
 }
 
+// cappedGroupedCache is a disgo GroupedCache that holds at most maxSize
+// entries, evicting the oldest (first put) beyond that.
 type cappedGroupedCache[T any] struct {
-	mu      sync.RWMutex
-	data    map[snowflake.ID]map[snowflake.ID]T
+	mu   sync.RWMutex
+	data map[snowflake.ID]map[snowflake.ID]cacheEntry[T]
+	// order holds the entries' keys in insertion order from head on, mixed
+	// with stale keys left by removals; compact drops those.
 	order   []cacheKey
 	head    int
+	seq     uint64 // the last seq handed out
 	size    int
 	maxSize int
+	// loadByID makes load order the entries by ID instead of file order. It's
+	// set for messages, whose IDs are their creation times, so a file saved
+	// in map order (before snapshot kept insertion order) evicts oldest first.
+	loadByID bool
 }
 
 func newCappedGroupedCache[T any](maxSize int) *cappedGroupedCache[T] {
 	return &cappedGroupedCache[T]{
-		data:    make(map[snowflake.ID]map[snowflake.ID]T),
+		data:    make(map[snowflake.ID]map[snowflake.ID]cacheEntry[T]),
 		maxSize: maxSize,
 	}
 }
@@ -170,13 +195,8 @@ func newCappedGroupedCache[T any](maxSize int) *cappedGroupedCache[T] {
 func (c *cappedGroupedCache[T]) Get(groupID snowflake.ID, id snowflake.ID) (T, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if group, ok := c.data[groupID]; ok {
-		if entity, ok := group[id]; ok {
-			return entity, true
-		}
-	}
-	var zero T
-	return zero, false
+	e, ok := c.data[groupID][id]
+	return e.entity, ok
 }
 
 func (c *cappedGroupedCache[T]) Put(groupID snowflake.ID, id snowflake.ID, entity T) {
@@ -186,125 +206,128 @@ func (c *cappedGroupedCache[T]) Put(groupID snowflake.ID, id snowflake.ID, entit
 	c.evict()
 }
 
+// put adds or replaces an entry without evicting. A replaced entry keeps its
+// place in the order.
 func (c *cappedGroupedCache[T]) put(groupID snowflake.ID, id snowflake.ID, entity T) {
-	if group, ok := c.data[groupID]; ok {
-		if _, exists := group[id]; !exists {
-			c.order = append(c.order, cacheKey{GroupID: groupID, ID: id})
-			c.size++
-		}
-		group[id] = entity
-	} else {
-		group = map[snowflake.ID]T{id: entity}
+	group, ok := c.data[groupID]
+	if !ok {
+		group = make(map[snowflake.ID]cacheEntry[T])
 		c.data[groupID] = group
-		c.order = append(c.order, cacheKey{GroupID: groupID, ID: id})
-		c.size++
 	}
+	if e, ok := group[id]; ok {
+		group[id] = cacheEntry[T]{entity: entity, seq: e.seq}
+		return
+	}
+	c.seq++
+	group[id] = cacheEntry[T]{entity: entity, seq: c.seq}
+	c.order = append(c.order, cacheKey{GroupID: groupID, ID: id, seq: c.seq})
+	c.size++
 }
 
+// live reports whether key is the current place of an entry.
+func (c *cappedGroupedCache[T]) live(key cacheKey) bool {
+	e, ok := c.data[key.GroupID][key.ID]
+	return ok && e.seq == key.seq
+}
+
+// evict removes the oldest entries until the cache is within maxSize.
 func (c *cappedGroupedCache[T]) evict() {
 	for c.size > c.maxSize && c.head < len(c.order) {
 		key := c.order[c.head]
-		c.order[c.head] = cacheKey{} // clear reference
 		c.head++
-		if group, ok := c.data[key.GroupID]; ok {
-			if _, ok := group[key.ID]; ok {
-				delete(group, key.ID)
-				c.size--
-				if len(group) == 0 {
-					delete(c.data, key.GroupID)
-				}
-				break
-			}
+		if c.live(key) {
+			c.remove(key.GroupID, key.ID)
 		}
-		// Entry already removed — skip stale and continue loop
 	}
-
-	// Compact when the dead prefix is at least half the slice.
-	if c.head >= len(c.order)/2 && c.head > 0 {
-		remaining := copy(c.order, c.order[c.head:])
-		for i := remaining; i < len(c.order); i++ {
-			c.order[i] = cacheKey{}
-		}
-		c.order = c.order[:remaining]
-		c.head = 0
-	}
+	c.compact()
 }
 
-func (c *cappedGroupedCache[T]) len() int {
-	return c.size
+// compact rebuilds order from its live keys once evicted and stale keys
+// outnumber them, keeping order within about twice the live size.
+func (c *cappedGroupedCache[T]) compact() {
+	if len(c.order) <= 2*c.size+orderSlack {
+		return
+	}
+	order := make([]cacheKey, 0, c.size)
+	for _, key := range c.order[c.head:] {
+		if c.live(key) {
+			order = append(order, key)
+		}
+	}
+	c.order = order
+	c.head = 0
+}
+
+// remove deletes an entry, leaving its key in order stale.
+func (c *cappedGroupedCache[T]) remove(groupID snowflake.ID, id snowflake.ID) (T, bool) {
+	group := c.data[groupID]
+	e, ok := group[id]
+	if !ok {
+		return e.entity, false
+	}
+	delete(group, id)
+	c.size--
+	if len(group) == 0 {
+		delete(c.data, groupID)
+	}
+	return e.entity, true
 }
 
 func (c *cappedGroupedCache[T]) Remove(groupID snowflake.ID, id snowflake.ID) (T, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if group, ok := c.data[groupID]; ok {
-		if entity, ok := group[id]; ok {
-			delete(group, id)
-			c.size--
-			if len(group) == 0 {
-				delete(c.data, groupID)
-			}
-			return entity, true
-		}
-	}
-	var zero T
-	return zero, false
+	entity, ok := c.remove(groupID, id)
+	c.compact()
+	return entity, ok
 }
 
 func (c *cappedGroupedCache[T]) GroupRemove(groupID snowflake.ID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if group, ok := c.data[groupID]; ok {
-		c.size -= len(group)
-		delete(c.data, groupID)
-	}
+	c.size -= len(c.data[groupID])
+	delete(c.data, groupID)
+	c.compact()
 }
 
 func (c *cappedGroupedCache[T]) RemoveIf(filterFunc cache.GroupedFilterFunc[T]) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for groupID, group := range c.data {
-		for id, entity := range group {
-			if filterFunc(groupID, entity) {
-				delete(group, id)
-				c.size--
-			}
-		}
-		if len(group) == 0 {
-			delete(c.data, groupID)
-		}
+	for groupID := range c.data {
+		c.groupRemoveIf(groupID, filterFunc)
 	}
+	c.compact()
 }
 
 func (c *cappedGroupedCache[T]) GroupRemoveIf(groupID snowflake.ID, filterFunc cache.GroupedFilterFunc[T]) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if group, ok := c.data[groupID]; ok {
-		for id, entity := range group {
-			if filterFunc(groupID, entity) {
-				delete(group, id)
-				c.size--
-			}
+	c.groupRemoveIf(groupID, filterFunc)
+	c.compact()
+}
+
+func (c *cappedGroupedCache[T]) groupRemoveIf(groupID snowflake.ID, filterFunc cache.GroupedFilterFunc[T]) {
+	group := c.data[groupID]
+	for id, e := range group {
+		if filterFunc(groupID, e.entity) {
+			delete(group, id)
+			c.size--
 		}
-		if len(group) == 0 {
-			delete(c.data, groupID)
-		}
+	}
+	if len(group) == 0 {
+		delete(c.data, groupID)
 	}
 }
 
 func (c *cappedGroupedCache[T]) Len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.len()
+	return c.size
 }
 
 func (c *cappedGroupedCache[T]) GroupLen(groupID snowflake.ID) int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if group, ok := c.data[groupID]; ok {
-		return len(group)
-	}
-	return 0
+	return len(c.data[groupID])
 }
 
 func (c *cappedGroupedCache[T]) All() iter.Seq2[snowflake.ID, T] {
@@ -312,8 +335,8 @@ func (c *cappedGroupedCache[T]) All() iter.Seq2[snowflake.ID, T] {
 		c.mu.RLock()
 		defer c.mu.RUnlock()
 		for groupID, group := range c.data {
-			for _, entity := range group {
-				if !yield(groupID, entity) {
+			for _, e := range group {
+				if !yield(groupID, e.entity) {
 					return
 				}
 			}
@@ -325,39 +348,44 @@ func (c *cappedGroupedCache[T]) GroupAll(groupID snowflake.ID) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		c.mu.RLock()
 		defer c.mu.RUnlock()
-		if group, ok := c.data[groupID]; ok {
-			for _, entity := range group {
-				if !yield(entity) {
-					return
-				}
+		for _, e := range c.data[groupID] {
+			if !yield(e.entity) {
+				return
 			}
 		}
 	}
 }
 
-// snapshot returns all cached entities for persistence.
+// snapshot returns the entries oldest first, for saving. It holds the read
+// lock throughout, blocking Put (and with it disgo's gateway handling), so it
+// only copies.
 func (c *cappedGroupedCache[T]) snapshot() []T {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	var items []T
-	for _, group := range c.data {
-		for _, entity := range group {
-			items = append(items, entity)
+	items := make([]T, 0, c.size)
+	for _, key := range c.order[c.head:] {
+		if e, ok := c.data[key.GroupID][key.ID]; ok && e.seq == key.seq {
+			items = append(items, e.entity)
 		}
 	}
 	return items
 }
 
 // load replaces the cache's contents with the entries fill passes to add,
-// and returns how many it holds afterwards.
+// oldest first, then evicts down to maxSize. It returns how many entries it
+// kept.
 func (c *cappedGroupedCache[T]) load(fill func(add func(groupID, id snowflake.ID, entity T)) error) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.data = make(map[snowflake.ID]map[snowflake.ID]T)
+	c.data = make(map[snowflake.ID]map[snowflake.ID]cacheEntry[T])
 	c.order = nil
 	c.head = 0
 	c.size = 0
 	err := fill(c.put)
+	if c.loadByID {
+		slices.SortFunc(c.order, func(a, b cacheKey) int { return cmp.Compare(a.ID, b.ID) })
+	}
+	c.evict()
 	return c.size, err
 }
 

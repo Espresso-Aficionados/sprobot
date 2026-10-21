@@ -397,31 +397,141 @@ func TestCappedCache_EvictionCompaction(t *testing.T) {
 	c := newCappedGroupedCache[discord.Message](cap)
 	ch := snowflake.ID(1)
 
-	// Fill and overflow many times to trigger repeated evictions and compactions.
-	totalInserts := cap * 10
-	for i := 1; i <= totalInserts; i++ {
+	// Overflow many times to trigger repeated evictions and compactions.
+	for i := 1; i <= 10*orderSlack; i++ {
 		c.Put(ch, snowflake.ID(i), makeMessage(ch, snowflake.ID(i)))
 	}
 
 	if c.Len() != cap {
 		t.Fatalf("len = %d, want %d", c.Len(), cap)
 	}
-
-	// The order slice (from head onward) should not be much larger than size.
-	// With compaction, len(order) - head should equal size (no stale entries
-	// remain because we only insert into one group, so evict never skips).
-	active := len(c.order) - c.head
-	if active > cap*2 {
-		t.Fatalf("order active region = %d, want <= %d (head=%d, len=%d)",
-			active, cap*2, c.head, len(c.order))
+	if len(c.order) > 2*cap+orderSlack {
+		t.Fatalf("order slice length = %d, want <= %d", len(c.order), 2*cap+orderSlack)
 	}
+}
 
-	// head should have been compacted at least once (not still 0 only if
-	// no compaction happened, but after 10x overflow it definitely did).
-	// After the final compaction head resets to 0, so just verify the slice
-	// isn't unbounded.
-	if len(c.order) > cap*2 {
-		t.Fatalf("order slice length = %d, should be bounded near cap (%d)", len(c.order), cap)
+// TestCappedCache_OrderBoundedBelowCap: removals never reach evict, so they
+// must compact order themselves.
+func TestCappedCache_OrderBoundedBelowCap(t *testing.T) {
+	c := newCappedGroupedCache[discord.Member](1000000)
+	guild := snowflake.ID(1)
+	for i := 1; i <= 10*orderSlack; i++ {
+		c.Put(guild, snowflake.ID(i), discord.Member{})
+		switch i % 3 {
+		case 0:
+			c.Remove(guild, snowflake.ID(i))
+		case 1:
+			c.RemoveIf(func(_ snowflake.ID, _ discord.Member) bool { return false }) // no-op
+		case 2:
+			c.GroupRemoveIf(guild, func(_ snowflake.ID, _ discord.Member) bool { return true })
+		}
+	}
+	if len(c.order) > 2*c.Len()+orderSlack {
+		t.Fatalf("order slice length = %d with %d live entries", len(c.order), c.Len())
+	}
+}
+
+// TestCappedCache_ReaddedEntryIsNewest: an entry removed and put back must
+// not be evicted from its old place in the order.
+func TestCappedCache_ReaddedEntryIsNewest(t *testing.T) {
+	c := newCappedGroupedCache[discord.Member](2)
+	guild := snowflake.ID(1)
+	c.Put(guild, 1, discord.Member{})
+	c.Put(guild, 2, discord.Member{})
+	c.Remove(guild, 1)
+	c.Put(guild, 1, discord.Member{}) // now newer than 2
+	c.Put(guild, 3, discord.Member{}) // over the cap: evicts 2
+
+	if _, ok := c.Get(guild, 2); ok {
+		t.Error("2 is the oldest entry but was kept")
+	}
+	for _, id := range []snowflake.ID{1, 3} {
+		if _, ok := c.Get(guild, id); !ok {
+			t.Errorf("%d was evicted", id)
+		}
+	}
+}
+
+func TestCappedCache_EvictsDownToMaxSize(t *testing.T) {
+	c := newCappedGroupedCache[discord.Member](10)
+	for i := 1; i <= 10; i++ {
+		c.Put(1, snowflake.ID(i), discord.Member{})
+	}
+	c.maxSize = 5
+	c.Put(1, 11, discord.Member{})
+	if c.Len() != 5 {
+		t.Fatalf("len = %d, want 5", c.Len())
+	}
+	for i := 7; i <= 11; i++ {
+		if _, ok := c.Get(1, snowflake.ID(i)); !ok {
+			t.Errorf("newest entry %d was evicted", i)
+		}
+	}
+}
+
+func TestCappedCache_SnapshotInInsertionOrder(t *testing.T) {
+	c := newCappedGroupedCache[discord.Role](1000)
+	var want []snowflake.ID
+	for i := 0; i < 200; i++ {
+		id := snowflake.ID(1000 - i) // descending, so neither ID nor map order
+		c.Put(snowflake.ID(i%7), id, discord.Role{ID: id})
+		want = append(want, id)
+	}
+	moved := want[3]
+	c.Remove(3, moved)
+	c.Put(3, moved, discord.Role{ID: moved}) // now the newest
+	want = append(slices.Delete(want, 3, 4), moved)
+
+	var got []snowflake.ID
+	for _, r := range c.snapshot() {
+		got = append(got, r.ID)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("snapshot order = %v,\nwant %v", got, want)
+	}
+}
+
+// TestCappedCache_LoadTrimsOldest: entries load oldest first and the cap
+// applies, evicting from the start of the file.
+func TestCappedCache_LoadTrimsOldest(t *testing.T) {
+	c := newCappedGroupedCache[discord.Role](3)
+	var roles []discord.Role
+	for _, id := range []snowflake.ID{50, 40, 30, 20, 10} {
+		roles = append(roles, discord.Role{ID: id, GuildID: 1})
+	}
+	loadItems(c, roles, func(r discord.Role) (snowflake.ID, snowflake.ID) { return r.GuildID, r.ID })
+
+	if c.Len() != 3 {
+		t.Fatalf("len = %d, want 3", c.Len())
+	}
+	c.Put(1, 60, discord.Role{ID: 60})
+	var got []snowflake.ID
+	for _, r := range c.snapshot() {
+		got = append(got, r.ID)
+	}
+	if want := []snowflake.ID{20, 10, 60}; !slices.Equal(got, want) {
+		t.Errorf("after load and put: %v, want %v", got, want)
+	}
+}
+
+// TestCappedCache_LoadByID: the message cache orders loaded entries by ID,
+// so a file saved in map order still evicts the oldest messages first.
+func TestCappedCache_LoadByID(t *testing.T) {
+	c := newCappedGroupedCache[discord.Message](3)
+	c.loadByID = true
+	var msgs []discord.Message
+	for _, id := range []snowflake.ID{30, 10, 50, 20, 40} {
+		msgs = append(msgs, makeMessage(id/10%2, id))
+	}
+	loadItems(c, msgs, func(m discord.Message) (snowflake.ID, snowflake.ID) { return m.ChannelID, m.ID })
+
+	c.Put(0, 60, makeMessage(0, 60))
+	var got []snowflake.ID
+	for _, m := range c.snapshot() {
+		got = append(got, m.ID)
+	}
+	if want := []snowflake.ID{40, 50, 60}; !slices.Equal(got, want) {
+		t.Errorf("after load and put: %v, want %v", got, want)
 	}
 }
 
@@ -561,15 +671,15 @@ func TestUngroupedCache_EvictionCompaction(t *testing.T) {
 	const cap = 50
 	c := newCappedCache[discord.Guild](cap)
 
-	for i := 1; i <= cap*10; i++ {
+	for i := 1; i <= 10*orderSlack; i++ {
 		c.Put(snowflake.ID(i), discord.Guild{ID: snowflake.ID(i)})
 	}
 
 	if c.Len() != cap {
 		t.Fatalf("len = %d, want %d", c.Len(), cap)
 	}
-	if len(c.order) > cap*2 {
-		t.Fatalf("order slice length = %d, should be bounded near cap (%d)", len(c.order), cap)
+	if len(c.order) > 2*cap+orderSlack {
+		t.Fatalf("order slice length = %d, want <= %d", len(c.order), 2*cap+orderSlack)
 	}
 }
 
@@ -738,6 +848,31 @@ func TestCachesRoundTrip(t *testing.T) {
 }
 
 func has[T any](_ T, ok bool) bool { return ok }
+
+// TestCachesRoundTrip_KeepsEvictionOrder: after a restart the oldest entries
+// are still the first evicted.
+func TestCachesRoundTrip_KeepsEvictionOrder(t *testing.T) {
+	b := newCacheTestBot(t)
+	guildID := snowflake.ID(1)
+	for _, userID := range []snowflake.ID{50, 30, 10, 40, 20} {
+		b.memberCache.Put(guildID, userID, discord.Member{GuildID: guildID, User: discord.User{ID: userID}})
+	}
+	b.saveCaches()
+
+	got := newCacheTestBot(t)
+	got.cacheDir = b.cacheDir
+	got.memberCache.maxSize = 3
+	got.loadCaches()
+	got.memberCache.Put(guildID, 60, discord.Member{GuildID: guildID, User: discord.User{ID: 60}})
+
+	var ids []snowflake.ID
+	for _, m := range got.memberCache.snapshot() {
+		ids = append(ids, m.User.ID)
+	}
+	if want := []snowflake.ID{40, 20, 60}; !slices.Equal(ids, want) {
+		t.Errorf("members after restart and put = %v, want %v", ids, want)
+	}
+}
 
 // TestLoadCaches_LegacyFiles loads files as the old per-cache savers wrote
 // them: compact json.Marshal output, and null for an empty grouped cache.
