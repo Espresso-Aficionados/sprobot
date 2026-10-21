@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 
@@ -122,6 +123,37 @@ func TestPostWithRetryDoesNotRetryClientErrors(t *testing.T) {
 	}
 	if n := len(api.sent()); n != 1 {
 		t.Errorf("attempts after a 400 = %d, want 1", n)
+	}
+}
+
+func TestFollowupEphemeral(t *testing.T) {
+	var mu sync.Mutex
+	var route string
+	var body discord.MessageCreate
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		route = r.Method + " " + r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "channel_id": "2", "content": body.Content,
+			"author":    map[string]any{"id": "3", "username": "bot", "bot": true},
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
+	}))
+	defer srv.Close()
+	client := &bot.Client{ApplicationID: 42, Rest: rest.New(rest.NewClient("test", rest.WithURL(srv.URL)))}
+
+	FollowupEphemeral(client, "tok", "Saved.")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if route != "POST /webhooks/42/tok" {
+		t.Errorf("request = %q, want the follow-up webhook for the interaction token", route)
+	}
+	if body.Content != "Saved." || body.Flags != discord.MessageFlagEphemeral {
+		t.Errorf("follow-up = %+v, want ephemeral %q", body, "Saved.")
 	}
 }
 

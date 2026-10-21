@@ -32,6 +32,17 @@ func RespondEphemeral(e MessageResponder, content string) {
 	}
 }
 
+// FollowupEphemeral answers a deferred interaction with an ephemeral
+// follow-up message, logging any failure.
+func FollowupEphemeral(client *bot.Client, token, content string) {
+	if _, err := client.Rest.CreateFollowupMessage(client.ApplicationID, token, discord.MessageCreate{
+		Content: content,
+		Flags:   discord.MessageFlagEphemeral,
+	}); err != nil {
+		slog.Error("Failed to send follow-up", "error", err)
+	}
+}
+
 // postRetryDelay is the backoff step between PostWithRetry attempts, a
 // variable so tests can shorten it.
 var postRetryDelay = 2 * time.Second
