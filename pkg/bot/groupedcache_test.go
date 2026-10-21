@@ -9,8 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/bot/handlers"
 	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -821,6 +824,119 @@ func TestDisabledCachesStoreNothing(t *testing.T) {
 	}
 }
 
+// --- Fixes for disgo's cache handling ---
+
+// gatewayTestClient returns a disgo client over b's caches, to feed gateway
+// events through disgo's own handlers.
+func gatewayTestClient(b *Bot) *bot.Client {
+	client := &bot.Client{Caches: cache.New(b.cacheConfig()...), Logger: slog.New(slog.DiscardHandler)}
+	client.EventManager = bot.NewEventManager(client)
+	return client
+}
+
+func handleGatewayEvent(client *bot.Client, eventType gateway.EventType, event gateway.EventData) {
+	handlers.GetGatewayHandlers()[eventType].HandleGatewayEvent(client, 0, 0, event)
+}
+
+// TestMemberCache_SkipsThreadMembers: disgo's THREAD_MEMBERS_UPDATE handler
+// adds the joining member to the member cache under the thread ID.
+func TestMemberCache_SkipsThreadMembers(t *testing.T) {
+	b := newCacheTestBot(t)
+	client := gatewayTestClient(b)
+	guildID, threadID, userID := botutil.AllowedGuildIDs[0], snowflake.ID(500), snowflake.ID(3)
+
+	handleGatewayEvent(client, gateway.EventTypeThreadMembersUpdate, gateway.EventThreadMembersUpdate{
+		ID:      threadID,
+		GuildID: guildID,
+		AddedMembers: []gateway.AddedThreadMember{{
+			ThreadMember: discord.ThreadMember{ThreadID: threadID, UserID: userID},
+			Member:       discord.Member{User: discord.User{ID: userID}},
+		}},
+	})
+	if n := b.memberCache.Len(); n != 0 {
+		t.Errorf("member cache holds %d entries after a thread join, want 0", n)
+	}
+
+	// Members of an allowed guild, or of one in the guild cache, are kept.
+	otherGuildID := snowflake.ID(600)
+	b.guildCache.Put(otherGuildID, discord.Guild{ID: otherGuildID})
+	for _, id := range []snowflake.ID{guildID, otherGuildID} {
+		handleGatewayEvent(client, gateway.EventTypeGuildMemberAdd, gateway.EventGuildMemberAdd{
+			Member: discord.Member{GuildID: id, User: discord.User{ID: userID}},
+		})
+		if _, ok := b.memberCache.Get(id, userID); !ok {
+			t.Errorf("member of guild %d not cached", id)
+		}
+	}
+}
+
+func TestLoadCaches_DropsMembersOutsideGuilds(t *testing.T) {
+	b := newCacheTestBot(t)
+	allowedID, cachedGuildID, threadID := botutil.AllowedGuildIDs[0], snowflake.ID(600), snowflake.ID(500)
+	if err := writeCacheFile(b.cacheDir, guildCacheFile, []discord.Guild{{ID: cachedGuildID}}); err != nil {
+		t.Fatal(err)
+	}
+	members := []discord.Member{
+		{GuildID: allowedID, User: discord.User{ID: 1}},
+		{GuildID: cachedGuildID, User: discord.User{ID: 2}},
+		{GuildID: threadID, User: discord.User{ID: 3}},
+	}
+	if err := writeCacheFile(b.cacheDir, memberCacheFile, members); err != nil {
+		t.Fatal(err)
+	}
+
+	b.loadCaches()
+
+	if b.memberCache.Len() != 2 {
+		t.Errorf("loaded %d members, want 2", b.memberCache.Len())
+	}
+	if _, ok := b.memberCache.Get(threadID, 3); ok {
+		t.Error("member filed under a thread ID was loaded")
+	}
+	for _, m := range members[:2] {
+		if _, ok := b.memberCache.Get(m.GuildID, m.User.ID); !ok {
+			t.Errorf("member of guild %d not loaded", m.GuildID)
+		}
+	}
+}
+
+// TestGuildOutage_KeepsMessagesAndMembers runs disgo's GUILD_DELETE and
+// GUILD_CREATE handlers through an outage, then a real departure.
+func TestGuildOutage_KeepsMessagesAndMembers(t *testing.T) {
+	b := newCacheTestBot(t)
+	client := gatewayTestClient(b)
+	guildID, channelID, userID := botutil.AllowedGuildIDs[0], snowflake.ID(2), snowflake.ID(3)
+	msgID := snowflake.New(time.Now())
+	msg := makeMessage(channelID, msgID)
+	msg.GuildID = &guildID
+	b.msgCache.Put(channelID, msgID, msg)
+	b.memberCache.Put(guildID, userID, discord.Member{GuildID: guildID, User: discord.User{ID: userID}})
+	check := func(when string, want bool) {
+		t.Helper()
+		if _, ok := b.msgCache.Get(channelID, msgID); ok != want {
+			t.Errorf("%s: message cached = %v, want %v", when, ok, want)
+		}
+		if _, ok := b.memberCache.Get(guildID, userID); ok != want {
+			t.Errorf("%s: member cached = %v, want %v", when, ok, want)
+		}
+	}
+
+	handleGatewayEvent(client, gateway.EventTypeGuildDelete, gateway.EventGuildDelete{
+		UnavailableGuild: discord.UnavailableGuild{ID: guildID, Unavailable: true},
+	})
+	check("guild unavailable", true)
+
+	handleGatewayEvent(client, gateway.EventTypeGuildCreate, gateway.EventGuildCreate{
+		GatewayGuild: discord.GatewayGuild{RestGuild: discord.RestGuild{Guild: discord.Guild{ID: guildID}}},
+	})
+	check("guild back", true)
+
+	handleGatewayEvent(client, gateway.EventTypeGuildDelete, gateway.EventGuildDelete{
+		UnavailableGuild: discord.UnavailableGuild{ID: guildID},
+	})
+	check("left guild", false)
+}
+
 // --- Persistence ---
 
 // newCacheTestBot returns a bot with empty caches persisted to a temp dir.
@@ -926,7 +1042,7 @@ func has[T any](_ T, ok bool) bool { return ok }
 // are still the first evicted.
 func TestCachesRoundTrip_KeepsEvictionOrder(t *testing.T) {
 	b := newCacheTestBot(t)
-	guildID := snowflake.ID(1)
+	guildID := botutil.AllowedGuildIDs[0]
 	for _, userID := range []snowflake.ID{50, 30, 10, 40, 20} {
 		b.memberCache.Put(guildID, userID, discord.Member{GuildID: guildID, User: discord.User{ID: userID}})
 	}
