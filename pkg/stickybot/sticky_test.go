@@ -97,24 +97,27 @@ func TestJSONOmitsEmptyEmbeds(t *testing.T) {
 	}
 }
 
-func TestApplyDefaults(t *testing.T) {
-	s := &stickyMessage{}
-	s.applyDefaults()
-	if s.MinIdleMins != 15 {
-		t.Errorf("MinIdleMins = %d, want 15", s.MinIdleMins)
-	}
-	if s.MaxIdleMins != 30 {
-		t.Errorf("MaxIdleMins = %d, want 30", s.MaxIdleMins)
-	}
-	if s.MsgThreshold != 30 {
-		t.Errorf("MsgThreshold = %d, want 30", s.MsgThreshold)
-	}
+// Zero is a valid setting for min idle, the message threshold and the buffer
+// (the modal accepts it), so loading must keep it rather than swap in a
+// default.
+func TestLoadStickiesKeepsZeroSettings(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
 
-	// Non-zero values should not be overwritten
-	s2 := &stickyMessage{MinIdleMins: 5, MaxIdleMins: 10, MsgThreshold: 2}
-	s2.applyDefaults()
-	if s2.MinIdleMins != 5 {
-		t.Errorf("MinIdleMins = %d, want 5", s2.MinIdleMins)
+	fake.Objects["/test-bucket/stickies/1013566342345019512.json"] = []byte(`{"111": {
+		"channel_id": "111", "guild_id": "1013566342345019512", "content": "x", "active": false,
+		"min_idle_mins": 0, "max_idle_mins": 10, "msg_threshold": 0, "time_threshold_mins": 5, "buffer": 0}}`)
+
+	b := newTestBot(t, testutil.NewTestS3Client(t, server))
+	b.loadStickies()
+
+	s := b.stickies[1013566342345019512][111]
+	if s == nil {
+		t.Fatal("sticky not loaded")
+	}
+	if s.MinIdleMins != 0 || s.MsgThreshold != 0 || s.Buffer != 0 {
+		t.Errorf("loaded min idle %d, msg threshold %d, buffer %d; want all 0", s.MinIdleMins, s.MsgThreshold, s.Buffer)
 	}
 }
 

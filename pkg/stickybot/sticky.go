@@ -34,21 +34,6 @@ type stickyMessage struct {
 	Buffer            int             `json:"buffer"`
 }
 
-func (s *stickyMessage) applyDefaults() {
-	if s.MinIdleMins == 0 {
-		s.MinIdleMins = 15
-	}
-	if s.MaxIdleMins == 0 {
-		s.MaxIdleMins = 30
-	}
-	if s.MsgThreshold == 0 {
-		s.MsgThreshold = 30
-	}
-	if s.Buffer == 0 {
-		s.Buffer = 5
-	}
-}
-
 func (b *Bot) loadStickies() {
 	ctx := context.Background()
 	for _, guildID := range b.GuildIDs() {
@@ -70,7 +55,6 @@ func (b *Bot) loadStickies() {
 
 		channels := make(map[snowflake.ID]*stickyMessage, len(loaded))
 		for _, s := range loaded {
-			s.applyDefaults()
 			channels[s.ChannelID] = s
 		}
 		// The gateway is already dispatching events that read b.stickies.
