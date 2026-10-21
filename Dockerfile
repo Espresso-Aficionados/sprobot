@@ -1,25 +1,27 @@
 FROM golang:1.27.3 AS base
 WORKDIR /build
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# Modules are downloaded into the layer, not a cache mount, so layer caching
+# (including CI's) covers them and the test image runs without re-downloading.
+RUN go mod download
 COPY cmd/ cmd/
 COPY pkg/ pkg/
 RUN mkdir /empty-dir
 
 FROM base AS build-sprobot
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /sprobot ./cmd/sprobot
 
 FROM base AS build-sprobot-web
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /sprobot-web ./cmd/sprobot-web
 
 FROM base AS build-stickybot
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /stickybot ./cmd/stickybot
 
 FROM base AS build-threadbot
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /threadbot ./cmd/threadbot
 
 FROM gcr.io/distroless/static-debian12 AS prod
