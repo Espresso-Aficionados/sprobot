@@ -3,7 +3,9 @@ package bot
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,14 +25,16 @@ const profileNameRetry = 10 * time.Minute
 type profileNames struct {
 	mu     sync.Mutex
 	owners map[string]*profileOwner // profileKey -> what we know of this user's profiles
+	listed map[snowflake.ID]bool    // guilds whose stored profiles have been listed
 	locks  sync.Map                 // profileKey -> *sync.Mutex
 }
 
 type profileOwner struct {
-	none    bool   // the user has no profiles in this guild
-	name    string // the name stored with their profiles
-	busy    bool   // an update is running
-	retryAt time.Time
+	none      bool     // the user has no profiles in this guild
+	templates []string // templates the user has a profile in; nil means check every one
+	name      string   // the name stored with their profiles
+	busy      bool     // an update is running
+	retryAt   time.Time
 }
 
 func profileKey(guildID, userID string) string {
@@ -57,12 +61,84 @@ func (b *Bot) profileSaved(guildID, userID, name string) {
 }
 
 // profileDeleted forgets what we know of the user's profiles; their next
-// message checks again. Call it with the profile lock held.
+// message checks every template again. Call it with the profile lock held.
 func (b *Bot) profileDeleted(guildID, userID string) {
 	p := &b.profileNames
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.owners, profileKey(guildID, userID))
+	if p.owners == nil {
+		p.owners = make(map[string]*profileOwner)
+	}
+	// Kept rather than removed: in a listed guild, a missing entry means "no
+	// profiles", and the user may still have one in another template.
+	p.owners[profileKey(guildID, userID)] = &profileOwner{}
+}
+
+// profileOwnersFromKeys maps the stored profile keys of a guild,
+// profiles/{guild}/{template}/{user}.json, to each user's templates. Keys of
+// templates the guild doesn't use are ignored.
+func profileOwnersFromKeys(guildID string, keys []string, templates []string) map[string][]string {
+	owners := make(map[string][]string)
+	for _, key := range keys {
+		rest, ok := strings.CutPrefix(key, "profiles/"+guildID+"/")
+		if !ok {
+			continue
+		}
+		tmpl, file, ok := strings.Cut(rest, "/")
+		userID, isJSON := strings.CutSuffix(file, ".json")
+		if !ok || !isJSON || !slices.Contains(templates, tmpl) {
+			continue
+		}
+		if _, err := snowflake.Parse(userID); err != nil {
+			continue
+		}
+		owners[userID] = append(owners[userID], tmpl)
+	}
+	return owners
+}
+
+// loadProfileOwners lists each guild's stored profiles, so that name updates
+// read only profiles that exist instead of probing every message author. A
+// guild whose listing fails keeps probing.
+func (b *Bot) loadProfileOwners(guildIDs []snowflake.ID) {
+	for _, guildID := range guildIDs {
+		var templates []string
+		for _, tmpl := range b.templates[guildID] {
+			templates = append(templates, tmpl.Name)
+		}
+		if len(templates) == 0 {
+			continue
+		}
+		guildStr := strconv.FormatInt(int64(guildID), 10)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		keys, err := b.S3.ListKeys(ctx, "profiles/"+guildStr+"/")
+		cancel()
+		if err != nil {
+			b.Log.Error("Failed to list profiles; checking authors one by one", "guild_id", guildStr, "error", err)
+			continue
+		}
+		owners := profileOwnersFromKeys(guildStr, keys, templates)
+
+		p := &b.profileNames
+		p.mu.Lock()
+		if p.owners == nil {
+			p.owners = make(map[string]*profileOwner)
+		}
+		if p.listed == nil {
+			p.listed = make(map[snowflake.ID]bool)
+		}
+		for userStr, tmpls := range owners {
+			// Anything recorded since the listing was taken is newer.
+			key := profileKey(guildStr, userStr)
+			if p.owners[key] == nil {
+				p.owners[key] = &profileOwner{templates: tmpls}
+			}
+		}
+		p.listed[guildID] = true
+		p.mu.Unlock()
+		b.Log.Info("Listed profile owners", "guild_id", guildStr, "owners", len(owners))
+	}
 }
 
 // messageDisplayName is the author's name in the guild, resolved the same way
@@ -91,20 +167,29 @@ func (b *Bot) syncProfileName(guildID snowflake.ID, msg discord.Message) {
 	}
 	key := profileKey(guildStr, userStr)
 	o := p.owners[key]
-	if o == nil {
+	switch {
+	case o == nil && p.listed[guildID]:
+		// Not in the listing, and no profile saved since.
+		p.owners[key] = &profileOwner{none: true}
+		p.mu.Unlock()
+		return
+	case o == nil:
 		o = &profileOwner{}
 		p.owners[key] = o
-	} else if o.none || o.busy || o.name == name || time.Now().Before(o.retryAt) {
+	case o.none || o.busy || o.name == name || time.Now().Before(o.retryAt):
 		p.mu.Unlock()
 		return
 	}
 	o.busy = true
+	templates := o.templates
 	p.mu.Unlock()
 
-	go b.writeProfileName(guildID, guildStr, userStr, name, o)
+	go b.writeProfileName(guildID, guildStr, userStr, name, o, templates)
 }
 
-func (b *Bot) writeProfileName(guildID snowflake.ID, guildStr, userStr, name string, o *profileOwner) {
+// writeProfileName stores name in the user's profiles of the given templates,
+// or of every template when templates is nil.
+func (b *Bot) writeProfileName(guildID snowflake.ID, guildStr, userStr, name string, o *profileOwner, templates []string) {
 	lock := b.profileLock(guildStr, userStr)
 	lock.Lock()
 	defer lock.Unlock()
@@ -112,12 +197,16 @@ func (b *Bot) writeProfileName(guildID snowflake.ID, guildStr, userStr, name str
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	found, failed := false, false
+	var found []string
+	failed := false
 	for _, tmpl := range b.templates[guildID] {
+		if templates != nil && !slices.Contains(templates, tmpl.Name) {
+			continue
+		}
 		err := b.S3.SetProfileDisplayName(ctx, tmpl, guildStr, userStr, name)
 		switch {
 		case err == nil:
-			found = true
+			found = append(found, tmpl.Name)
 		case errors.Is(err, s3client.ErrNotFound):
 		default:
 			failed = true
@@ -132,8 +221,9 @@ func (b *Bot) writeProfileName(guildID snowflake.ID, guildStr, userStr, name str
 	switch {
 	case failed:
 		o.retryAt = time.Now().Add(profileNameRetry)
-	case found:
+	case len(found) > 0:
 		o.name = name
+		o.templates = found
 	default:
 		o.none = true
 	}

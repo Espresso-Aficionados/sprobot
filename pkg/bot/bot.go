@@ -368,6 +368,9 @@ func (b *Bot) Run() error {
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045773440", b.Client.ApplicationID))
 
 	b.loadState()
+	// Lists stored profiles from S3 only; name updates probe authors until it
+	// finishes.
+	go b.loadProfileOwners(botutil.AllowedGuildIDs)
 
 	if err := b.OpenGateway(ctx); err != nil {
 		return err

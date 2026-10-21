@@ -2,7 +2,10 @@ package bot
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +162,99 @@ func TestMessageDisplayName(t *testing.T) {
 		if got := messageDisplayName(tt.msg); got != tt.want {
 			t.Errorf("messageDisplayName = %q, want %q", got, tt.want)
 		}
+	}
+}
+
+func TestProfileOwnersFromKeys(t *testing.T) {
+	keys := []string{
+		"profiles/1/Coffee Setup/2.json",
+		"profiles/1/Roasting Setup/2.json",
+		"profiles/1/Roasting Setup/3.json",
+		"profiles/1/Retired Template/4.json",
+		"profiles/1/Coffee Setup/notanid.json",
+		"profiles/1/Coffee Setup/5.txt",
+		"profiles/12/Coffee Setup/6.json",
+	}
+	got := profileOwnersFromKeys("1", keys, []string{"Coffee Setup", "Roasting Setup"})
+	want := map[string][]string{"2": {"Coffee Setup", "Roasting Setup"}, "3": {"Roasting Setup"}}
+	if len(got) != len(want) {
+		t.Fatalf("owners = %v, want %v", got, want)
+	}
+	for user, tmpls := range want {
+		if !slices.Equal(got[user], tmpls) {
+			t.Errorf("owner %s templates = %v, want %v", user, got[user], tmpls)
+		}
+	}
+}
+
+// profileRequests returns the S3 requests made for userID's profiles.
+func profileRequests(fake *testutil.FakeS3, userID string) []string {
+	fake.Mu.Lock()
+	defer fake.Mu.Unlock()
+	var out []string
+	for _, r := range fake.Requests {
+		if strings.HasSuffix(r, "/"+userID+".json") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestSyncProfileNameAfterListing(t *testing.T) {
+	b, fake := newProfileNamesBot(t)
+	fake.Objects[profileObject(sprobot.ProfileTemplate, "2")] = []byte(`{"Grinder":"Niche"}`)
+	b.loadProfileOwners([]snowflake.ID{1})
+
+	// An author without a profile costs no S3 reads.
+	if o := syncAndWait(t, b, nameMessage(3, "bob", nil)); o == nil || !o.none {
+		t.Errorf("owner = %+v, want known to have no profiles", o)
+	}
+	if got := profileRequests(fake, "3"); len(got) != 0 {
+		t.Errorf("S3 requests for an author without profiles: %v", got)
+	}
+
+	// An owner's update touches only the template they have a profile in.
+	syncAndWait(t, b, nameMessage(2, "alice", nil))
+	if got := storedProfile(t, fake, sprobot.ProfileTemplate, "2")[sprobot.DisplayNameKey]; got != "alice" {
+		t.Errorf("name = %q, want alice", got)
+	}
+	for _, r := range profileRequests(fake, "2") {
+		if strings.Contains(r, sprobot.RoasterTemplate.Name) {
+			t.Errorf("probed a template the owner has no profile in: %s", r)
+		}
+	}
+}
+
+func TestSyncProfileNameAfterListingAndDelete(t *testing.T) {
+	b, fake := newProfileNamesBot(t)
+	fake.Objects[profileObject(sprobot.ProfileTemplate, "4")] = []byte(`{}`)
+	fake.Objects[profileObject(sprobot.RoasterTemplate, "4")] = []byte(`{}`)
+	b.loadProfileOwners([]snowflake.ID{1})
+
+	// Deleting one profile must not make the other look absent.
+	fake.Mu.Lock()
+	delete(fake.Objects, profileObject(sprobot.ProfileTemplate, "4"))
+	fake.Mu.Unlock()
+	b.profileDeleted("1", "4")
+	syncAndWait(t, b, nameMessage(4, "dana", nil))
+
+	if got := storedProfile(t, fake, sprobot.RoasterTemplate, "4")[sprobot.DisplayNameKey]; got != "dana" {
+		t.Errorf("remaining profile's name = %q, want dana", got)
+	}
+}
+
+func TestSyncProfileNameWhenListingFails(t *testing.T) {
+	b, fake := newProfileNamesBot(t)
+	fake.Fail["/test-bucket"] = http.StatusForbidden
+	b.loadProfileOwners([]snowflake.ID{1})
+	fake.Mu.Lock()
+	delete(fake.Fail, "/test-bucket")
+	fake.Objects[profileObject(sprobot.ProfileTemplate, "5")] = []byte(`{}`)
+	fake.Mu.Unlock()
+
+	// Without a listing every author is checked, as before.
+	syncAndWait(t, b, nameMessage(5, "erin", nil))
+	if got := storedProfile(t, fake, sprobot.ProfileTemplate, "5")[sprobot.DisplayNameKey]; got != "erin" {
+		t.Errorf("name = %q, want erin", got)
 	}
 }
