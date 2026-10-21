@@ -596,41 +596,65 @@ func TestUngroupedCache_EvictionCompaction(t *testing.T) {
 
 // --- Completeness guard ---
 
-func TestAllCacheFlagsHavePersistence(t *testing.T) {
-	expected := map[cache.Flags]string{
-		cache.FlagGuilds:                guildCacheFile,
-		cache.FlagChannels:              channelCacheFile,
-		cache.FlagMessages:              messageCacheFile,
-		cache.FlagMembers:               memberCacheFile,
-		cache.FlagRoles:                 roleCacheFile,
-		cache.FlagEmojis:                emojiCacheFile,
-		cache.FlagStickers:              stickerCacheFile,
-		cache.FlagVoiceStates:           voiceStateCacheFile,
-		cache.FlagPresences:             presenceCacheFile,
-		cache.FlagThreadMembers:         threadMemberCacheFile,
-		cache.FlagStageInstances:        stageInstanceCacheFile,
-		cache.FlagGuildScheduledEvents:  scheduledEventCacheFile,
-		cache.FlagGuildSoundboardSounds: soundboardSoundCacheFile,
-	}
+// persistedCacheFiles maps each enabled cache flag to its disk file.
+var persistedCacheFiles = map[cache.Flags]string{
+	cache.FlagGuilds:                guildCacheFile,
+	cache.FlagChannels:              channelCacheFile,
+	cache.FlagMessages:              messageCacheFile,
+	cache.FlagMembers:               memberCacheFile,
+	cache.FlagRoles:                 roleCacheFile,
+	cache.FlagEmojis:                emojiCacheFile,
+	cache.FlagStickers:              stickerCacheFile,
+	cache.FlagVoiceStates:           voiceStateCacheFile,
+	cache.FlagStageInstances:        stageInstanceCacheFile,
+	cache.FlagGuildScheduledEvents:  scheduledEventCacheFile,
+	cache.FlagGuildSoundboardSounds: soundboardSoundCacheFile,
+}
 
-	for flag, file := range expected {
-		if !cache.FlagsAll.Has(flag) {
-			t.Errorf("flag %d listed but not in FlagsAll", flag)
-		}
-		if file == "" {
-			t.Errorf("flag %d has no cache file", flag)
-		}
-	}
-
+// TestCacheFlagsClassified fails when a disgo upgrade adds a cache flag that
+// is neither persisted nor deliberately disabled, forcing a decision about
+// storing the new data.
+func TestCacheFlagsClassified(t *testing.T) {
 	for bit := cache.Flags(1); bit <= cache.FlagsAll; bit <<= 1 {
-		if cache.FlagsAll.Has(bit) {
-			if _, ok := expected[bit]; !ok {
-				t.Errorf("FlagsAll includes flag %d but no disk cache is configured for it", bit)
-			}
+		if !cache.FlagsAll.Has(bit) {
+			continue
+		}
+		_, persisted := persistedCacheFiles[bit]
+		_, disabled := disabledCacheFlags[bit]
+		switch {
+		case persisted && disabled:
+			t.Errorf("cache flag %d is both persisted and disabled", bit)
+		case !persisted && !disabled:
+			t.Errorf("cache flag %d is unclassified: persist it or add it to disabledCacheFlags with a reason", bit)
+		case persisted != enabledCacheFlags.Has(bit):
+			t.Errorf("cache flag %d: persisted=%v but enabled=%v", bit, persisted, enabledCacheFlags.Has(bit))
+		}
+	}
+	for flag, file := range persistedCacheFiles {
+		if file == "" {
+			t.Errorf("cache flag %d has no cache file", flag)
+		}
+	}
+	for flag, reason := range disabledCacheFlags {
+		if reason == "" {
+			t.Errorf("cache flag %d is disabled without a reason", flag)
 		}
 	}
 }
 
-// Suppress unused import warning for filepath/os.
-var _ = filepath.Join
-var _ = os.Remove
+// TestDisabledCachesStoreNothing checks the flags actually switch the
+// disabled caches off: disgo only honours flags for the default caches it
+// builds, so this fails if a custom cache is passed for a disabled type.
+func TestDisabledCachesStoreNothing(t *testing.T) {
+	c := cache.New(cache.WithCaches(enabledCacheFlags))
+	guildID, threadID, userID := snowflake.ID(1), snowflake.ID(2), snowflake.ID(3)
+
+	c.AddPresence(discord.Presence{GuildID: guildID, PresenceUser: discord.PresenceUser{ID: userID}})
+	if _, ok := c.Presence(guildID, userID); ok {
+		t.Error("presence was cached with presences disabled")
+	}
+	c.AddThreadMember(discord.ThreadMember{ThreadID: threadID, UserID: userID})
+	if _, ok := c.ThreadMember(threadID, userID); ok {
+		t.Error("thread member was cached with thread members disabled")
+	}
+}

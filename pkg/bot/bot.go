@@ -38,8 +38,6 @@ type Bot struct {
 	emojiCache           *cappedGroupedCache[discord.Emoji]
 	stickerCache         *cappedGroupedCache[discord.Sticker]
 	voiceStateCache      *cappedGroupedCache[discord.VoiceState]
-	presenceCache        *cappedGroupedCache[discord.Presence]
-	threadMemberCache    *cappedGroupedCache[discord.ThreadMember]
 	stageInstanceCache   *cappedGroupedCache[discord.StageInstance]
 	scheduledEventCache  *cappedGroupedCache[discord.GuildScheduledEvent]
 	soundboardSoundCache *cappedGroupedCache[discord.SoundboardSound]
@@ -74,8 +72,6 @@ func New(token string) (*Bot, error) {
 	emojiCache := newCappedGroupedCache[discord.Emoji](5000)
 	stickerCache := newCappedGroupedCache[discord.Sticker](1000)
 	voiceStateCache := newCappedGroupedCache[discord.VoiceState](10000)
-	presenceCache := newCappedGroupedCache[discord.Presence](10000)
-	threadMemberCache := newCappedGroupedCache[discord.ThreadMember](10000)
 	stageInstanceCache := newCappedGroupedCache[discord.StageInstance](1000)
 	scheduledEventCache := newCappedGroupedCache[discord.GuildScheduledEvent](1000)
 	soundboardSoundCache := newCappedGroupedCache[discord.SoundboardSound](1000)
@@ -142,8 +138,6 @@ func New(token string) (*Bot, error) {
 		emojiCache:           emojiCache,
 		stickerCache:         stickerCache,
 		voiceStateCache:      voiceStateCache,
-		presenceCache:        presenceCache,
-		threadMemberCache:    threadMemberCache,
 		stageInstanceCache:   stageInstanceCache,
 		scheduledEventCache:  scheduledEventCache,
 		soundboardSoundCache: soundboardSoundCache,
@@ -213,6 +207,7 @@ func New(token string) (*Bot, error) {
 		}
 	}
 
+	b.removeRetiredCacheFiles()
 	b.loadMessageCache()
 	b.loadMemberCache()
 	b.loadGuildCache()
@@ -221,8 +216,6 @@ func New(token string) (*Bot, error) {
 	b.loadEmojiCache()
 	b.loadStickerCache()
 	b.loadVoiceStateCache()
-	b.loadPresenceCache()
-	b.loadThreadMemberCache()
 	b.loadStageInstanceCache()
 	b.loadScheduledEventCache()
 	b.loadSoundboardSoundCache()
@@ -230,7 +223,7 @@ func New(token string) (*Bot, error) {
 	client, err := disgo.New(token,
 		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
 		bot.WithCacheConfigOpts(
-			cache.WithCaches(cache.FlagsAll),
+			cache.WithCaches(enabledCacheFlags),
 			cache.WithGuildCache(cache.NewGuildCache(guildCache, cache.NewSet[snowflake.ID](), cache.NewSet[snowflake.ID]())),
 			cache.WithChannelCache(cache.NewChannelCache(channelCache)),
 			cache.WithMessageCache(cache.NewMessageCache(msgCache)),
@@ -239,8 +232,6 @@ func New(token string) (*Bot, error) {
 			cache.WithEmojiCache(cache.NewEmojiCache(emojiCache)),
 			cache.WithStickerCache(cache.NewStickerCache(stickerCache)),
 			cache.WithVoiceStateCache(cache.NewVoiceStateCache(voiceStateCache)),
-			cache.WithPresenceCache(cache.NewPresenceCache(presenceCache)),
-			cache.WithThreadMemberCache(cache.NewThreadMemberCache(threadMemberCache)),
 			cache.WithStageInstanceCache(cache.NewStageInstanceCache(stageInstanceCache)),
 			cache.WithGuildScheduledEventCache(cache.NewGuildScheduledEventCache(scheduledEventCache)),
 			cache.WithGuildSoundboardSoundCache(cache.NewGuildSoundboardSoundCache(soundboardSoundCache)),
@@ -356,8 +347,6 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveEmojiCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveStickerCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveVoiceStateCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.savePresenceCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveThreadMemberCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveStageInstanceCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveScheduledEventCache)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveSoundboardSoundCache)
@@ -389,8 +378,6 @@ func (b *Bot) Run() error {
 	b.saveEmojiCache()
 	b.saveStickerCache()
 	b.saveVoiceStateCache()
-	b.savePresenceCache()
-	b.saveThreadMemberCache()
 	b.saveStageInstanceCache()
 	b.saveScheduledEventCache()
 	b.saveSoundboardSoundCache()
