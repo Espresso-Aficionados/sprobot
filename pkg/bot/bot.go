@@ -147,6 +147,7 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onReactionRemove),
 		bot.WithEventListenerFunc(b.onReactionRemoveAll),
 		bot.WithEventListenerFunc(b.onReactionRemoveEmoji),
+		bot.WithEventListenerFunc(b.onStarboardSourceDelete),
 	)
 	if err != nil {
 		return nil, err

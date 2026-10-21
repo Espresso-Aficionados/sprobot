@@ -1,14 +1,17 @@
 package bot
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -21,7 +24,20 @@ type starboardSettings struct {
 	Blacklist       []snowflake.ID `json:"blacklist"`
 }
 
-const defaultThreshold = 5
+const (
+	defaultThreshold = 5
+	// unpostedEntryMaxAge is how long reactions on a message that has not
+	// reached the threshold are remembered.
+	unpostedEntryMaxAge = 30 * 24 * time.Hour
+	// starboardMaxAge is the message age past which reactions are ignored. A
+	// post's count is final from then on, so its entry can be pruned without
+	// the message ever being posted a second time.
+	starboardMaxAge = 90 * 24 * time.Hour
+)
+
+// starboardUpdateDelay is how long an edit to a post waits, so a burst of
+// reactions becomes one edit. A variable so tests can shorten it.
+var starboardUpdateDelay = 3 * time.Second
 
 func (s *starboardSettings) effectiveThreshold() int {
 	if s.Threshold > 0 {
@@ -34,48 +50,145 @@ func (s *starboardSettings) isBlacklisted(ids ...snowflake.ID) bool {
 	return containsAny(s.Blacklist, ids...)
 }
 
-// resolveChannelParents returns the channel ID plus any parent/category IDs,
-// using an in-memory cache to avoid repeated REST calls.
-func (b *Bot) resolveChannelParents(channelID snowflake.ID, cache *sync.Map) []snowflake.ID {
-	ids := []snowflake.ID{channelID}
-
-	cached, ok := cache.Load(channelID)
+// lookupChannel returns a guild channel or thread from disgo's channel cache,
+// which the gateway keeps current, falling back to REST for one that isn't
+// cached. Nothing is remembered, so a failed lookup is retried next time.
+func (b *Bot) lookupChannel(channelID snowflake.ID) (discord.GuildChannel, error) {
+	if ch, ok := b.Client.Caches.Channel(channelID); ok {
+		return ch, nil
+	}
+	ch, err := b.Client.Rest.GetChannel(channelID)
+	if err != nil {
+		return nil, err
+	}
+	gc, ok := ch.(discord.GuildChannel)
 	if !ok {
-		cp := channelParents{}
-		if ch, err := b.Client.Rest.GetChannel(channelID); err == nil {
-			if gc, ok := ch.(discord.GuildChannel); ok {
-				if pid := gc.ParentID(); pid != nil {
-					pidCopy := *pid
-					cp.ParentID = &pidCopy
-					if _, isThread := gc.(discord.GuildThread); isThread {
-						if parent, err := b.Client.Rest.GetChannel(*pid); err == nil {
-							if pgc, ok := parent.(discord.GuildChannel); ok {
-								if catID := pgc.ParentID(); catID != nil {
-									catCopy := *catID
-									cp.CategoryID = &catCopy
-								}
-							}
-						}
-					} else {
-						// Non-thread channel: parent is the category.
-						cp.CategoryID = cp.ParentID
-						cp.ParentID = nil
-					}
-				}
-			}
-		}
-		cache.Store(channelID, cp)
-		cached = cp
+		return nil, fmt.Errorf("channel %d is not a guild channel", channelID)
 	}
+	return gc, nil
+}
 
-	cp := cached.(channelParents)
-	if cp.ParentID != nil {
-		ids = append(ids, *cp.ParentID)
+// resolveChannelParents returns the channel ID plus its parent and category
+// IDs: for a thread, its channel and that channel's category. A lookup that
+// fails is left out of the result. The *sync.Map is unused and kept only so
+// existing callers compile; parents come from the channel cache.
+func (b *Bot) resolveChannelParents(channelID snowflake.ID, _ *sync.Map) []snowflake.ID {
+	ids := []snowflake.ID{channelID}
+	ch, err := b.lookupChannel(channelID)
+	if err != nil {
+		b.Log.Warn("Failed to look up channel parents", "channel_id", channelID, "error", err)
+		return ids
 	}
-	if cp.CategoryID != nil {
-		ids = append(ids, *cp.CategoryID)
+	parentID := ch.ParentID()
+	if parentID == nil {
+		return ids
+	}
+	ids = append(ids, *parentID)
+	if _, isThread := ch.(discord.GuildThread); !isThread {
+		return ids
+	}
+	parent, err := b.lookupChannel(*parentID)
+	if err != nil {
+		b.Log.Warn("Failed to look up thread parent", "channel_id", *parentID, "error", err)
+		return ids
+	}
+	if categoryID := parent.ParentID(); categoryID != nil {
+		ids = append(ids, *categoryID)
 	}
 	return ids
+}
+
+// roleCanView reports whether a member holding only role (besides @everyone)
+// can view a channel with the given overwrites: guild permissions, then the
+// @everyone overwrite, then the role's overwrite. Member overwrites are
+// ignored, and Administrator sees everything.
+func roleCanView(guildID snowflake.ID, everyone, role discord.Role, overwrites discord.PermissionOverwrites) bool {
+	perms := everyone.Permissions | role.Permissions
+	if perms.Has(discord.PermissionAdministrator) {
+		return true
+	}
+	if ow, ok := overwrites.Role(guildID); ok {
+		perms = perms.Remove(ow.Deny).Add(ow.Allow)
+	}
+	if role.ID != guildID {
+		if ow, ok := overwrites.Role(role.ID); ok {
+			perms = perms.Remove(ow.Deny).Add(ow.Allow)
+		}
+	}
+	return perms.Has(discord.PermissionViewChannel)
+}
+
+// starboardAudienceOK reports whether a message in source may be reposted to
+// output: every role that can view output must also be able to view source,
+// so the starboard never shows a message to anyone who couldn't already read
+// it. A server where one broad "access" role gates both channels passes;
+// a staff channel does not. A thread is judged by its channel (sourceParent),
+// whose overwrites it inherits, and a private thread never passes. An output
+// thread must be passed as its channel. roles must include @everyone, whose
+// ID is the guild's. A nil channel or a missing @everyone role means the data
+// isn't available, which is an error so the caller can fail closed.
+func starboardAudienceOK(guildID snowflake.ID, roles []discord.Role, source, sourceParent, output discord.GuildChannel) (bool, error) {
+	if source == nil {
+		return false, errors.New("source channel not found")
+	}
+	if output == nil {
+		return false, errors.New("output channel not found")
+	}
+	if _, ok := output.(discord.GuildThread); ok {
+		return false, errors.New("output is a thread, not its channel")
+	}
+	sourceOverwrites := source.PermissionOverwrites()
+	if thread, ok := source.(discord.GuildThread); ok {
+		if thread.Type() == discord.ChannelTypeGuildPrivateThread {
+			return false, nil
+		}
+		if sourceParent == nil {
+			return false, errors.New("thread's channel not found")
+		}
+		sourceOverwrites = sourceParent.PermissionOverwrites()
+	}
+	everyone := slices.IndexFunc(roles, func(r discord.Role) bool { return r.ID == guildID })
+	if everyone < 0 {
+		return false, errors.New("@everyone role not cached")
+	}
+	outputOverwrites := output.PermissionOverwrites()
+	for _, role := range roles {
+		if roleCanView(guildID, roles[everyone], role, outputOverwrites) &&
+			!roleCanView(guildID, roles[everyone], role, sourceOverwrites) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// starboardVisible applies starboardAudienceOK to a reaction in channelID. It
+// fails closed, logging why, when a channel or the roles can't be found.
+func (b *Bot) starboardVisible(guildID, channelID, outputID snowflake.ID) bool {
+	source, _ := b.lookupChannel(channelID)
+	var parent discord.GuildChannel
+	if thread, ok := source.(discord.GuildThread); ok {
+		parent, _ = b.lookupChannel(*thread.ParentID())
+	}
+	output, _ := b.lookupChannel(outputID)
+	if thread, ok := output.(discord.GuildThread); ok {
+		// Only configs older than the channel type check have a thread as
+		// output. A thread's audience is at most its channel's, so judging
+		// by the channel is never less strict.
+		output, _ = b.lookupChannel(*thread.ParentID())
+	}
+	roles := slices.Collect(b.Client.Caches.Roles(guildID))
+	ok, err := starboardAudienceOK(guildID, roles, source, parent, output)
+	if err != nil {
+		b.Log.Warn("Starboard skipped a reaction: channel visibility unknown",
+			"guild_id", guildID, "channel_id", channelID, "error", err)
+	}
+	return ok
+}
+
+// starboardOutputType reports whether the starboard can post in a channel of
+// type t.
+func starboardOutputType(t discord.ChannelType) bool {
+	return t == discord.ChannelTypeGuildText || t == discord.ChannelTypeGuildNews
 }
 
 type starboardEntry struct {
@@ -83,12 +196,18 @@ type starboardEntry struct {
 	AuthorID       snowflake.ID `json:"author_id"`
 	Count          int          `json:"count"`
 	StarboardMsgID snowflake.ID `json:"starboard_msg_id"`
-	ChannelName    string       `json:"channel_name,omitempty"`
+	// PostChannelID is the channel the post went to. It is zero for posts
+	// made before it was recorded, which are in the current output channel.
+	PostChannelID snowflake.ID `json:"post_channel_id,omitempty"`
+	ChannelName   string       `json:"channel_name,omitempty"`
 }
 
-type channelParents struct {
-	ParentID   *snowflake.ID
-	CategoryID *snowflake.ID
+// postChannel returns the channel holding the entry's post.
+func (e starboardEntry) postChannel(outputID snowflake.ID) snowflake.ID {
+	if e.PostChannelID != 0 {
+		return e.PostChannelID
+	}
+	return outputID
 }
 
 type starboardState struct {
@@ -96,13 +215,97 @@ type starboardState struct {
 	Settings starboardSettings               `json:"settings"`
 	Entries  map[snowflake.ID]starboardEntry `json:"entries"` // keyed by source message ID
 
-	parentCache sync.Map // channelID → channelParents
+	// work holds the post or update in flight per source message. It is not
+	// persisted: nothing is in flight after a restart.
+	work map[snowflake.ID]*starboardWork
+}
+
+// starboardWork serializes the Discord calls for one source message.
+type starboardWork struct {
+	posting  bool // the post is being created; no other reaction may post
+	updating bool // an edit is waiting or running; no other may start
+	dirty    bool // the count changed since the post or edit read it
 }
 
 func (st *starboardState) lock()                          { st.mu.Lock() }
 func (st *starboardState) unlock()                        { st.mu.Unlock() }
 func (st *starboardState) getBlacklist() []snowflake.ID   { return st.Settings.Blacklist }
 func (st *starboardState) setBlacklist(bl []snowflake.ID) { st.Settings.Blacklist = bl }
+
+// startWork returns msgID's work record, creating it. Must be called with mu held.
+func (st *starboardState) startWork(msgID snowflake.ID) *starboardWork {
+	if st.work == nil {
+		st.work = make(map[snowflake.ID]*starboardWork)
+	}
+	w := st.work[msgID]
+	if w == nil {
+		w = &starboardWork{}
+		st.work[msgID] = w
+	}
+	return w
+}
+
+// endWork drops msgID's work record once nothing is in flight. Must be called
+// with mu held.
+func (st *starboardState) endWork(msgID snowflake.ID) {
+	if w := st.work[msgID]; w != nil && !w.posting && !w.updating {
+		delete(st.work, msgID)
+	}
+}
+
+type reactionChange int
+
+const (
+	reactionAdded reactionChange = iota
+	reactionRemoved
+	reactionsCleared // all reactions, or all of the starboard emoji, removed
+)
+
+type starboardAction int
+
+const (
+	starboardNone starboardAction = iota
+	starboardPost
+	starboardUpdate
+)
+
+// applyReaction records a reaction change on msgID's entry and returns what
+// the caller must do next; the work record it sets makes that caller the only
+// one posting or editing for the message. seed is the entry created by the
+// first add. Must be called with mu held; it makes no Discord calls.
+func (st *starboardState) applyReaction(msgID snowflake.ID, change reactionChange, seed starboardEntry) starboardAction {
+	entry, ok := st.Entries[msgID]
+	if !ok {
+		if change != reactionAdded {
+			return starboardNone
+		}
+		entry = seed
+	}
+	switch change {
+	case reactionAdded:
+		entry.Count++
+	case reactionRemoved:
+		entry.Count = max(entry.Count-1, 0)
+	case reactionsCleared:
+		entry.Count = 0
+	}
+	st.Entries[msgID] = entry
+
+	if w := st.work[msgID]; w != nil {
+		// The post or edit in flight re-reads the count when it is done.
+		w.dirty = true
+		return starboardNone
+	}
+	switch {
+	case entry.StarboardMsgID != 0:
+		st.startWork(msgID).updating = true
+		return starboardUpdate
+	case change == reactionAdded && entry.Count >= st.Settings.effectiveThreshold():
+		st.startWork(msgID).posting = true
+		return starboardPost
+	}
+	return starboardNone
+}
 
 func intPtr(v int) *int { return &v }
 
@@ -126,22 +329,45 @@ func parseEmojiInput(input string) string {
 	return input
 }
 
+// reactionCount returns the count of the reaction matching emoji (stored as
+// unicode or name:id, like PartialEmoji.Reaction).
+func reactionCount(reactions []discord.MessageReaction, emoji string) int {
+	for _, r := range reactions {
+		key := r.Emoji.Name
+		if r.Emoji.ID != 0 {
+			key += ":" + r.Emoji.ID.String()
+		}
+		if key == emoji {
+			return r.Count
+		}
+	}
+	return 0
+}
+
 // --- Load / Save / Persist ---
 
 func (b *Bot) saveStarboard() {
 	b.starboard.each(func(_ snowflake.ID, st *starboardState) {
 		st.mu.Lock()
-		pruneUnpostedEntries(st, time.Now())
+		pruneStarboardEntries(st, time.Now())
 		st.mu.Unlock()
 	})
 	b.starboard.save()
 }
 
-// pruneUnpostedEntries removes unposted entries older than 30 days. Must be called with mu held.
-func pruneUnpostedEntries(st *starboardState, now time.Time) {
-	cutoff := now.Add(-30 * 24 * time.Hour)
+// pruneStarboardEntries removes unposted entries older than
+// unpostedEntryMaxAge and posted ones older than starboardMaxAge, whose posts
+// can no longer change. Entries with a post or edit in flight are kept. Must
+// be called with mu held.
+func pruneStarboardEntries(st *starboardState, now time.Time) {
+	unpostedCutoff := now.Add(-unpostedEntryMaxAge)
+	postedCutoff := now.Add(-starboardMaxAge)
 	for msgID, entry := range st.Entries {
-		if entry.StarboardMsgID == 0 && msgID.Time().Before(cutoff) {
+		if st.work[msgID] != nil {
+			continue
+		}
+		sent := msgID.Time()
+		if sent.Before(postedCutoff) || (entry.StarboardMsgID == 0 && sent.Before(unpostedCutoff)) {
 			delete(st.Entries, msgID)
 		}
 	}
@@ -159,146 +385,109 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 		return
 	}
 
-	// Resolve the channel's parent chain for blacklist checks (cached).
-	blacklistIDs := b.resolveChannelParents(e.ChannelID, &st.parentCache)
-
 	st.mu.Lock()
-
-	if st.Settings.OutputChannelID == 0 || st.Settings.Emoji == "" {
-		st.mu.Unlock()
-		return
-	}
-
-	if e.Emoji.Reaction() != st.Settings.Emoji {
-		st.mu.Unlock()
-		return
-	}
-
-	if e.ChannelID == st.Settings.OutputChannelID {
-		st.mu.Unlock()
-		return
-	}
-
-	if st.Settings.isBlacklisted(blacklistIDs...) {
-		st.mu.Unlock()
-		return
-	}
-
-	entry, ok := st.Entries[e.MessageID]
-	if !ok {
-		var authorID snowflake.ID
-		if e.MessageAuthorID != nil {
-			authorID = *e.MessageAuthorID
-		}
-		entry = starboardEntry{
-			ChannelID: e.ChannelID,
-			AuthorID:  authorID,
-		}
-	}
-	entry.Count++
-	st.Entries[e.MessageID] = entry
-
-	threshold := st.Settings.effectiveThreshold()
-	shouldPost := entry.Count >= threshold && entry.StarboardMsgID == 0
-	shouldUpdate := entry.StarboardMsgID != 0
-
+	settings := st.Settings
+	settings.Blacklist = slices.Clone(st.Settings.Blacklist)
 	st.mu.Unlock()
 
-	if shouldPost {
-		b.postStarboardEntry(e.GuildID, e.MessageID, st)
-	} else if shouldUpdate {
-		b.updateStarboardEntry(e.GuildID, e.MessageID, st)
+	if settings.OutputChannelID == 0 || settings.Emoji == "" ||
+		e.Emoji.Reaction() != settings.Emoji || e.ChannelID == settings.OutputChannelID {
+		return
 	}
+	if time.Since(e.MessageID.Time()) > starboardMaxAge {
+		return
+	}
+	if settings.isBlacklisted(b.resolveChannelParents(e.ChannelID, nil)...) {
+		return
+	}
+	if !b.starboardVisible(e.GuildID, e.ChannelID, settings.OutputChannelID) {
+		return
+	}
+
+	seed := starboardEntry{ChannelID: e.ChannelID}
+	if e.MessageAuthorID != nil {
+		seed.AuthorID = *e.MessageAuthorID
+	}
+	st.mu.Lock()
+	action := st.applyReaction(e.MessageID, reactionAdded, seed)
+	st.mu.Unlock()
+
+	b.runStarboardAction(e.GuildID, e.MessageID, st, action)
 }
 
 func (b *Bot) onReactionRemove(e *events.GuildMessageReactionRemove) {
-	st := b.starboard.get(e.GuildID)
-	if st == nil {
-		return
-	}
-
-	st.mu.Lock()
-
-	if st.Settings.Emoji == "" || e.Emoji.Reaction() != st.Settings.Emoji {
-		st.mu.Unlock()
-		return
-	}
-
-	entry, ok := st.Entries[e.MessageID]
-	if !ok {
-		st.mu.Unlock()
-		return
-	}
-
-	entry.Count--
-	if entry.Count < 0 {
-		entry.Count = 0
-	}
-	st.Entries[e.MessageID] = entry
-
-	shouldUpdate := entry.StarboardMsgID != 0
-
-	st.mu.Unlock()
-
-	if shouldUpdate {
-		b.updateStarboardEntry(e.GuildID, e.MessageID, st)
-	}
+	b.recordReactionRemoval(e.GuildID, e.MessageID, e.Emoji.Reaction(), reactionRemoved)
 }
 
 func (b *Bot) onReactionRemoveAll(e *events.GuildMessageReactionRemoveAll) {
-	st := b.starboard.get(e.GuildID)
-	if st == nil {
-		return
-	}
-
-	st.mu.Lock()
-
-	entry, ok := st.Entries[e.MessageID]
-	if !ok {
-		st.mu.Unlock()
-		return
-	}
-
-	entry.Count = 0
-	st.Entries[e.MessageID] = entry
-
-	shouldUpdate := entry.StarboardMsgID != 0
-
-	st.mu.Unlock()
-
-	if shouldUpdate {
-		b.updateStarboardEntry(e.GuildID, e.MessageID, st)
-	}
+	b.recordReactionRemoval(e.GuildID, e.MessageID, "", reactionsCleared)
 }
 
 func (b *Bot) onReactionRemoveEmoji(e *events.GuildMessageReactionRemoveEmoji) {
+	b.recordReactionRemoval(e.GuildID, e.MessageID, e.Emoji.Reaction(), reactionsCleared)
+}
+
+// recordReactionRemoval lowers msgID's count and edits its post if it has
+// one. emoji is the removed reaction, or "" when every reaction was removed.
+func (b *Bot) recordReactionRemoval(guildID, msgID snowflake.ID, emoji string, change reactionChange) {
+	st := b.starboard.get(guildID)
+	if st == nil || time.Since(msgID.Time()) > starboardMaxAge {
+		return
+	}
+
+	st.mu.Lock()
+	if st.Settings.Emoji == "" || (emoji != "" && emoji != st.Settings.Emoji) {
+		st.mu.Unlock()
+		return
+	}
+	action := st.applyReaction(msgID, change, starboardEntry{})
+	st.mu.Unlock()
+
+	b.runStarboardAction(guildID, msgID, st, action)
+}
+
+func (b *Bot) runStarboardAction(guildID, msgID snowflake.ID, st *starboardState, action starboardAction) {
+	switch action {
+	case starboardPost:
+		b.postStarboardEntry(guildID, msgID, st)
+	case starboardUpdate:
+		b.runStarboardUpdates(guildID, msgID, st)
+	}
+}
+
+// onStarboardSourceDelete deletes the entry and starboard post of a deleted
+// message, so its reposted text does not outlive it. A repeated delete finds
+// no entry and does nothing.
+func (b *Bot) onStarboardSourceDelete(e *events.GuildMessageDelete) {
 	st := b.starboard.get(e.GuildID)
 	if st == nil {
 		return
 	}
 
 	st.mu.Lock()
-
-	if st.Settings.Emoji == "" || e.Emoji.Reaction() != st.Settings.Emoji {
-		st.mu.Unlock()
-		return
-	}
-
 	entry, ok := st.Entries[e.MessageID]
-	if !ok {
-		st.mu.Unlock()
-		return
-	}
-
-	entry.Count = 0
-	st.Entries[e.MessageID] = entry
-
-	shouldUpdate := entry.StarboardMsgID != 0
-
+	delete(st.Entries, e.MessageID)
+	outputID := st.Settings.OutputChannelID
 	st.mu.Unlock()
 
-	if shouldUpdate {
-		b.updateStarboardEntry(e.GuildID, e.MessageID, st)
+	// A post still being created finds its entry gone and deletes itself.
+	if !ok || entry.StarboardMsgID == 0 {
+		return
+	}
+	if channelID := entry.postChannel(outputID); channelID != 0 {
+		b.deleteStarboardPost(e.GuildID, e.MessageID, channelID, entry.StarboardMsgID)
+	}
+	if err := b.starboard.persist(e.GuildID); err != nil {
+		b.Log.Error("Failed to persist starboard after delete", "guild_id", e.GuildID, "error", err)
+	}
+}
+
+// deleteStarboardPost deletes a post, treating one already gone as deleted.
+func (b *Bot) deleteStarboardPost(guildID, sourceID, channelID, postID snowflake.ID) {
+	err := b.Client.Rest.DeleteMessage(channelID, postID)
+	if err != nil && !rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownMessage, rest.JSONErrorCodeUnknownChannel) {
+		b.Log.Error("Failed to delete starboard post of a deleted message", "guild_id", guildID,
+			"message_id", sourceID, "channel_id", channelID, "post_id", postID, "error", err)
 	}
 }
 
@@ -311,7 +500,12 @@ func emojiCDNURL(emoji string) string {
 	return ""
 }
 
+// starboardFooter shows the count and source channel; channelName is "" when
+// the channel couldn't be looked up.
 func starboardFooter(emoji string, count int, channelName string) discord.EmbedFooter {
+	if channelName == "" {
+		channelName = "unknown"
+	}
 	if url := emojiCDNURL(emoji); url != "" {
 		return discord.EmbedFooter{
 			Text:    fmt.Sprintf("%d | #%s", count, channelName),
@@ -323,42 +517,31 @@ func starboardFooter(emoji string, count int, channelName string) discord.EmbedF
 	}
 }
 
-// resolveChannelName fetches the channel name, returning "unknown" on failure.
+// resolveChannelName returns the channel's name, or "" if it can't be looked
+// up. Callers must not store "".
 func (b *Bot) resolveChannelName(channelID snowflake.ID) string {
-	ch, err := b.Client.Rest.GetChannel(channelID)
+	ch, err := b.lookupChannel(channelID)
 	if err != nil {
-		return "unknown"
+		return ""
 	}
-	if gc, ok := ch.(discord.GuildChannel); ok {
-		return gc.Name()
-	}
-	return "unknown"
+	return ch.Name()
 }
 
-// --- Starboard Posting ---
+// starboardNonce identifies the post for a source message. With
+// enforce_nonce, Discord returns the existing post instead of creating a
+// second one if the same nonce is sent again within a few minutes.
+func starboardNonce(msgID snowflake.ID) string {
+	return fmt.Sprintf("sb%d", msgID) // at most 22 of the allowed 25 characters
+}
 
-func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState) {
-	st.mu.Lock()
-	entry := st.Entries[msgID]
-	settings := st.Settings
-	st.mu.Unlock()
-
-	msg, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID)
-	if err != nil {
-		b.Log.Error("Failed to fetch message for starboard", "guild_id", guildID, "message_id", msgID, "error", err)
-		return
-	}
-
-	channelName := b.resolveChannelName(entry.ChannelID)
-	link := messageLink(guildID, entry.ChannelID, msgID)
-
+func starboardEmbed(guildID snowflake.ID, msg discord.Message, emoji string, count int, channelName string) discord.Embed {
 	description := msg.Content
 	if len(description) > 2000 {
 		description = description[:2000] + "..."
 	}
-	description += fmt.Sprintf("\n\n[Jump to message](%s)", link)
+	description += fmt.Sprintf("\n\n[Jump to message](%s)", messageLink(guildID, msg.ChannelID, msg.ID))
 
-	footer := starboardFooter(settings.Emoji, entry.Count, channelName)
+	footer := starboardFooter(emoji, count, channelName)
 	embed := discord.Embed{
 		Author: &discord.EmbedAuthor{
 			Name:    msg.Author.EffectiveName(),
@@ -377,61 +560,173 @@ func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState
 			break
 		}
 	}
+	return embed
+}
 
-	sent, err := b.Client.Rest.CreateMessage(settings.OutputChannelID, discord.MessageCreate{
-		Embeds: []discord.Embed{embed},
-	})
-	if err != nil {
-		b.Log.Error("Failed to post starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
-		return
-	}
+// --- Starboard Posting ---
+
+// postStarboardEntry posts msgID. The caller holds the message's posting flag
+// (see applyReaction), so no second post can start; reactions that arrive
+// meanwhile mark it dirty and get one edit once the post exists.
+func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState) {
+	posted := b.createStarboardPost(guildID, msgID, st)
 
 	st.mu.Lock()
-	entry = st.Entries[msgID]
-	entry.StarboardMsgID = sent.ID
-	entry.ChannelName = channelName
-	st.Entries[msgID] = entry
+	w := st.work[msgID]
+	w.posting = false
+	followUp := posted && w.dirty
+	w.updating = followUp
+	st.endWork(msgID)
 	st.mu.Unlock()
 
-	if err := b.starboard.persist(guildID); err != nil {
-		b.Log.Error("Failed to persist starboard after post", "guild_id", guildID, "error", err)
+	if followUp {
+		b.runStarboardUpdates(guildID, msgID, st)
 	}
 }
 
-func (b *Bot) updateStarboardEntry(guildID, msgID snowflake.ID, st *starboardState) {
+// createStarboardPost posts msgID if its actual reaction count meets the
+// threshold, and reports whether it did.
+func (b *Bot) createStarboardPost(guildID, msgID snowflake.ID, st *starboardState) bool {
 	st.mu.Lock()
 	entry := st.Entries[msgID]
 	settings := st.Settings
 	st.mu.Unlock()
 
-	// Resolve channel name for old entries that don't have it cached.
-	channelName := entry.ChannelName
-	if channelName == "" {
-		channelName = b.resolveChannelName(entry.ChannelID)
-		st.mu.Lock()
-		entry = st.Entries[msgID]
-		entry.ChannelName = channelName
-		st.Entries[msgID] = entry
-		st.mu.Unlock()
+	msg, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID)
+	if err != nil {
+		b.Log.Error("Failed to fetch message for starboard", "guild_id", guildID, "message_id", msgID, "error", err)
+		return false
 	}
 
-	existing, err := b.Client.Rest.GetMessage(settings.OutputChannelID, entry.StarboardMsgID)
+	// Reaction events are handled concurrently, so the event counter can
+	// drift; the message's own reactions decide.
+	count := reactionCount(msg.Reactions, settings.Emoji)
+	st.mu.Lock()
+	if e, ok := st.Entries[msgID]; ok {
+		e.Count = count
+		st.Entries[msgID] = e
+	}
+	st.mu.Unlock()
+	if count < settings.effectiveThreshold() {
+		return false
+	}
+
+	channelName := b.resolveChannelName(entry.ChannelID)
+	embed := starboardEmbed(guildID, *msg, settings.Emoji, count, channelName)
+	create := discord.MessageCreate{Embeds: []discord.Embed{embed}}.
+		WithNonce(starboardNonce(msgID)).WithEnforceNonce(true)
+	sent, err := b.Client.Rest.CreateMessage(settings.OutputChannelID, create)
+	if err != nil {
+		b.Log.Error("Failed to post starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
+		return false
+	}
+
+	st.mu.Lock()
+	entry, ok := st.Entries[msgID]
+	if ok {
+		entry.StarboardMsgID = sent.ID
+		entry.PostChannelID = settings.OutputChannelID
+		if channelName != "" {
+			entry.ChannelName = channelName
+		}
+		st.Entries[msgID] = entry
+	}
+	st.mu.Unlock()
+
+	if !ok {
+		// Only onStarboardSourceDelete removes an entry with a post in
+		// flight: the message was deleted while it was being posted.
+		b.deleteStarboardPost(guildID, msgID, settings.OutputChannelID, sent.ID)
+		return false
+	}
+	if err := b.starboard.persist(guildID); err != nil {
+		b.Log.Error("Failed to persist starboard after post", "guild_id", guildID, "error", err)
+	}
+	return true
+}
+
+// runStarboardUpdates edits msgID's post, again while reactions keep arriving
+// during an edit. The caller holds the message's updating flag, so edits for
+// a message run one at a time and can't land out of order, and the wait
+// before each folds a burst of reactions into one edit.
+func (b *Bot) runStarboardUpdates(guildID, msgID snowflake.ID, st *starboardState) {
+	for {
+		time.Sleep(starboardUpdateDelay)
+
+		st.mu.Lock()
+		st.work[msgID].dirty = false
+		st.mu.Unlock()
+
+		b.updateStarboardPost(guildID, msgID, st)
+
+		st.mu.Lock()
+		w := st.work[msgID]
+		if !w.dirty {
+			w.updating = false
+			st.endWork(msgID)
+			st.mu.Unlock()
+			return
+		}
+		st.mu.Unlock()
+	}
+}
+
+// updateStarboardPost sets the post's footer to the source message's reaction
+// count, read just before the edit.
+func (b *Bot) updateStarboardPost(guildID, msgID snowflake.ID, st *starboardState) {
+	st.mu.Lock()
+	entry, ok := st.Entries[msgID]
+	settings := st.Settings
+	st.mu.Unlock()
+
+	if !ok || entry.StarboardMsgID == 0 || settings.OutputChannelID == 0 {
+		return
+	}
+	postChannel := entry.postChannel(settings.OutputChannelID)
+
+	existing, err := b.Client.Rest.GetMessage(postChannel, entry.StarboardMsgID)
 	if err != nil {
 		b.Log.Error("Failed to fetch starboard message for update", "guild_id", guildID, "message_id", msgID, "error", err)
 		return
 	}
-
 	if len(existing.Embeds) == 0 {
 		return
 	}
 
+	// Fill in a channel name an older post stored as "unknown" or not at all.
+	channelName := entry.ChannelName
+	if channelName == "" || channelName == "unknown" {
+		channelName = b.resolveChannelName(entry.ChannelID)
+	}
+
+	source, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID)
+	if err != nil {
+		b.Log.Error("Failed to fetch message for starboard update", "guild_id", guildID, "message_id", msgID, "error", err)
+		return
+	}
+	count := reactionCount(source.Reactions, settings.Emoji)
+
+	st.mu.Lock()
+	entry, ok = st.Entries[msgID]
+	if ok {
+		entry.Count = count
+		if channelName != "" {
+			entry.ChannelName = channelName
+		}
+		st.Entries[msgID] = entry
+	}
+	st.mu.Unlock()
+	if !ok {
+		return
+	}
+
 	embed := existing.Embeds[0]
-	footer := starboardFooter(settings.Emoji, entry.Count, channelName)
+	footer := starboardFooter(settings.Emoji, count, channelName)
 	embed.Footer = &footer
 
 	emptyContent := ""
 	embeds := []discord.Embed{embed}
-	_, err = b.Client.Rest.UpdateMessage(settings.OutputChannelID, entry.StarboardMsgID, discord.MessageUpdate{
+	_, err = b.Client.Rest.UpdateMessage(postChannel, entry.StarboardMsgID, discord.MessageUpdate{
 		Content: &emptyContent,
 		Embeds:  &embeds,
 	})
@@ -488,16 +783,22 @@ func (b *Bot) handleSBConfigSet(e *events.ApplicationCommandInteractionCreate, g
 
 	b.Log.Info("Starboard config set", "user_id", e.User().ID, "guild_id", guildID)
 
+	ch, hasChannel := data.OptChannel("channel")
+	if hasChannel && !starboardOutputType(ch.Type) {
+		botutil.RespondEphemeral(e, "The starboard channel must be a text or announcement channel.")
+		return
+	}
+
 	st.mu.Lock()
-	if ch, ok := data.OptChannel("channel"); ok {
+	if hasChannel {
 		st.Settings.OutputChannelID = ch.ID
 	}
 	if v, ok := data.OptString("emoji"); ok {
 		newEmoji := parseEmojiInput(v)
 		if newEmoji != st.Settings.Emoji {
-			// Emoji changed — clear all unposted entries
+			// Emoji changed — clear all unposted entries that aren't mid-post
 			for id, entry := range st.Entries {
-				if entry.StarboardMsgID == 0 {
+				if entry.StarboardMsgID == 0 && st.work[id] == nil {
 					delete(st.Entries, id)
 				}
 			}
