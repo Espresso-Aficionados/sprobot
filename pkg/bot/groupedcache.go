@@ -19,6 +19,48 @@ import (
 const messageRetention = 30 * 24 * time.Hour
 
 const cacheDir = "/sprobot-cache"
+
+// enabledCacheFlags lists the disgo caches sprobot keeps; each is persisted to
+// cacheDir. It is explicit rather than cache.FlagsAll so that a cache added by
+// a disgo upgrade stays off until someone decides to keep it.
+// TestCacheFlagsClassified fails until every disgo flag is either here or in
+// disabledCacheFlags.
+const enabledCacheFlags = cache.FlagGuilds |
+	cache.FlagChannels |
+	cache.FlagMessages |
+	cache.FlagMembers |
+	cache.FlagRoles |
+	cache.FlagEmojis |
+	cache.FlagStickers |
+	cache.FlagVoiceStates |
+	cache.FlagStageInstances |
+	cache.FlagGuildScheduledEvents |
+	cache.FlagGuildSoundboardSounds
+
+// disabledCacheFlags lists the disgo caches deliberately left off, and why.
+// Storing user data no feature reads costs compliance and buys nothing; see
+// docs/privileged-intents/sprobot.md.
+var disabledCacheFlags = map[cache.Flags]string{
+	cache.FlagPresences:     "no presence intent, and no feature reads presences",
+	cache.FlagThreadMembers: "no feature reads thread membership",
+}
+
+// retiredCacheFiles are files written by caches that have since been disabled.
+// They are deleted on startup so the data does not linger on disk.
+var retiredCacheFiles = []string{"presencecache.json", "threadmembercache.json"}
+
+func (b *Bot) removeRetiredCacheFiles() {
+	for _, name := range retiredCacheFiles {
+		err := os.Remove(filepath.Join(cacheDir, name))
+		switch {
+		case err == nil:
+			b.Log.Info("Removed retired cache file", "file", name)
+		case !os.IsNotExist(err):
+			b.Log.Error("Failed to remove retired cache file", "file", name, "error", err)
+		}
+	}
+}
+
 const messageCacheFile = "messagecache.json"
 const memberCacheFile = "membercache.json"
 const guildCacheFile = "guildcache.json"
@@ -27,8 +69,6 @@ const roleCacheFile = "rolecache.json"
 const emojiCacheFile = "emojicache.json"
 const stickerCacheFile = "stickercache.json"
 const voiceStateCacheFile = "voicestatecache.json"
-const presenceCacheFile = "presencecache.json"
-const threadMemberCacheFile = "threadmembercache.json"
 const stageInstanceCacheFile = "stageinstancecache.json"
 const scheduledEventCacheFile = "scheduledeventcache.json"
 const soundboardSoundCacheFile = "soundboardsoundcache.json"
@@ -686,76 +726,6 @@ func (b *Bot) saveVoiceStateCache() {
 	}
 	if err := os.WriteFile(filepath.Join(cacheDir, voiceStateCacheFile), data, 0o644); err != nil {
 		b.Log.Error("Failed to write voice state cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadPresenceCache() {
-	path := filepath.Join(cacheDir, presenceCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read presence cache file", "error", err)
-		}
-		return
-	}
-	var presences []discord.Presence
-	if err := json.Unmarshal(data, &presences); err != nil {
-		b.Log.Error("Failed to decode presence cache", "error", err)
-		return
-	}
-	b.presenceCache.load(presences, func(p discord.Presence) (snowflake.ID, snowflake.ID) {
-		return p.GuildID, p.PresenceUser.ID
-	})
-	b.Log.Info("Loaded presence cache", "count", len(presences))
-}
-
-func (b *Bot) savePresenceCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.presenceCache.snapshot())
-	if err != nil {
-		b.Log.Error("Failed to marshal presence cache", "error", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, presenceCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write presence cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadThreadMemberCache() {
-	path := filepath.Join(cacheDir, threadMemberCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read thread member cache file", "error", err)
-		}
-		return
-	}
-	var members []discord.ThreadMember
-	if err := json.Unmarshal(data, &members); err != nil {
-		b.Log.Error("Failed to decode thread member cache", "error", err)
-		return
-	}
-	b.threadMemberCache.load(members, func(tm discord.ThreadMember) (snowflake.ID, snowflake.ID) {
-		return tm.ThreadID, tm.UserID
-	})
-	b.Log.Info("Loaded thread member cache", "count", len(members))
-}
-
-func (b *Bot) saveThreadMemberCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.threadMemberCache.snapshot())
-	if err != nil {
-		b.Log.Error("Failed to marshal thread member cache", "error", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, threadMemberCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write thread member cache file", "error", err)
 	}
 }
 
