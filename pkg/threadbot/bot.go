@@ -22,6 +22,7 @@ type Bot struct {
 	stop         chan struct{}
 	reminders    map[snowflake.ID]map[snowflake.ID]*threadReminder // guild -> channel -> reminder
 	memberCounts map[snowflake.ID]*memberCountCache                // guild -> cache
+	sessionStart time.Time                                         // when the current gateway session began
 }
 
 func New(token string) (*Bot, error) {
@@ -38,17 +39,26 @@ func New(token string) (*Bot, error) {
 	}
 
 	client, err := disgo.New(token,
+		// Only guilds are cached: the member and thread-member events that
+		// GuildMembers delivers are counted, never stored.
 		bot.WithCacheConfigOpts(cache.WithCaches(cache.FlagGuilds)),
 		bot.WithGatewayConfigOpts(
 			gateway.WithIntents(
 				gateway.IntentGuilds,
 				gateway.IntentGuildMessages,
+				// Privileged (approved): thread member add/remove events for
+				// other users, used to keep member counts current between
+				// REST refreshes. See docs/privileged-intents/threadbot.md.
+				gateway.IntentGuildMembers,
 			),
 			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.onCommand),
 		bot.WithEventListenerFunc(b.onMessage),
+		bot.WithEventListenerFunc(b.onSessionReady),
+		bot.WithEventListenerFunc(b.onThreadMemberAdd),
+		bot.WithEventListenerFunc(b.onThreadMemberRemove),
 	)
 	if err != nil {
 		return nil, err
