@@ -2,6 +2,7 @@ package threadbot
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/disgoorg/disgo/discord"
@@ -42,9 +43,7 @@ var threadChannelTypes = []discord.ChannelType{
 func intPtr(v int) *int { return &v }
 
 func isThread(ct discord.ChannelType) bool {
-	return ct == discord.ChannelTypeGuildPublicThread ||
-		ct == discord.ChannelTypeGuildPrivateThread ||
-		ct == discord.ChannelTypeGuildNewsThread
+	return slices.Contains(threadChannelTypes, ct)
 }
 
 // validateReminderParams checks cross-field constraints for thread reminder settings.
@@ -377,8 +376,8 @@ func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
 	}
 
 	b.mu.Lock()
-	channels, ok := b.reminders[guildID]
-	if !ok || len(channels) == 0 {
+	channels := b.reminders[guildID]
+	if len(channels) == 0 {
 		b.mu.Unlock()
 		b.Log.Info("List reminders: none found", "user_id", e.User().ID, "guild_id", guildID)
 		botutil.RespondEphemeral(e, "No thread reminders in this server.")

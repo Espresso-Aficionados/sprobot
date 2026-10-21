@@ -136,15 +136,9 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 		return
 	}
 
-	guildID := *e.GuildID
 	b.mu.Lock()
-	channels, ok := b.reminders[guildID]
-	if !ok {
-		b.mu.Unlock()
-		return
-	}
-	r, ok := channels[e.ChannelID]
-	if !ok || !r.Enabled {
+	r := b.reminders[*e.GuildID][e.ChannelID]
+	if r == nil || !r.Enabled {
 		b.mu.Unlock()
 		return
 	}
