@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -59,6 +60,36 @@ func timePtr(t time.Time) *time.Time { return &t }
 
 func channelMention(id snowflake.ID) string { return fmt.Sprintf("<#%d>", id) }
 func userMention(id snowflake.ID) string    { return fmt.Sprintf("<@%d>", id) }
+
+// hiddenChannelName is the name Discord gives a channel the bot can't view.
+// Such channels also carry channel flag 1<<17, but disgo only decodes flags
+// for forum and media channels, so the name is what we check.
+const hiddenChannelName = "___hidden___"
+
+// channelDisplayName returns a channel's name for the logs, or a placeholder
+// when Discord has hidden the channel from the bot.
+func channelDisplayName(name string) string {
+	if name == hiddenChannelName {
+		return "*(hidden from the bot)*"
+	}
+	return name
+}
+
+// isChannelRename reports whether a name change is a real rename, not the
+// channel becoming visible to (or hidden from) the bot.
+func isChannelRename(oldName, newName string) bool {
+	return oldName != newName && oldName != hiddenChannelName && newName != hiddenChannelName
+}
+
+// decodeAuditValue decodes an audit log change value into v. An absent value
+// (a create has no old value, a delete no new one) leaves v unchanged and is
+// not an error.
+func decodeAuditValue(raw json.RawMessage, v any) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return json.Unmarshal(raw, v)
+}
 
 // messageMetaFields returns "Message ID" and "Sent" fields derived from a
 // message snowflake. The sent time is decoded from the snowflake's embedded
@@ -387,15 +418,23 @@ func (b *Bot) handleMemberRoleUpdateEntry(guildID snowflake.ID, entry discord.Au
 	}
 
 	var added, removed []discord.PartialRole
+	unreadable := false
 	for _, change := range entry.Changes {
+		var dst *[]discord.PartialRole
 		switch change.Key {
 		case discord.AuditLogChangeKeyRoleAdd:
-			_ = change.UnmarshalNewValue(&added)
+			dst = &added
 		case discord.AuditLogChangeKeyRoleRemove:
-			_ = change.UnmarshalNewValue(&removed)
+			dst = &removed
+		default:
+			continue
+		}
+		if err := decodeAuditValue(change.NewValue, dst); err != nil {
+			b.Log.Error("Failed to decode audit log role change", "guild_id", guildID, "key", change.Key, "target_id", *entry.TargetID, "error", err)
+			unreadable = true
 		}
 	}
-	if len(added) == 0 && len(removed) == 0 {
+	if len(added) == 0 && len(removed) == 0 && !unreadable {
 		return
 	}
 
@@ -405,6 +444,11 @@ func (b *Bot) handleMemberRoleUpdateEntry(guildID snowflake.ID, entry discord.Au
 		Fields: []discord.EmbedField{
 			{Name: "User", Value: fmt.Sprintf("%s (`%d`)", userMention(*entry.TargetID), *entry.TargetID)},
 		},
+	}
+	if unreadable {
+		embed.Fields = append(embed.Fields, discord.EmbedField{
+			Name: "Roles", Value: "*Could not read the role changes*",
+		})
 	}
 	if len(added) > 0 {
 		embed.Fields = append(embed.Fields, discord.EmbedField{
@@ -485,7 +529,7 @@ func (b *Bot) handleChannelAuditEntry(guildID snowflake.ID, entry discord.AuditL
 			switch change.Key {
 			case discord.AuditLogChangeKeyName:
 				var name string
-				if change.UnmarshalOldValue(&name) == nil && name != "" {
+				if change.UnmarshalOldValue(&name) == nil && name != "" && name != hiddenChannelName {
 					embed.Fields = append(embed.Fields, discord.EmbedField{
 						Name: "Name", Value: name, Inline: boolPtr(true),
 					})
@@ -528,7 +572,8 @@ func (b *Bot) handleRoleAuditEntry(guildID snowflake.ID, entry discord.AuditLogE
 	var roleName string
 	for _, change := range entry.Changes {
 		if change.Key == discord.AuditLogChangeKeyName {
-			// For create/update, new_value has the name; for delete, old_value
+			// For create/update, new_value has the name; for delete, old_value.
+			// An unreadable name is left empty and falls back to the mention.
 			if entry.ActionType == discord.AuditLogEventRoleDelete {
 				_ = change.UnmarshalOldValue(&roleName)
 			} else {
@@ -646,7 +691,7 @@ func (b *Bot) handleStageInstanceAuditEntry(guildID snowflake.ID, entry discord.
 		color = colorRed
 	}
 	embed := discord.Embed{Title: title, Color: color}
-	// Extract topic from changes
+	// Extract topic from changes; an unreadable topic is simply left out.
 	isDelete := entry.ActionType == discord.AuditLogEventStageInstanceDelete
 	for _, change := range entry.Changes {
 		if change.Key == discord.AuditLogChangeKeyTopic {
@@ -733,6 +778,7 @@ func (b *Bot) handleSoundboardSoundAuditEntry(guildID snowflake.ID, entry discor
 func auditLogChangeName(entry discord.AuditLogEntry, isDelete bool) string {
 	for _, change := range entry.Changes {
 		if change.Key == discord.AuditLogChangeKeyName {
+			// An unreadable name returns "", and callers fall back to the ID.
 			var name string
 			if isDelete {
 				_ = change.UnmarshalOldValue(&name)
@@ -778,7 +824,7 @@ func (b *Bot) handleChannelOverwriteEntry(guildID snowflake.ID, entry discord.Au
 
 	// Get channel name for the title
 	channelName := fmt.Sprintf("%d", channelID)
-	if ch, err := b.Client.Rest.GetChannel(channelID); err == nil {
+	if ch, err := b.Client.Rest.GetChannel(channelID); err == nil && ch.Name() != hiddenChannelName {
 		channelName = ch.Name()
 	}
 
@@ -802,16 +848,24 @@ func (b *Bot) handleChannelOverwriteEntry(guildID snowflake.ID, entry discord.Au
 		}
 	}
 
-	// Extract old/new allow/deny from changes
+	// Extract old/new allow/deny from changes. A create has no old values and
+	// a delete no new ones; those stay zero.
 	var oldAllow, oldDeny, newAllow, newDeny discord.Permissions
+	unreadable := false
+	decode := func(change discord.AuditLogChange, oldDst, newDst *discord.Permissions) {
+		for _, err := range []error{decodeAuditValue(change.OldValue, oldDst), decodeAuditValue(change.NewValue, newDst)} {
+			if err != nil {
+				b.Log.Error("Failed to decode audit log permission change", "guild_id", guildID, "channel_id", channelID, "key", change.Key, "error", err)
+				unreadable = true
+			}
+		}
+	}
 	for _, change := range entry.Changes {
 		switch change.Key {
 		case discord.AuditLogChangeKeyAllow:
-			_ = change.UnmarshalOldValue(&oldAllow)
-			_ = change.UnmarshalNewValue(&newAllow)
+			decode(change, &oldAllow, &newAllow)
 		case discord.AuditLogChangeKeyDeny:
-			_ = change.UnmarshalOldValue(&oldDeny)
-			_ = change.UnmarshalNewValue(&newDeny)
+			decode(change, &oldDeny, &newDeny)
 		}
 	}
 
@@ -823,7 +877,12 @@ func (b *Bot) handleChannelOverwriteEntry(guildID snowflake.ID, entry discord.Au
 		desc.WriteString(targetMention)
 		desc.WriteString("\n")
 	}
-	desc.WriteString(formatPermissionDiff(entry.ActionType, oldAllow, oldDeny, newAllow, newDeny))
+	if unreadable {
+		// A partial diff would misstate what changed.
+		desc.WriteString("*Could not read the permission changes*")
+	} else {
+		desc.WriteString(formatPermissionDiff(entry.ActionType, oldAllow, oldDeny, newAllow, newDeny))
+	}
 
 	embed := discord.Embed{
 		Title:       fmt.Sprintf("Channel Permissions %s: %s", action, channelName),
@@ -942,7 +1001,7 @@ func (b *Bot) onChannelCreate(e *events.GuildChannelCreate) {
 		Color: colorGreen,
 		Fields: []discord.EmbedField{
 			{Name: "Channel", Value: channelMention(e.ChannelID), Inline: boolPtr(true)},
-			{Name: "Name", Value: e.Channel.Name(), Inline: boolPtr(true)},
+			{Name: "Name", Value: channelDisplayName(e.Channel.Name()), Inline: boolPtr(true)},
 			{Name: "Type", Value: channelTypeName(e.Channel.Type()), Inline: boolPtr(true)},
 		},
 	}
@@ -953,7 +1012,9 @@ func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
 	b.checkChannelRename(e)
 
 	var fields []discord.EmbedField
-	if e.OldChannel != nil {
+	// A channel becoming visible to (or hidden from) the bot changes its name,
+	// topic and settings as we see them, without anyone editing it.
+	if e.OldChannel != nil && e.OldChannel.Name() != hiddenChannelName && e.Channel.Name() != hiddenChannelName {
 		if e.OldChannel.Name() != e.Channel.Name() {
 			fields = append(fields,
 				discord.EmbedField{Name: "Old Name", Value: e.OldChannel.Name(), Inline: boolPtr(true)},
@@ -1000,12 +1061,16 @@ func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
 // --- Thread events ---
 
 func (b *Bot) onThreadCreate(e *events.ThreadCreate) {
+	// THREAD_CREATE is also sent when the bot is added to an existing thread.
+	if !e.NewlyCreated {
+		return
+	}
 	embed := discord.Embed{
 		Title: "Thread Created",
 		Color: colorGreen,
 		Fields: []discord.EmbedField{
 			{Name: "Thread", Value: channelMention(e.ThreadID), Inline: boolPtr(true)},
-			{Name: "Name", Value: e.Thread.Name(), Inline: boolPtr(true)},
+			{Name: "Name", Value: channelDisplayName(e.Thread.Name()), Inline: boolPtr(true)},
 			{Name: "Parent", Value: channelMention(e.ParentID), Inline: boolPtr(true)},
 			{Name: "Creator", Value: userMention(e.Thread.OwnerID), Inline: boolPtr(true)},
 		},
@@ -1020,7 +1085,7 @@ func (b *Bot) onThreadUpdate(e *events.ThreadUpdate) {
 	b.checkThreadRename(e)
 
 	var fields []discord.EmbedField
-	if e.OldThread.Name() != e.Thread.Name() {
+	if isChannelRename(e.OldThread.Name(), e.Thread.Name()) {
 		fields = append(fields,
 			discord.EmbedField{Name: "Old Name", Value: e.OldThread.Name(), Inline: boolPtr(true)},
 			discord.EmbedField{Name: "New Name", Value: e.Thread.Name(), Inline: boolPtr(true)},
@@ -1067,7 +1132,7 @@ func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
 		Title: "Thread Deleted",
 		Color: colorRed,
 		Fields: []discord.EmbedField{
-			{Name: "Name", Value: e.Thread.Name(), Inline: boolPtr(true)},
+			{Name: "Name", Value: channelDisplayName(e.Thread.Name()), Inline: boolPtr(true)},
 			{Name: "Parent", Value: channelMention(e.ParentID), Inline: boolPtr(true)},
 		},
 	}

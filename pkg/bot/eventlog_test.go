@@ -1,11 +1,14 @@
 package bot
 
 import (
+	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 )
 
@@ -78,38 +81,170 @@ func TestUserMention(t *testing.T) {
 	}
 }
 
-func TestBoolPtr(t *testing.T) {
-	p := boolPtr(true)
-	if p == nil || !*p {
-		t.Error("boolPtr(true) should return pointer to true")
+func TestDecodeAuditValue(t *testing.T) {
+	var perms discord.Permissions = 7
+	for _, absent := range []string{"", "null"} {
+		if err := decodeAuditValue(json.RawMessage(absent), &perms); err != nil || perms != 7 {
+			t.Errorf("absent value %q: err %v, value %d; want nil and unchanged", absent, err, perms)
+		}
 	}
-	p = boolPtr(false)
-	if p == nil || *p {
-		t.Error("boolPtr(false) should return pointer to false")
+	if err := decodeAuditValue(json.RawMessage(`"1024"`), &perms); err != nil || perms != 1024 {
+		t.Errorf("decoded %d, %v; want 1024", perms, err)
+	}
+	if err := decodeAuditValue(json.RawMessage(`"not a number"`), &perms); err == nil {
+		t.Error("malformed value decoded without error")
 	}
 }
 
-func TestEmbedColors(t *testing.T) {
-	if colorRed != 0xED4245 {
-		t.Errorf("colorRed = %X, want ED4245", colorRed)
+func TestIsChannelRename(t *testing.T) {
+	tests := []struct {
+		old, new string
+		want     bool
+	}{
+		{"general", "chat", true},
+		{"general", "general", false},
+		{hiddenChannelName, "general", false}, // became visible to the bot
+		{"general", hiddenChannelName, false}, // hidden from the bot
 	}
-	if colorYellow != 0xFEE75C {
-		t.Errorf("colorYellow = %X, want FEE75C", colorYellow)
+	for _, tt := range tests {
+		if got := isChannelRename(tt.old, tt.new); got != tt.want {
+			t.Errorf("isChannelRename(%q, %q) = %v, want %v", tt.old, tt.new, got, tt.want)
+		}
 	}
-	if colorGreen != 0x57F287 {
-		t.Errorf("colorGreen = %X, want 57F287", colorGreen)
+	if got := channelDisplayName(hiddenChannelName); strings.Contains(got, hiddenChannelName) {
+		t.Errorf("channelDisplayName shows the placeholder name: %q", got)
 	}
-	if colorOrange != 0xE67E22 {
-		t.Errorf("colorOrange = %X, want E67E22", colorOrange)
+	if got := channelDisplayName("general"); got != "general" {
+		t.Errorf("channelDisplayName(general) = %q", got)
 	}
-	if colorBlue != 0x3498DB {
-		t.Errorf("colorBlue = %X, want 3498DB", colorBlue)
+}
+
+// newEventLogBot returns a bot logging guild 10's events to channel 15 and
+// renames of channel 5 to channel 16.
+func newEventLogBot(t *testing.T) (*Bot, *discordStub) {
+	t.Helper()
+	b, stub := newStubBot(t)
+	b.eventLog = newGuildStateStore(b.S3, b.Log, "eventlog",
+		func() *eventLogState { return &eventLogState{} },
+		func(st *eventLogState) *sync.Mutex { return &st.mu })
+	b.eventLog.set(10, &eventLogState{ChannelID: 15})
+	b.renameLogs = newGuildStateStore(b.S3, b.Log, "renamelogs",
+		func() *renameLogState { return &renameLogState{} },
+		func(st *renameLogState) *sync.Mutex { return &st.mu })
+	b.renameLogs.set(10, &renameLogState{Destination: 16, Monitored: []snowflake.ID{5}})
+	return b, stub
+}
+
+func mustThread(t *testing.T, raw string) discord.GuildThread {
+	t.Helper()
+	var th discord.GuildThread
+	if err := json.Unmarshal([]byte(raw), &th); err != nil {
+		t.Fatal(err)
 	}
-	if colorDarkRed != 0x992D22 {
-		t.Errorf("colorDarkRed = %X, want 992D22", colorDarkRed)
+	return th
+}
+
+func mustChannel(t *testing.T, raw string) discord.GuildChannel {
+	t.Helper()
+	var ch discord.UnmarshalChannel
+	if err := json.Unmarshal([]byte(raw), &ch); err != nil {
+		t.Fatal(err)
 	}
-	if colorTeal != 0x1ABC9C {
-		t.Errorf("colorTeal = %X, want 1ABC9C", colorTeal)
+	return ch.Channel.(discord.GuildChannel)
+}
+
+func TestThreadCreateLogsOnlyNewThreads(t *testing.T) {
+	b, stub := newEventLogBot(t)
+	thread := mustThread(t, `{"id":"6","type":11,"guild_id":"10","parent_id":"5","owner_id":"30","name":"help","thread_metadata":{}}`)
+	event := func(newlyCreated bool) *events.ThreadCreate {
+		return &events.ThreadCreate{
+			GenericThread: &events.GenericThread{GenericEvent: events.NewGenericEvent(b.Client, 0, 0), ThreadID: 6, GuildID: 10, ParentID: 5, Thread: thread},
+			NewlyCreated:  newlyCreated,
+		}
+	}
+
+	b.onThreadCreate(event(false)) // the bot was added to an existing thread
+	if got := stub.bodies("POST /channels/15/messages"); len(got) != 0 {
+		t.Fatalf("logged 'Thread Created' for an existing thread: %v", got)
+	}
+	b.onThreadCreate(event(true))
+	if got := stub.bodies("POST /channels/15/messages"); len(got) != 1 || !strings.Contains(got[0], "Thread Created") {
+		t.Errorf("event log posts = %v, want one 'Thread Created'", got)
+	}
+}
+
+func TestChannelVisibilityChangeIsNotLoggedAsRename(t *testing.T) {
+	b, stub := newEventLogBot(t)
+	update := func(oldName, newName string) *events.GuildChannelUpdate {
+		return &events.GuildChannelUpdate{
+			GenericGuildChannel: &events.GenericGuildChannel{
+				GenericEvent: events.NewGenericEvent(b.Client, 0, 0),
+				ChannelID:    5,
+				GuildID:      10,
+				Channel:      mustChannel(t, `{"id":"5","type":0,"guild_id":"10","name":`+jsonString(newName)+`}`),
+			},
+			OldChannel: mustChannel(t, `{"id":"5","type":0,"guild_id":"10","name":`+jsonString(oldName)+`,"topic":"old topic"}`),
+		}
+	}
+
+	b.onChannelUpdate(update(hiddenChannelName, "staff"))
+	if got := stub.routesCalled(); len(got) != 0 {
+		t.Fatalf("logged a channel becoming visible as an edit: %v", got)
+	}
+
+	b.onChannelUpdate(update("staff", "mods"))
+	if got := stub.bodies("POST /channels/16/messages"); len(got) != 1 || !strings.Contains(got[0], "Channel Renamed") {
+		t.Errorf("rename log posts = %v, want one 'Channel Renamed'", got)
+	}
+	if got := stub.bodies("POST /channels/15/messages"); len(got) != 1 || !strings.Contains(got[0], "mods") {
+		t.Errorf("event log posts = %v, want the rename logged", got)
+	}
+}
+
+func TestMemberRoleUpdateWithUnreadableRolesIsLogged(t *testing.T) {
+	b, stub := newEventLogBot(t)
+	target := snowflake.ID(30)
+	entry := discord.AuditLogEntry{
+		TargetID: &target,
+		Changes: []discord.AuditLogChange{
+			{Key: discord.AuditLogChangeKeyRoleAdd, NewValue: json.RawMessage(`{"not":"a list"}`)},
+		},
+	}
+
+	b.handleMemberRoleUpdateEntry(10, entry)
+
+	got := stub.bodies("POST /channels/15/messages")
+	if len(got) != 1 || !strings.Contains(got[0], "Could not read the role changes") {
+		t.Errorf("event log posts = %v, want the update logged as unreadable rather than dropped", got)
+	}
+}
+
+func TestChannelOverwriteUnreadableIsNotAnEmptyDiff(t *testing.T) {
+	b, stub := newEventLogBot(t)
+	target := snowflake.ID(5)
+	entry := discord.AuditLogEntry{
+		TargetID:   &target,
+		ActionType: discord.AuditLogEventChannelOverwriteUpdate,
+		Changes: []discord.AuditLogChange{
+			{Key: discord.AuditLogChangeKeyAllow, OldValue: json.RawMessage(`"0"`), NewValue: json.RawMessage(`"oops"`)},
+		},
+	}
+
+	b.handleChannelOverwriteEntry(10, entry)
+
+	got := stub.bodies("POST /channels/15/messages")
+	if len(got) != 1 || !strings.Contains(got[0], "Could not read the permission changes") || strings.Contains(got[0], "No recognizable") {
+		t.Errorf("event log posts = %v, want an unreadable notice, not an empty diff", got)
+	}
+
+	// A create has no old value: that's not a decode failure.
+	stub.reset()
+	entry.ActionType = discord.AuditLogEventChannelOverwriteCreate
+	entry.Changes = []discord.AuditLogChange{{Key: discord.AuditLogChangeKeyAllow, NewValue: json.RawMessage(`"2048"`)}}
+	b.handleChannelOverwriteEntry(10, entry)
+	got = stub.bodies("POST /channels/15/messages")
+	if len(got) != 1 || !strings.Contains(got[0], "Send Messages") {
+		t.Errorf("event log posts = %v, want the granted permission listed", got)
 	}
 }
 

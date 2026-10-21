@@ -89,7 +89,14 @@ func (s *discordStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, resp.body)
 }
 
-// routes returns the route of every request so far, in order.
+// reset forgets the requests recorded so far.
+func (s *discordStub) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requests = nil
+}
+
+// routesCalled returns the route of every request so far, in order.
 func (s *discordStub) routesCalled() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
