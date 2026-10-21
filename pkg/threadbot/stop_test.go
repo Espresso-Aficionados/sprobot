@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +61,11 @@ func startRepostInFlight(t *testing.T) (*Bot, *threadReminder, func()) {
 	t.Cleanup(srv.Close)
 	s3srv := httptest.NewServer(testutil.NewFakeS3())
 	t.Cleanup(s3srv.Close)
+	// Cleanups run last-in first-out, so a test that fails with the repost
+	// still parked releases it before srv.Close waits for the handler.
+	var once sync.Once
+	release := func() { once.Do(func() { close(api.release) }) }
+	t.Cleanup(release)
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, s3srv))
 	b.Client = &bot.Client{Rest: rest.New(rest.NewClient("test", rest.WithURL(srv.URL)))}
@@ -69,9 +75,8 @@ func startRepostInFlight(t *testing.T) (*Bot, *threadReminder, func()) {
 		LastMessageID: 100, MinIdleMins: 0, MaxIdleMins: 10, MsgThreshold: 1,
 	}
 	b.reminders[guildID] = map[snowflake.ID]*threadReminder{500: r}
-	b.startReminderGoroutine(r)
-
 	b.mu.Lock()
+	b.startReminderGoroutine(r)
 	h := r.handle
 	b.mu.Unlock()
 	h.Signal()
@@ -80,7 +85,7 @@ func startRepostInFlight(t *testing.T) (*Bot, *threadReminder, func()) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("repost did not reach Create Message")
 	}
-	return b, r, func() { close(api.release) }
+	return b, r, release
 }
 
 // The stop functions must wait for an in-flight repost without holding b.mu,
@@ -91,6 +96,13 @@ func TestStopWaitsForInFlightRepost(t *testing.T) {
 	stops := map[string]func(*Bot, *threadReminder){
 		"stopReminderGoroutine":     func(b *Bot, r *threadReminder) { b.stopReminderGoroutine(r) },
 		"stopAllReminderGoroutines": func(b *Bot, _ *threadReminder) { b.stopAllReminderGoroutines() },
+		// A command stopping a reminder during shutdown must wait for the
+		// same repost as shutdown does, not find the loop already gone.
+		"stopReminder after stopAll": func(b *Bot, r *threadReminder) {
+			go b.stopAllReminderGoroutines()
+			time.Sleep(20 * time.Millisecond)
+			b.stopReminderGoroutine(r)
+		},
 	}
 	for name, stop := range stops {
 		t.Run(name, func(t *testing.T) {
@@ -118,4 +130,50 @@ func TestStopWaitsForInFlightRepost(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Re-enabling a channel's reminder replaces it. The new reminder must take
+// over the message the old one shows, including one its in-flight repost
+// posts while being stopped, or that message stays in the channel for good.
+func TestEnableTakesOverReplacedReminderMessage(t *testing.T) {
+	b, old, release := startRepostInFlight(t)
+	e, responses := commandEvent(t, old.GuildID, enableData)
+
+	done := make(chan struct{})
+	go func() {
+		b.onCommand(e)
+		close(done)
+	}()
+	select {
+	case <-responses:
+	case <-time.After(5 * time.Second):
+		t.Fatal("enable did not respond while the old reminder's repost was in flight")
+	}
+	select {
+	case <-done:
+		t.Fatal("enable returned while the old reminder's repost was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("enable did not return after the old reminder's repost finished")
+	}
+
+	b.mu.Lock()
+	r := b.reminders[old.GuildID][old.ChannelID]
+	lastID, running := r.LastMessageID, r.handle != nil
+	b.mu.Unlock()
+	if r == old {
+		t.Fatal("reminder was not replaced")
+	}
+	if lastID != 777 {
+		t.Errorf("new reminder's LastMessageID = %d, want 777, the message the old reminder's repost posted", lastID)
+	}
+	if !running {
+		t.Error("new reminder's loop was not started")
+	}
+	b.stopAllReminderGoroutines()
 }

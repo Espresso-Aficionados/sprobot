@@ -85,8 +85,8 @@ func (b *BaseBot) gatewayStatus() gateway.Status {
 // OnGatewayClose is the gateway close handler for all bots. disgo calls it
 // when it stops reconnecting, e.g. on close code 4004 (bad token) or 4014
 // (disallowed intents). That bot would otherwise sit offline, so it shuts
-// down: WaitForShutdown returns the error, the bot saves its state, and the
-// process exits non-zero for the container to restart it.
+// down: WaitForShutdown returns the error after fatalCloseDelay, the bot saves
+// its state, and the process exits non-zero for the container to restart it.
 func (b *BaseBot) OnGatewayClose(_ gateway.Gateway, err error, reconnect bool) {
 	if !gatewayCloseFatal(err, reconnect) {
 		b.Log.Warn("Gateway closed", "error", err, "reconnect", reconnect)

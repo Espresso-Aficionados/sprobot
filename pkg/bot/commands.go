@@ -10,6 +10,7 @@ import (
 	"github.com/disgoorg/omit"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
@@ -652,7 +653,7 @@ func templateCommands(tmpl sprobot.Template) []discord.ApplicationCommandCreate 
 }
 
 func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
-	if e.GuildID() == nil {
+	if e.GuildID() == nil || b.RejectGuildNotAllowed(e) {
 		return
 	}
 	guildID := *e.GuildID()
@@ -748,7 +749,7 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
 	customID := e.Data.CustomID
 
-	if e.GuildID() == nil {
+	if e.GuildID() == nil || b.RejectGuildNotAllowed(e) {
 		return
 	}
 	guildID := *e.GuildID()
@@ -791,10 +792,16 @@ func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
 }
 
 func (b *Bot) onComponent(e *events.ComponentInteractionCreate) {
+	if b.RejectGuildNotAllowed(e) {
+		return
+	}
 	b.handleComponentInteraction(e)
 }
 
 func (b *Bot) onAutocomplete(e *events.AutocompleteInteractionCreate) {
+	if id := e.GuildID(); id != nil && !botutil.GuildAllowed(*id) {
+		return
+	}
 	b.handleAutocomplete(e)
 }
 

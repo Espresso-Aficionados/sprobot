@@ -242,3 +242,59 @@ func TestNoRepostAfterStop(t *testing.T) {
 		})
 	}
 }
+
+// A loop that replaces another must not repost while the old one's repost is
+// in flight, and stopping it waits for the old one too.
+func TestStartAfterWaitsForPrev(t *testing.T) {
+	cfg := Config{MinIdleMins: 0, MaxIdleMins: 10, MsgThreshold: 1}
+	prev := NewHandle()
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var prevDone atomic.Bool
+	prev.Start(cfg, func() bool {
+		entered <- struct{}{}
+		<-release
+		prevDone.Store(true)
+		return true
+	})
+	prev.Signal()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("prev repost did not start")
+	}
+
+	next := NewHandle()
+	nextReposted := make(chan bool, 1)
+	next.StartAfter(prev, cfg, func() bool {
+		nextReposted <- prevDone.Load()
+		return true
+	})
+	next.Signal()
+	select {
+	case <-nextReposted:
+		t.Fatal("new loop reposted while the old loop's repost was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		next.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while the replaced loop's repost was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after the replaced loop's repost finished")
+	}
+	if !prevDone.Load() {
+		t.Error("Stop returned before the replaced loop's repost finished")
+	}
+}

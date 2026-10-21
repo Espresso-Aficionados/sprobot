@@ -72,11 +72,14 @@ func (b *Bot) loadStickies() {
 		for _, s := range loaded {
 			s.applyDefaults()
 			channels[s.ChannelID] = s
-			if s.Active {
-				b.startStickyGoroutine(s)
-			}
 		}
+		// The gateway is already dispatching events that read b.stickies.
+		b.mu.Lock()
 		b.stickies[guildID] = channels
+		for _, s := range channels {
+			b.startStickyGoroutine(s)
+		}
+		b.mu.Unlock()
 		b.Log.Info("Loaded stickies", "guild_id", guildID, "count", len(channels))
 	}
 }
@@ -121,16 +124,27 @@ func (b *Bot) saveAllStickies() {
 	}
 }
 
+// startStickyGoroutine starts s's repost loop, unless s is no longer its
+// channel's active sticky or the bot is shutting down. The caller holds b.mu,
+// so the loop starts in the same critical section as the change that calls
+// for it. Any earlier loop of s is stopped, and the new one runs only once it
+// has exited, so s never has two reposts in flight.
 func (b *Bot) startStickyGoroutine(s *stickyMessage) {
-	h := idleloop.NewHandle()
-	b.mu.Lock()
-	s.handle = h
+	select {
+	case <-b.stop:
+		return
+	default:
+	}
+	if !s.Active || b.getSticky(s.GuildID, s.ChannelID) != s {
+		return
+	}
 	var lastPostTime time.Time
 	if s.LastMessageID != 0 {
 		lastPostTime = s.LastMessageID.Time()
 	}
-	b.mu.Unlock()
-	h.Start(idleloop.Config{
+	prev := s.handle
+	s.handle = idleloop.NewHandle()
+	s.handle.StartAfter(prev, idleloop.Config{
 		MinIdleMins:       s.MinIdleMins,
 		MaxIdleMins:       s.MaxIdleMins,
 		MsgThreshold:      s.MsgThreshold,
@@ -141,11 +155,12 @@ func (b *Bot) startStickyGoroutine(s *stickyMessage) {
 
 // stopStickyGoroutine stops s's repost loop and waits out any repost in
 // progress, so s.LastMessageID is final when it returns. The caller must not
-// hold b.mu, which the repost takes.
+// hold b.mu, which the repost takes, and must already have taken s out of
+// b.stickies, so no new loop can start for it. To pause a sticky that stays,
+// stop the handle read in the critical section that deactivates it instead.
 func (b *Bot) stopStickyGoroutine(s *stickyMessage) {
 	b.mu.Lock()
 	h := s.handle
-	s.handle = nil
 	b.mu.Unlock()
 	h.Stop()
 }
@@ -155,8 +170,9 @@ func (b *Bot) stopAllStickyGoroutines() {
 	var handles []*idleloop.Handle
 	for _, channels := range b.stickies {
 		for _, s := range channels {
+			// Left in place: a command stopping the same sticky meanwhile
+			// must wait for this goroutine too.
 			handles = append(handles, s.handle)
-			s.handle = nil
 		}
 	}
 	b.mu.Unlock()

@@ -92,15 +92,67 @@ func TestIgnoredGuildWarnedOnce(t *testing.T) {
 		{ID: prodGuild}, {ID: devGuild}, {ID: foreignGuild},
 	}}}
 
+	checkWarned := func(want map[snowflake.ID]int) {
+		t.Helper()
+		logs := buf.String()
+		for id, n := range want {
+			if got := strings.Count(logs, fmt.Sprintf("guild_id=%d", id)); got != n {
+				t.Errorf("guild %d warned %d times, want %d\n%s", id, got, n, logs)
+			}
+		}
+	}
+
+	// Guilds the bot is already in at startup arrive in Ready, not GuildJoin.
 	b.OnReady(ready)
 	b.OnReady(ready) // a new session sends Ready again
+	checkWarned(map[snowflake.ID]int{foreignGuild: 1, prodGuild: 0, devGuild: 0})
+
 	b.OnGuildJoin(&events.GuildJoin{GenericGuild: &events.GenericGuild{GuildID: foreignGuild}})
 	b.OnGuildJoin(&events.GuildJoin{GenericGuild: &events.GenericGuild{GuildID: 777}})
+	checkWarned(map[snowflake.ID]int{foreignGuild: 1, 777: 1, prodGuild: 0, devGuild: 0})
+}
 
-	logs := buf.String()
-	for id, want := range map[snowflake.ID]int{foreignGuild: 1, 777: 1, prodGuild: 0, devGuild: 0} {
-		if got := strings.Count(logs, fmt.Sprintf("guild_id=%d", id)); got != want {
-			t.Errorf("guild %d warned %d times, want %d\n%s", id, got, want, logs)
-		}
+// fakeInteraction records the responses to an interaction.
+type fakeInteraction struct {
+	guildID *snowflake.ID
+	sent    []discord.MessageCreate
+}
+
+func (f *fakeInteraction) GuildID() *snowflake.ID { return f.guildID }
+
+func (f *fakeInteraction) CreateMessage(m discord.MessageCreate, _ ...rest.RequestOpt) error {
+	f.sent = append(f.sent, m)
+	return nil
+}
+
+func TestRejectGuildNotAllowed(t *testing.T) {
+	b := &BaseBot{Log: testutil.DiscardLogger()}
+	id := func(v snowflake.ID) *snowflake.ID { return &v }
+	tests := []struct {
+		name    string
+		guildID *snowflake.ID
+		reject  bool
+	}{
+		{"prod", id(prodGuild), false},
+		{"dev", id(devGuild), false},
+		{"not allowed", id(foreignGuild), true},
+		{"DM", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &fakeInteraction{guildID: tt.guildID}
+			if got := b.RejectGuildNotAllowed(e); got != tt.reject {
+				t.Fatalf("RejectGuildNotAllowed = %v, want %v", got, tt.reject)
+			}
+			if !tt.reject {
+				if len(e.sent) != 0 {
+					t.Errorf("answered an allowed interaction: %+v", e.sent)
+				}
+				return
+			}
+			if len(e.sent) != 1 || e.sent[0].Flags != discord.MessageFlagEphemeral {
+				t.Errorf("responses = %+v, want one ephemeral notice", e.sent)
+			}
+		})
 	}
 }

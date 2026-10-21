@@ -23,7 +23,17 @@ func NewHandle() *Handle {
 
 // Start launches a Run goroutine using this handle's channels.
 func (h *Handle) Start(cfg Config, repost func() bool) {
-	h.wg.Go(func() { Run(cfg, h.msgCh, h.stopCh, repost) })
+	h.StartAfter(nil, cfg, repost)
+}
+
+// StartAfter is Start for a loop that replaces prev's: it stops prev and runs
+// only once prev's goroutine has exited, so the two never repost at the same
+// time. Stopping h therefore also waits for prev. prev may be nil.
+func (h *Handle) StartAfter(prev *Handle, cfg Config, repost func() bool) {
+	h.wg.Go(func() {
+		prev.Stop()
+		Run(cfg, h.msgCh, h.stopCh, repost)
+	})
 }
 
 // Stop ends the goroutine and waits for it to exit, including any repost in

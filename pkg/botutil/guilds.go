@@ -8,9 +8,9 @@ import (
 )
 
 // AllowedGuildIDs are the only guilds the bots serve. A bot added to any other
-// guild ignores it (it registers no commands and loads no state there) but
-// never leaves it. Adding a guild means adding it here and giving it an entry
-// in every per-guild config.
+// guild ignores it (it registers no commands, loads no state and turns away
+// interactions there) but never leaves it. Adding a guild means adding it here
+// and giving it an entry in every per-guild config.
 var AllowedGuildIDs = []snowflake.ID{
 	726985544038612993,  // prod: Espresso Aficionados
 	1013566342345019512, // dev
@@ -19,6 +19,27 @@ var AllowedGuildIDs = []snowflake.ID{
 // GuildAllowed reports whether guildID is in AllowedGuildIDs.
 func GuildAllowed(guildID snowflake.ID) bool {
 	return slices.Contains(AllowedGuildIDs, guildID)
+}
+
+// GuildInteraction is an interaction that can be answered with a message.
+type GuildInteraction interface {
+	MessageResponder
+	GuildID() *snowflake.ID
+}
+
+// RejectGuildNotAllowed turns away an interaction from a guild outside
+// AllowedGuildIDs with an ephemeral notice and reports whether it did. Every
+// interaction handler calls it first: commands registered in a guild before it
+// was dropped stay registered on Discord, and must not create state there.
+// Interactions outside a guild are not rejected.
+func (b *BaseBot) RejectGuildNotAllowed(e GuildInteraction) bool {
+	guildID := e.GuildID()
+	if guildID == nil || GuildAllowed(*guildID) {
+		return false
+	}
+	b.Log.Info("Rejecting interaction from guild that is not in botutil.AllowedGuildIDs", "guild_id", *guildID)
+	RespondEphemeral(e, "This bot isn't set up for this server.")
+	return true
 }
 
 // OnGuildJoin is the shared guild-join handler for all bots.

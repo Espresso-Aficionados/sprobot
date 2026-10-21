@@ -164,7 +164,7 @@ func (b *Bot) registerAllCommands() error {
 }
 
 func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
-	if e.GuildID() == nil {
+	if e.GuildID() == nil || b.RejectGuildNotAllowed(e) {
 		return
 	}
 
@@ -268,7 +268,19 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	if old != nil {
 		b.stopReminderGoroutine(old)
 	}
+	b.mu.Lock()
+	// Unless another command replaced or disabled r meanwhile, r takes over
+	// the old reminder's message, so its first repost edits or replaces it.
+	// Read only after the stop: a repost in flight replaces the message.
+	current := b.reminders[guildID][channelID] == r
+	if current && old != nil {
+		r.LastMessageID, r.LastPostTime = old.LastMessageID, old.LastPostTime
+	}
 	b.startReminderGoroutine(r)
+	b.mu.Unlock()
+	if !current && old != nil && old.LastMessageID != 0 {
+		_ = b.Client.Rest.DeleteMessage(channelID, old.LastMessageID)
+	}
 	b.saveRemindersForGuild(guildID)
 
 	b.Log.Info("Reminder enabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", msgThreshold, "time_threshold", timeThreshold, "buffer", buffer)

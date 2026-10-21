@@ -37,6 +37,10 @@ func New(token string) (*Bot, error) {
 	}
 
 	client, err := disgo.New(token,
+		// Handlers run off the gateway goroutine: stopping a repost loop
+		// waits out a repost in flight, which must not stall other events or
+		// heartbeat ACKs.
+		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
 		bot.WithCacheConfigOpts(cache.WithCaches(cache.FlagGuilds)),
 		bot.WithGatewayConfigOpts(
 			gateway.WithIntents(
@@ -63,7 +67,7 @@ func New(token string) (*Bot, error) {
 func (b *Bot) Run() error {
 	ctx := context.Background()
 
-	if err := b.Client.OpenGateway(ctx); err != nil {
+	if err := b.OpenGateway(ctx); err != nil {
 		return err
 	}
 	defer b.Client.Close(ctx)

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +54,11 @@ func startRepostInFlight(t *testing.T) (*Bot, *stickyMessage, func()) {
 	t.Cleanup(srv.Close)
 	s3srv := httptest.NewServer(testutil.NewFakeS3())
 	t.Cleanup(s3srv.Close)
+	// Cleanups run last-in first-out, so a test that fails with the repost
+	// still parked releases it before srv.Close waits for the handler.
+	var once sync.Once
+	release := func() { once.Do(func() { close(api.release) }) }
+	t.Cleanup(release)
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, s3srv))
 	b.Client = &bot.Client{Rest: rest.New(rest.NewClient("test", rest.WithURL(srv.URL)))}
@@ -62,9 +68,8 @@ func startRepostInFlight(t *testing.T) (*Bot, *stickyMessage, func()) {
 		LastMessageID: 100, MinIdleMins: 0, MaxIdleMins: 10, MsgThreshold: 1,
 	}
 	b.stickies[guildID] = map[snowflake.ID]*stickyMessage{500: s}
-	b.startStickyGoroutine(s)
-
 	b.mu.Lock()
+	b.startStickyGoroutine(s)
 	h := s.handle
 	b.mu.Unlock()
 	h.Signal()
@@ -73,7 +78,7 @@ func startRepostInFlight(t *testing.T) (*Bot, *stickyMessage, func()) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("repost did not reach Create Message")
 	}
-	return b, s, func() { close(api.release) }
+	return b, s, release
 }
 
 // The stop functions must wait for an in-flight repost without holding b.mu,
@@ -83,6 +88,13 @@ func TestStopWaitsForInFlightRepost(t *testing.T) {
 	stops := map[string]func(*Bot, *stickyMessage){
 		"stopStickyGoroutine":     func(b *Bot, s *stickyMessage) { b.stopStickyGoroutine(s) },
 		"stopAllStickyGoroutines": func(b *Bot, _ *stickyMessage) { b.stopAllStickyGoroutines() },
+		// A command stopping a sticky during shutdown must wait for the
+		// same repost as shutdown does, not find the loop already gone.
+		"stopSticky after stopAll": func(b *Bot, s *stickyMessage) {
+			go b.stopAllStickyGoroutines()
+			time.Sleep(20 * time.Millisecond)
+			b.stopStickyGoroutine(s)
+		},
 	}
 	for name, stop := range stops {
 		t.Run(name, func(t *testing.T) {
