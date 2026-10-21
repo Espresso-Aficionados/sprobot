@@ -374,7 +374,7 @@ func TestMemberCountCacheJSONRoundTrip(t *testing.T) {
 			snowflake.ID(111): 5,
 			snowflake.ID(222): 75,
 		},
-		LastRefresh: time.Now().Truncate(time.Second),
+		Fetched: map[snowflake.ID]time.Time{snowflake.ID(111): time.Now().Truncate(time.Second)},
 	}
 
 	data, err := json.Marshal(cache)
@@ -396,8 +396,61 @@ func TestMemberCountCacheJSONRoundTrip(t *testing.T) {
 	if cache2.Counts[snowflake.ID(222)] != 75 {
 		t.Errorf("count for 222 = %d, want 75", cache2.Counts[snowflake.ID(222)])
 	}
-	if !cache2.LastRefresh.Equal(cache.LastRefresh) {
-		t.Error("LastRefresh mismatch after round-trip")
+	if !cache2.Fetched[111].Equal(cache.Fetched[111]) {
+		t.Error("Fetched mismatch after round-trip")
+	}
+}
+
+func TestMemberCountNeedsFetch(t *testing.T) {
+	now := time.Now()
+	const fresh, stale, missing = snowflake.ID(1), snowflake.ID(2), snowflake.ID(3)
+	c := newMemberCountCache()
+	c.set(fresh, 60, now.Add(-time.Hour))
+	c.set(stale, 70, now.Add(-memberCountTTL))
+
+	got := c.needsFetch([]snowflake.ID{fresh, stale, missing}, now)
+	if len(got) != 2 || got[0] != stale || got[1] != missing {
+		t.Errorf("needsFetch = %v, want [%d %d]", got, stale, missing)
+	}
+}
+
+func TestMemberCountPrune(t *testing.T) {
+	now := time.Now()
+	const kept, old, legacy = snowflake.ID(1), snowflake.ID(2), snowflake.ID(3)
+	c := newMemberCountCache()
+	c.set(kept, 60, now.Add(-memberCountTTL))
+	c.set(old, 70, now.Add(-memberCountRetain))
+	c.Counts[legacy] = 80 // from a file written before per-thread fetch times
+
+	c.prune(now)
+	if _, ok := c.Counts[kept]; !ok {
+		t.Error("pruned a count still within retention")
+	}
+	for _, id := range []snowflake.ID{old, legacy} {
+		if _, ok := c.Counts[id]; ok {
+			t.Errorf("count for %d not pruned", id)
+		}
+		if _, ok := c.Fetched[id]; ok {
+			t.Errorf("fetch time for %d not pruned", id)
+		}
+	}
+}
+
+func TestMemberCountExactCount(t *testing.T) {
+	const id = snowflake.ID(1)
+	c := newMemberCountCache()
+	c.set(id, 120, time.Now())
+
+	if n, ok := c.exactCount(id, memberCountCap); !ok || n != 120 {
+		t.Errorf("at cap: got %d, %v; want 120, true", n, ok)
+	}
+	// Below the cap, member_count is used even if a stale exact count lingers.
+	if _, ok := c.exactCount(id, memberCountCap-1); ok {
+		t.Error("below cap: want member_count, got cached count")
+	}
+	var nilCache *memberCountCache
+	if _, ok := nilCache.exactCount(id, memberCountCap); ok {
+		t.Error("nil cache returned a count")
 	}
 }
 
@@ -429,7 +482,7 @@ func TestLoadMemberCountsFromS3(t *testing.T) {
 			snowflake.ID(111): 42,
 			snowflake.ID(222): 100,
 		},
-		LastRefresh: time.Now().Add(-2 * time.Hour).Truncate(time.Second),
+		Fetched: map[snowflake.ID]time.Time{snowflake.ID(111): time.Now().Add(-2 * time.Hour)},
 	}
 	data, _ := json.Marshal(cache)
 	fake.Mu.Lock()
@@ -465,7 +518,7 @@ func TestSaveMemberCounts(t *testing.T) {
 		Counts: map[snowflake.ID]int{
 			snowflake.ID(333): 55,
 		},
-		LastRefresh: time.Now().Truncate(time.Second),
+		Fetched: map[snowflake.ID]time.Time{snowflake.ID(111): time.Now().Truncate(time.Second)},
 	}
 
 	b.saveMemberCounts()
