@@ -12,9 +12,11 @@ permissions:
 
 # One publish at a time, so an older commit's run cannot finish after a newer
 # one. A running publish is never cancelled; a newer run replaces one that is
-# still waiting.
+# still waiting. Re-runs get a group of their own, so re-running an old run
+# cannot cancel the waiting run for main's tip; the tip check in
+# publish-merge keeps a re-run of an old commit from moving :latest.
 concurrency:
-  group: publish
+  group: ${{ github.run_attempt == '1' && 'publish' || format('publish-rerun-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -112,20 +114,12 @@ jobs:
           path: /tmp/digests/digest.txt
           retention-days: 1
 
+  # One job for all four images: the tip of main is checked once per run, so
+  # the images move :latest together, and re-running a failed merge always
+  # checks the tip again.
   publish-merge:
     needs: [publish-build]
     runs-on: ubuntu-26.04
-    strategy:
-      matrix:
-        include:
-          - image: sadbox/sprobot
-            artifact-prefix: digest-sadbox-sprobot
-          - image: sadbox/sprobot-web
-            artifact-prefix: digest-sadbox-sprobot-web
-          - image: sadbox/stickybot
-            artifact-prefix: digest-sadbox-stickybot
-          - image: sadbox/threadbot
-            artifact-prefix: digest-sadbox-threadbot
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -136,45 +130,46 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Download amd64 digest
+      # Each digest-<image>-<platform> artifact lands in a directory of that
+      # name.
+      - name: Download digests
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ matrix.artifact-prefix }}-linux-amd64
-          path: /tmp/digests/amd64
+          pattern: digest-*
+          path: /tmp/digests
 
-      - name: Download arm64 digest
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: ${{ matrix.artifact-prefix }}-linux-arm64
-          path: /tmp/digests/arm64
-
-      # A re-run of an old run, or a run that main moved past while it built,
-      # must not move :latest back. Such runs push only the sha- tag; the run
-      # for main's tip moves :latest.
-      - name: Check commit is still the tip of main
-        id: tip
+      # :latest moves only if this commit is still the tip of main, so a
+      # re-run of an old run, or a run main moved past while it built, cannot
+      # move it back. Publish runs are serialized, so the check holds until
+      # the push. sha-<short> is write-once: a later build of the same commit
+      # (a scheduled rebuild or a re-run) is tagged sha-<short>-<UTC time>
+      # instead, so every pushed image keeps a tag of its own. A failed
+      # lookup counts as not pushed yet.
+      - name: Create manifests and push
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          create() { # image tag
+            local dir="/tmp/digests/digest-${1//\//-}" amd64 arm64
+            amd64=$(cat "${dir}-linux-amd64/digest.txt")
+            arm64=$(cat "${dir}-linux-arm64/digest.txt")
+            docker buildx imagetools create -t "${1}:${2}" "${1}@${amd64}" "${1}@${arm64}"
+          }
+          images=(sadbox/sprobot sadbox/sprobot-web sadbox/stickybot sadbox/threadbot)
+          sha_tag="sha-${GITHUB_SHA::7}"
+          rebuild_tag="${sha_tag}-$(date -u +%Y%m%d-%H%M%S)"
           tip=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
-          if [ "$tip" = "$GITHUB_SHA" ]; then
-            echo "latest=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::main is at ${tip}, not ${GITHUB_SHA}; not moving ${{ matrix.image }}:latest"
-            echo "latest=false" >> "$GITHUB_OUTPUT"
+          for image in "${images[@]}"; do
+            if docker buildx imagetools inspect "${image}:${sha_tag}" >/dev/null 2>&1; then
+              create "$image" "$rebuild_tag"
+            else
+              create "$image" "$sha_tag"
+            fi
+          done
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "::notice::main is at ${tip}, not ${GITHUB_SHA}; not moving :latest"
+            exit 0
           fi
-
-      - name: Create manifest and push
-        env:
-          IMAGE: ${{ matrix.image }}
-          LATEST: ${{ steps.tip.outputs.latest }}
-        run: |
-          AMD64_DIGEST=$(cat /tmp/digests/amd64/digest.txt)
-          ARM64_DIGEST=$(cat /tmp/digests/arm64/digest.txt)
-          tags=(-t "${IMAGE}:sha-${GITHUB_SHA::7}")
-          if [ "$LATEST" = true ]; then
-            tags+=(-t "${IMAGE}:latest")
-          fi
-          docker buildx imagetools create "${tags[@]}" \
-            "${IMAGE}@${AMD64_DIGEST}" \
-            "${IMAGE}@${ARM64_DIGEST}"
+          for image in "${images[@]}"; do
+            create "$image" latest
+          done

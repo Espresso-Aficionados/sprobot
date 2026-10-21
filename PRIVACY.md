@@ -2,7 +2,7 @@
 
 This policy covers the Discord applications operated from this repository for the
 Espresso Aficionados Discord server: **sprobot**, **stickybot**, and **threadbot**,
-plus the **sprobot-web** profile page server.
+plus **sprobot-web**, which serves profile pages and files the bots have saved.
 
 ## Data we collect and why
 
@@ -24,10 +24,17 @@ plus the **sprobot-web** profile page server.
   messages are deleted automatically after at most 30 days. The cache is used for the
   moderation log and, in limited form, for the development and troubleshooting
   described below.
+- **Mod log** — some data is visible only to moderators and kept for moderation
+  purposes. Moderators can save a message to a staff-only mod log: its text, author,
+  and a moderator's note are posted to a staff-only channel **on Discord**, and its
+  attachments are copied to S3 so the record survives if the original is deleted.
+  Saved attachments are not deleted automatically. sprobot-web serves them at
+  unguessable links that appear only in the mod log; anyone holding a link can open
+  the file.
 - **Temporary roles** — the user ID, role ID, and expiry time of staff-assigned
   temporary roles.
 - **Server configuration** — channel/role IDs and staff-authored text (welcome
-  messages, shortcut responses).
+  messages, shortcut responses and their images).
 
 ### stickybot
 
@@ -56,8 +63,9 @@ links correctly). When we do this:
 ## What we do not do
 
 - We do not retain message content beyond the 30-day moderation cache described
-  above, and we do not share it with anyone except as described under
-  "Development and troubleshooting".
+  above, except messages staff deliberately save as stickies or to the mod log, and
+  we do not share it with anyone except as described under "Development and
+  troubleshooting".
 - We do not sell data, and we do not share it with third parties except the service
   providers named above that process it on our behalf.
 - We do not use any data to train machine-learning or AI models.

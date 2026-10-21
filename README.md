@@ -148,7 +148,7 @@ Multiarch Docker images are built and pushed to Docker Hub on every push to `mai
 - `sadbox/stickybot`
 - `sadbox/threadbot`
 
-Each publish pushes a `sha-<short commit SHA>` tag and moves `latest` only if its commit is still the tip of `main`. Images carry the full commit SHA in the `org.opencontainers.image.revision` label, so a running image can be traced to its commit and rolled back to an earlier `sha-` tag. A scheduled rebuild of an unchanged `main` re-pushes the same `sha-` tag with the refreshed base image.
+A publish moves `latest` for all four images only if its commit is still the tip of `main`. The first images built from a commit are tagged `sha-<short commit SHA>`, and that tag never moves; later builds of the same commit (scheduled rebuilds with refreshed base images, re-runs) are tagged `sha-<short commit SHA>-<UTC build time>` instead. Images carry the full commit SHA in the `org.opencontainers.image.revision` label, so a running image can be traced to its commit and rolled back by tag.
 
 ## Style
 

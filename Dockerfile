@@ -24,6 +24,10 @@ FROM base AS build-threadbot
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /threadbot ./cmd/threadbot
 
+# The distroless base is untagged so the Mon/Wed/Fri publish rebuilds pick up
+# its updates. Dependabot skips FROM lines with no tag or digest, so it does
+# not track this base; pinning a digest would let it, but would stop those
+# rebuilds from refreshing the base until its PRs merge.
 FROM gcr.io/distroless/static-debian12 AS prod
 COPY --from=build-sprobot /sprobot /sprobot
 COPY --from=base --chown=nonroot:nonroot /empty-dir /sprobot-cache
@@ -62,5 +66,9 @@ CMD ["/threadbot"]
 FROM build-threadbot AS devthreadbot
 CMD ["/threadbot"]
 
+# The test image carries the module cache but no build cache. The dependency
+# packages to precompile are only known from our sources, which change on
+# every PR, so warming the build cache here would just move the cold compile
+# from docker run to docker build.
 FROM base AS test
 CMD ["sh", "-c", "test -z \"$(gofmt -l .)\" || { echo 'gofmt check failed:'; gofmt -l .; exit 1; } && go vet ./... && go test ./..."]
