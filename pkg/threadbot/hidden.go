@@ -47,11 +47,10 @@ func decodeHiddenThreads(data []byte) (map[snowflake.ID]struct{}, error) {
 	return set, nil
 }
 
-// ensureHiddenLoaded loads a guild's stored list the first time it is needed,
-// so guilds missing from the cache at startup are covered too. A failed load
-// is retried on the next call; until one succeeds the list can't be changed,
-// so a partial list never overwrites the stored one. Callers hold
-// b.hiddenSaveMu.
+// ensureHiddenLoaded loads a guild's stored list unless it has loaded
+// already. A failed load is retried on the next call; until one succeeds the
+// list can't be changed, so a partial list never overwrites the stored one.
+// Callers hold b.hiddenSaveMu.
 func (b *Bot) ensureHiddenLoaded(guildID snowflake.ID) error {
 	b.mu.Lock()
 	loaded := b.hiddenLoaded[guildID]
@@ -148,10 +147,10 @@ func (b *Bot) setHidden(guildID, threadID snowflake.ID, hidden bool) (bool, erro
 	return true, nil
 }
 
-// loadHiddenThreads loads the hidden list for every guild known at startup.
-// Guilds that fail here, or that appear later, load on first use.
+// loadHiddenThreads loads the hidden list of every allowed guild. Guilds that
+// fail here load on first use.
 func (b *Bot) loadHiddenThreads() {
-	for _, guildID := range b.GuildIDs() {
+	for _, guildID := range botutil.AllowedGuildIDs {
 		b.hiddenSaveMu.Lock()
 		err := b.ensureHiddenLoaded(guildID)
 		b.hiddenSaveMu.Unlock()

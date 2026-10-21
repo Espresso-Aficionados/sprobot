@@ -156,38 +156,58 @@ type threadReminder struct {
 	Buffer            int          `json:"buffer"`
 }
 
+// loadReminders loads the stored reminders of every allowed guild that hasn't
+// loaded yet and starts their loops. Run calls it before the gateway opens and
+// again from the save loop, so a failed load is retried; so does the next
+// command that needs the guild's reminders.
 func (b *Bot) loadReminders() {
-	ctx := context.Background()
-	for _, guildID := range b.GuildIDs() {
-		data, err := b.S3.FetchThreadReminders(ctx, fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing thread reminders data", "guild_id", guildID)
-			continue
+	for _, guildID := range botutil.AllowedGuildIDs {
+		if err := b.ensureRemindersLoaded(guildID); err != nil {
+			b.Log.Error("Failed to load thread reminders; will retry", "guild_id", guildID, "error", err)
 		}
-		if err != nil {
-			b.Log.Error("Failed to load thread reminders", "guild_id", guildID, "error", err)
-			continue
-		}
+	}
+}
 
-		var loaded map[string]*threadReminder
-		if err := json.Unmarshal(data, &loaded); err != nil {
-			b.Log.Error("Failed to decode thread reminders", "guild_id", guildID, "error", err)
-			continue
-		}
+// ensureRemindersLoaded loads a guild's stored reminders, unless they have
+// loaded already, and starts their loops. A guild gets its b.reminders entry
+// only from a load that succeeded or found nothing stored, and never loses
+// it, so stored reminders that failed to load are never saved over.
+func (b *Bot) ensureRemindersLoaded(guildID snowflake.ID) error {
+	b.mu.Lock()
+	_, loaded := b.reminders[guildID]
+	b.mu.Unlock()
+	if loaded {
+		return nil
+	}
 
-		channels := make(map[snowflake.ID]*threadReminder, len(loaded))
-		for _, r := range loaded {
+	channels := make(map[snowflake.ID]*threadReminder)
+	data, err := b.S3.FetchThreadReminders(context.Background(), fmt.Sprintf("%d", guildID))
+	switch {
+	case errors.Is(err, s3client.ErrNotFound):
+	case err != nil:
+		return err
+	default:
+		var stored map[string]*threadReminder
+		if err := json.Unmarshal(data, &stored); err != nil {
+			return fmt.Errorf("decoding thread reminders: %w", err)
+		}
+		for _, r := range stored {
 			channels[r.ChannelID] = r
 		}
-		// The gateway is already dispatching events that read b.reminders.
-		b.mu.Lock()
-		b.reminders[guildID] = channels
-		for _, r := range channels {
-			b.startReminderGoroutine(r)
-		}
-		b.mu.Unlock()
-		b.Log.Info("Loaded thread reminders", "guild_id", guildID, "count", len(channels))
 	}
+
+	b.mu.Lock()
+	if _, ok := b.reminders[guildID]; ok {
+		b.mu.Unlock()
+		return nil // a concurrent load got there first
+	}
+	b.reminders[guildID] = channels
+	for _, r := range channels {
+		b.startReminderGoroutine(r)
+	}
+	b.mu.Unlock()
+	b.Log.Info("Loaded thread reminders", "guild_id", guildID, "count", len(channels))
+	return nil
 }
 
 func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) {
@@ -563,23 +583,38 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 	return true
 }
 
+// loadMemberCounts loads the stored member counts of every allowed guild. A
+// failed load is retried the next time the guild's counts are needed.
 func (b *Bot) loadMemberCounts() {
-	ctx := context.Background()
-	for _, guildID := range b.GuildIDs() {
-		data, err := b.S3.FetchThreadMemberCounts(ctx, fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing thread member counts", "guild_id", guildID)
-			continue
+	for _, guildID := range botutil.AllowedGuildIDs {
+		if err := b.ensureMemberCountsLoaded(guildID); err != nil {
+			b.Log.Error("Failed to load thread member counts; will retry on next use", "guild_id", guildID, "error", err)
 		}
-		if err != nil {
-			b.Log.Error("Failed to load thread member counts", "guild_id", guildID, "error", err)
-			continue
-		}
+	}
+}
 
-		var cache memberCountCache
-		if err := json.Unmarshal(data, &cache); err != nil {
-			b.Log.Error("Failed to decode thread member counts", "guild_id", guildID, "error", err)
-			continue
+// ensureMemberCountsLoaded loads a guild's stored member counts unless they
+// have loaded already. As with reminders, a guild gets its b.memberCounts
+// entry only from a load that succeeded or found nothing stored (or from
+// /threadbot refreshcounts), so counts that failed to load are never saved
+// over.
+func (b *Bot) ensureMemberCountsLoaded(guildID snowflake.ID) error {
+	b.mu.Lock()
+	_, loaded := b.memberCounts[guildID]
+	b.mu.Unlock()
+	if loaded {
+		return nil
+	}
+
+	cache := newMemberCountCache()
+	data, err := b.S3.FetchThreadMemberCounts(context.Background(), fmt.Sprintf("%d", guildID))
+	switch {
+	case errors.Is(err, s3client.ErrNotFound):
+	case err != nil:
+		return err
+	default:
+		if err := json.Unmarshal(data, cache); err != nil {
+			return fmt.Errorf("decoding thread member counts: %w", err)
 		}
 		if cache.Counts == nil {
 			cache.Counts = make(map[snowflake.ID]int)
@@ -589,11 +624,15 @@ func (b *Bot) loadMemberCounts() {
 		if cache.Fetched == nil {
 			cache.Fetched = make(map[snowflake.ID]time.Time)
 		}
-		b.mu.Lock()
-		b.memberCounts[guildID] = &cache
-		b.mu.Unlock()
-		b.Log.Info("Loaded thread member counts", "guild_id", guildID, "count", len(cache.Counts))
 	}
+
+	b.mu.Lock()
+	if _, ok := b.memberCounts[guildID]; !ok {
+		b.memberCounts[guildID] = cache
+	}
+	b.mu.Unlock()
+	b.Log.Info("Loaded thread member counts", "guild_id", guildID, "count", len(cache.Counts))
+	return nil
 }
 
 func (b *Bot) saveMemberCounts() {
@@ -632,13 +671,15 @@ func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID
 	if len(threadIDs) == 0 {
 		return
 	}
+	if err := b.ensureMemberCountsLoaded(guildID); err != nil {
+		// Counts fetched now couldn't be saved without overwriting the stored
+		// ones, so member_count is shown until the load succeeds.
+		b.Log.Error("Failed to load thread member counts; showing capped counts", "guild_id", guildID, "error", err)
+		return
+	}
 
 	b.mu.Lock()
 	cache := b.memberCounts[guildID]
-	if cache == nil {
-		cache = newMemberCountCache()
-		b.memberCounts[guildID] = cache
-	}
 	sessionStart := b.sessionStart
 	toFetch := cache.needsFetch(threadIDs, time.Now(), sessionStart)
 	b.mu.Unlock()

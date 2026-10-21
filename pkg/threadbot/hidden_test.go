@@ -139,9 +139,6 @@ func TestSetHiddenNeverOverwritesUnloadedList(t *testing.T) {
 	srv := httptest.NewServer(fs)
 	defer srv.Close()
 	s3c := testutil.NewTestS3Client(t, srv)
-	devGuild := snowflake.ID(1013566342345019512) // in the test bot's GuildIDs
-	prodGuild := snowflake.ID(726985544038612993) // not known at startup
-
 	seed := newTestBot(t, s3c)
 	for _, g := range []snowflake.ID{devGuild, prodGuild} {
 		if _, err := seed.setHidden(g, 10, true); err != nil {
@@ -172,7 +169,7 @@ func TestSetHiddenNeverOverwritesUnloadedList(t *testing.T) {
 		t.Errorf("dev guild stored list = %v, want threads 10 and 20", set)
 	}
 
-	// A guild that wasn't known at startup loads on first use too.
+	// So does every other guild whose startup load failed.
 	if changed, err := b.setHidden(prodGuild, 30, true); !changed || err != nil {
 		t.Fatalf("hide in late guild: changed=%v err=%v", changed, err)
 	}

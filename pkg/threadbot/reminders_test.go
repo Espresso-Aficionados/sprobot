@@ -399,12 +399,12 @@ func TestLoadRemindersInvalidJSON(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	// Should not panic
 	b.loadReminders()
 
+	// Left unloaded, so the stored file isn't saved over.
 	guildID := snowflake.ID(1013566342345019512)
-	if channels, ok := b.reminders[guildID]; ok && len(channels) > 0 {
-		t.Error("should not load reminders from invalid JSON")
+	if _, ok := b.reminders[guildID]; ok {
+		t.Error("guild with undecodable reminders marked loaded")
 	}
 }
 
@@ -527,9 +527,10 @@ func TestLoadMemberCountsNotFound(t *testing.T) {
 
 	b.loadMemberCounts()
 
+	// Nothing stored: the guild starts with an empty cache it may save.
 	guildID := snowflake.ID(1013566342345019512)
-	if cache, ok := b.memberCounts[guildID]; ok && cache != nil {
-		t.Error("expected no member counts after loading from empty S3")
+	if cache := b.memberCounts[guildID]; cache == nil || len(cache.Counts) != 0 {
+		t.Errorf("member counts after loading from empty S3 = %+v, want an empty cache", cache)
 	}
 }
 
@@ -617,9 +618,10 @@ func TestLoadMemberCountsInvalidJSON(t *testing.T) {
 	b := newTestBot(t, c)
 	b.loadMemberCounts()
 
+	// Left unloaded, so the stored file isn't saved over.
 	guildID := snowflake.ID(1013566342345019512)
-	if cache, ok := b.memberCounts[guildID]; ok && cache != nil {
-		t.Error("should not load member counts from invalid JSON")
+	if _, ok := b.memberCounts[guildID]; ok {
+		t.Error("guild with undecodable member counts marked loaded")
 	}
 }
 

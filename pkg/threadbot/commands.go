@@ -241,6 +241,9 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 		botutil.RespondEphemeral(e, errMsg)
 		return
 	}
+	if !b.remindersLoaded(e, guildID) {
+		return
+	}
 	r := &threadReminder{
 		ChannelID:         channelID,
 		GuildID:           guildID,
@@ -255,9 +258,6 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 
 	// Replace any existing reminder in this channel
 	b.mu.Lock()
-	if b.reminders[guildID] == nil {
-		b.reminders[guildID] = make(map[snowflake.ID]*threadReminder)
-	}
 	old := b.reminders[guildID][channelID]
 	b.reminders[guildID][channelID] = r
 	b.mu.Unlock()
@@ -286,27 +286,36 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	b.Log.Info("Reminder enabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", msgThreshold, "time_threshold", timeThreshold, "buffer", buffer)
 }
 
+// remindersLoaded makes sure the guild's stored reminders have loaded before
+// a command reads or changes them. If they can't be loaded it tells the user
+// and returns false: a change saved now would overwrite them.
+func (b *Bot) remindersLoaded(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID) bool {
+	if err := b.ensureRemindersLoaded(guildID); err != nil {
+		b.Log.Error("Failed to load thread reminders", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "Couldn't load this server's thread reminders, so they can't be shown or changed right now. Please try again in a minute.")
+		return false
+	}
+	return true
+}
+
 func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
+	if !b.remindersLoaded(e, guildID) {
+		return
+	}
 
 	b.mu.Lock()
-	channels, ok := b.reminders[guildID]
-	if !ok {
-		b.mu.Unlock()
-		b.Log.Info("Disable: no reminder found", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
-		botutil.RespondEphemeral(e, "No thread reminder in this channel.")
-		return
+	r, ok := b.reminders[guildID][channelID]
+	if ok {
+		delete(b.reminders[guildID], channelID)
 	}
-	r, ok := channels[channelID]
-	if !ok {
-		b.mu.Unlock()
-		b.Log.Info("Disable: no reminder found", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
-		botutil.RespondEphemeral(e, "No thread reminder in this channel.")
-		return
-	}
-	delete(channels, channelID)
 	b.mu.Unlock()
+	if !ok {
+		b.Log.Info("Disable: no reminder found", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
+		botutil.RespondEphemeral(e, "No thread reminder in this channel.")
+		return
+	}
 
 	// Respond first: stopping waits for any repost in flight, which can
 	// outlast the interaction's 3-second deadline.
@@ -385,6 +394,9 @@ func (b *Bot) handleFetchAll(e *events.ApplicationCommandInteractionCreate) {
 
 func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
+	if !b.remindersLoaded(e, guildID) {
+		return
+	}
 
 	b.mu.Lock()
 	channels, ok := b.reminders[guildID]
