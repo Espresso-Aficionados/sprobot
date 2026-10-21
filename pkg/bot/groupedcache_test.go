@@ -1,9 +1,11 @@
 package bot
 
 import (
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -129,7 +131,7 @@ func TestCappedCache_SnapshotLoad(t *testing.T) {
 	}
 
 	c2 := newCappedGroupedCache[discord.Message](100)
-	c2.load(msgs, func(msg discord.Message) (snowflake.ID, snowflake.ID) {
+	loadItems(c2, msgs, func(msg discord.Message) (snowflake.ID, snowflake.ID) {
 		return msg.ChannelID, msg.ID
 	})
 
@@ -157,29 +159,6 @@ func TestCappedCache_PutOverwrite(t *testing.T) {
 	got, _ := c.Get(ch, 10)
 	if got.Content != "second" {
 		t.Fatalf("content = %q, want %q", got.Content, "second")
-	}
-}
-
-func TestLoadMessageCache_MissingFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, messageCacheFile)
-
-	// Ensure file doesn't exist
-	_ = os.Remove(path)
-
-	c := newCappedGroupedCache[discord.Message](100)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		// This is the expected path — no error, cache stays empty
-	} else {
-		t.Fatalf("expected file not to exist, got data: %s", data)
-	}
-
-	if c.Len() != 0 {
-		t.Fatalf("cache should be empty, got len %d", c.Len())
 	}
 }
 
@@ -550,7 +529,7 @@ func TestUngroupedCache_SnapshotLoad(t *testing.T) {
 	}
 
 	c2 := newCappedCache[discord.Guild](100)
-	c2.load(items, func(g discord.Guild) snowflake.ID { return g.ID })
+	loadItems(c2.cappedGroupedCache, items, func(g discord.Guild) (snowflake.ID, snowflake.ID) { return 0, g.ID })
 
 	if c2.Len() != 2 {
 		t.Fatalf("loaded len = %d, want 2", c2.Len())
@@ -646,7 +625,7 @@ func TestCacheFlagsClassified(t *testing.T) {
 // disabled caches off: disgo only honours flags for the default caches it
 // builds, so this fails if a custom cache is passed for a disabled type.
 func TestDisabledCachesStoreNothing(t *testing.T) {
-	c := cache.New(cache.WithCaches(enabledCacheFlags))
+	c := cache.New(newCacheTestBot(t).cacheConfig()...)
 	guildID, threadID, userID := snowflake.ID(1), snowflake.ID(2), snowflake.ID(3)
 
 	c.AddPresence(discord.Presence{GuildID: guildID, PresenceUser: discord.PresenceUser{ID: userID}})
@@ -656,5 +635,219 @@ func TestDisabledCachesStoreNothing(t *testing.T) {
 	c.AddThreadMember(discord.ThreadMember{ThreadID: threadID, UserID: userID})
 	if _, ok := c.ThreadMember(threadID, userID); ok {
 		t.Error("thread member was cached with thread members disabled")
+	}
+}
+
+// --- Persistence ---
+
+// newCacheTestBot returns a bot with empty caches persisted to a temp dir.
+func newCacheTestBot(t *testing.T) *Bot {
+	t.Helper()
+	b := &Bot{
+		BaseBot:  &botutil.BaseBot{Log: slog.New(slog.DiscardHandler)},
+		cacheDir: t.TempDir(),
+	}
+	b.initCaches()
+	return b
+}
+
+// loadItems loads items into c in order, as loadCaches does from a file.
+func loadItems[T any](c *cappedGroupedCache[T], items []T, key func(T) (groupID, id snowflake.ID)) {
+	c.load(func(add func(snowflake.ID, snowflake.ID, T)) error {
+		for _, item := range items {
+			groupID, id := key(item)
+			add(groupID, id, item)
+		}
+		return nil
+	})
+}
+
+func unmarshalChannel(t *testing.T, data string) discord.GuildChannel {
+	t.Helper()
+	var w discord.UnmarshalChannel
+	if err := json.Unmarshal([]byte(data), &w); err != nil {
+		t.Fatal(err)
+	}
+	return w.Channel.(discord.GuildChannel)
+}
+
+func TestCachesRoundTrip(t *testing.T) {
+	b := newCacheTestBot(t)
+	guildID, channelID, userID := snowflake.ID(1), snowflake.ID(2), snowflake.ID(3)
+	msgID := snowflake.New(time.Now().Add(-time.Hour))
+	b.msgCache.Put(channelID, msgID, discord.Message{
+		ID: msgID, ChannelID: channelID, GuildID: &guildID, Content: "hello",
+		Author: discord.User{ID: userID, Username: "someone"},
+	})
+	b.memberCache.Put(guildID, userID, discord.Member{GuildID: guildID, User: discord.User{ID: userID}})
+	b.guildCache.Put(guildID, discord.Guild{ID: guildID, Name: "guild"})
+	b.channelCache.Put(channelID, unmarshalChannel(t, `{"id":"2","type":0,"guild_id":"1","name":"general"}`))
+	b.roleCache.Put(guildID, 4, discord.Role{ID: 4, GuildID: guildID})
+	b.emojiCache.Put(guildID, 5, discord.Emoji{ID: 5, GuildID: guildID})
+	b.stickerCache.Put(guildID, 6, discord.Sticker{ID: 6, GuildID: &guildID})
+	b.voiceStateCache.Put(guildID, userID, discord.VoiceState{GuildID: guildID, UserID: userID})
+	b.stageInstanceCache.Put(guildID, 7, discord.StageInstance{ID: 7, GuildID: guildID})
+	b.scheduledEventCache.Put(guildID, 8, discord.GuildScheduledEvent{ID: 8, GuildID: guildID})
+	b.soundboardSoundCache.Put(guildID, 9, discord.SoundboardSound{SoundID: 9, GuildID: &guildID})
+
+	b.saveCaches()
+
+	for flag, file := range persistedCacheFiles {
+		info, err := os.Stat(filepath.Join(b.cacheDir, file))
+		if err != nil {
+			t.Errorf("cache flag %d: %v", flag, err)
+			continue
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("%s has mode %o, want 600", file, perm)
+		}
+	}
+	if entries, _ := os.ReadDir(b.cacheDir); len(entries) != len(persistedCacheFiles) {
+		t.Errorf("cache dir has %d files, want %d (temp files left behind?)", len(entries), len(persistedCacheFiles))
+	}
+
+	got := newCacheTestBot(t)
+	got.cacheDir = b.cacheDir
+	got.loadCaches()
+
+	if m, ok := got.msgCache.Get(channelID, msgID); !ok || m.Content != "hello" || m.Author.ID != userID || *m.GuildID != guildID {
+		t.Errorf("message = %+v, %v", m, ok)
+	}
+	if _, ok := got.memberCache.Get(guildID, userID); !ok {
+		t.Error("member not loaded")
+	}
+	if g, ok := got.guildCache.Get(guildID); !ok || g.Name != "guild" {
+		t.Errorf("guild = %+v, %v", g, ok)
+	}
+	if ch, ok := got.channelCache.Get(channelID); !ok || ch.Name() != "general" || ch.GuildID() != guildID {
+		t.Errorf("channel = %+v, %v", ch, ok)
+	}
+	for name, ok := range map[string]bool{
+		"role":            has(got.roleCache.Get(guildID, 4)),
+		"emoji":           has(got.emojiCache.Get(guildID, 5)),
+		"sticker":         has(got.stickerCache.Get(guildID, 6)),
+		"voice state":     has(got.voiceStateCache.Get(guildID, userID)),
+		"stage instance":  has(got.stageInstanceCache.Get(guildID, 7)),
+		"scheduled event": has(got.scheduledEventCache.Get(guildID, 8)),
+		"soundboard":      has(got.soundboardSoundCache.Get(guildID, 9)),
+	} {
+		if !ok {
+			t.Errorf("%s not loaded", name)
+		}
+	}
+}
+
+func has[T any](_ T, ok bool) bool { return ok }
+
+// TestLoadCaches_LegacyFiles loads files as the old per-cache savers wrote
+// them: compact json.Marshal output, and null for an empty grouped cache.
+func TestLoadCaches_LegacyFiles(t *testing.T) {
+	b := newCacheTestBot(t)
+	msgID := snowflake.New(time.Now().Add(-time.Hour))
+	guildID := snowflake.ID(1)
+	old, err := json.Marshal([]discord.Message{{
+		ID: msgID, ChannelID: 2, GuildID: &guildID, Content: "old format",
+		Author: discord.User{ID: 3, Username: "someone"},
+		Member: &discord.Member{User: discord.User{ID: 3}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for file, data := range map[string][]byte{
+		messageCacheFile: old,
+		roleCacheFile:    []byte("null"),
+	} {
+		if err := os.WriteFile(filepath.Join(b.cacheDir, file), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	b.loadCaches()
+
+	if m, ok := b.msgCache.Get(2, msgID); !ok || m.Content != "old format" || m.Author.Username != "someone" {
+		t.Errorf("message = %+v, %v", m, ok)
+	}
+	if b.roleCache.Len() != 0 {
+		t.Errorf("role cache len = %d, want 0", b.roleCache.Len())
+	}
+}
+
+func TestReadCacheFile(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string // "-": no file
+		want    []int
+		wantErr bool
+	}{
+		{name: "missing file", data: "-"},
+		{name: "null", data: "null"},
+		{name: "empty array", data: "[]"},
+		{name: "compact", data: "[1,2,3]", want: []int{1, 2, 3}},
+		{name: "one per line", data: "[1\n,2\n]\n", want: []int{1, 2}},
+		// Entries before the damage are kept: dropping them helps nobody.
+		{name: "truncated", data: "[1,2,", want: []int{1, 2}, wantErr: true},
+		{name: "not an array", data: `{"a":1}`, wantErr: true},
+		{name: "empty file", data: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.data != "-" {
+				if err := os.WriteFile(filepath.Join(dir, "c.json"), []byte(tt.data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var got []int
+			err := readCacheFile(dir, "c.json", func(i int) { got = append(got, i) })
+			if (err != nil) != tt.wantErr {
+				t.Errorf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWriteCacheFile_FailureKeepsOldFile checks a failed save leaves the
+// previous file whole, with no temp file behind.
+func TestWriteCacheFile_FailureKeepsOldFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeCacheFile(dir, "c.json", []any{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCacheFile(dir, "c.json", []any{3, func() {}}); err == nil {
+		t.Fatal("expected an error encoding a func")
+	}
+
+	var got []int
+	if err := readCacheFile(dir, "c.json", func(i int) { got = append(got, i) }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []int{1, 2}) {
+		t.Errorf("got %v, want [1 2]", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "c.json.tmp")); !os.IsNotExist(err) {
+		t.Errorf("temp file left behind: %v", err)
+	}
+}
+
+// TestWriteCacheFile_TightensMode checks a file the old savers wrote with
+// mode 0o644 is replaced by an owner-only one.
+func TestWriteCacheFile_TightensMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.json")
+	if err := os.WriteFile(path, []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCacheFile(dir, "c.json", []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("mode = %o, want 600", perm)
 	}
 }

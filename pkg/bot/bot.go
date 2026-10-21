@@ -10,7 +10,6 @@ import (
 
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
-	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
@@ -32,6 +31,7 @@ type Bot struct {
 	welcome              *guildStateStore[welcomeState]
 	welcomeSentMu        sync.Mutex
 	welcomeSent          map[snowflake.ID]time.Time
+	cacheDir             string // where the caches below are persisted
 	msgCache             *cappedGroupedCache[discord.Message]
 	memberCache          *cappedGroupedCache[discord.Member]
 	guildCache           *cappedCache[discord.Guild]
@@ -66,71 +66,27 @@ func New(token string) (*Bot, error) {
 		return nil, err
 	}
 
-	msgCache := newCappedGroupedCache[discord.Message](1000000)
-	memberCache := newCappedGroupedCache[discord.Member](100000)
-	guildCache := newCappedCache[discord.Guild](100)
-	channelCache := newCappedCache[discord.GuildChannel](10000)
-	roleCache := newCappedGroupedCache[discord.Role](5000)
-	emojiCache := newCappedGroupedCache[discord.Emoji](5000)
-	stickerCache := newCappedGroupedCache[discord.Sticker](1000)
-	voiceStateCache := newCappedGroupedCache[discord.VoiceState](10000)
-	stageInstanceCache := newCappedGroupedCache[discord.StageInstance](1000)
-	scheduledEventCache := newCappedGroupedCache[discord.GuildScheduledEvent](1000)
-	soundboardSoundCache := newCappedGroupedCache[discord.SoundboardSound](1000)
-
 	b := &Bot{
-		BaseBot:              base,
-		stop:                 make(chan struct{}),
-		searchClient:         &http.Client{Timeout: 30 * time.Second},
-		skipList:             make(map[snowflake.ID]string),
-		welcomeSent:          make(map[snowflake.ID]time.Time),
-		templates:            sprobot.AllTemplates(),
-		selfroles:            getSelfroleConfig(),
-		ticketConfigs:        getTicketConfig(),
-		msgCache:             msgCache,
-		memberCache:          memberCache,
-		guildCache:           guildCache,
-		channelCache:         channelCache,
-		roleCache:            roleCache,
-		emojiCache:           emojiCache,
-		stickerCache:         stickerCache,
-		voiceStateCache:      voiceStateCache,
-		stageInstanceCache:   stageInstanceCache,
-		scheduledEventCache:  scheduledEventCache,
-		soundboardSoundCache: soundboardSoundCache,
-		threadHelpConfig:     getThreadHelpConfig(),
+		BaseBot:          base,
+		stop:             make(chan struct{}),
+		searchClient:     &http.Client{Timeout: 30 * time.Second},
+		skipList:         make(map[snowflake.ID]string),
+		welcomeSent:      make(map[snowflake.ID]time.Time),
+		templates:        sprobot.AllTemplates(),
+		selfroles:        getSelfroleConfig(),
+		ticketConfigs:    getTicketConfig(),
+		cacheDir:         defaultCacheDir,
+		threadHelpConfig: getThreadHelpConfig(),
 	}
 	b.initStateStores()
 
+	b.initCaches()
 	b.removeRetiredCacheFiles()
-	b.loadMessageCache()
-	b.loadMemberCache()
-	b.loadGuildCache()
-	b.loadChannelCache()
-	b.loadRoleCache()
-	b.loadEmojiCache()
-	b.loadStickerCache()
-	b.loadVoiceStateCache()
-	b.loadStageInstanceCache()
-	b.loadScheduledEventCache()
-	b.loadSoundboardSoundCache()
+	b.loadCaches()
 
 	client, err := disgo.New(token,
 		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
-		bot.WithCacheConfigOpts(
-			cache.WithCaches(enabledCacheFlags),
-			cache.WithGuildCache(cache.NewGuildCache(guildCache, cache.NewSet[snowflake.ID](), cache.NewSet[snowflake.ID]())),
-			cache.WithChannelCache(cache.NewChannelCache(channelCache)),
-			cache.WithMessageCache(cache.NewMessageCache(msgCache)),
-			cache.WithMemberCache(cache.NewMemberCache(memberCache)),
-			cache.WithRoleCache(cache.NewRoleCache(roleCache)),
-			cache.WithEmojiCache(cache.NewEmojiCache(emojiCache)),
-			cache.WithStickerCache(cache.NewStickerCache(stickerCache)),
-			cache.WithVoiceStateCache(cache.NewVoiceStateCache(voiceStateCache)),
-			cache.WithStageInstanceCache(cache.NewStageInstanceCache(stageInstanceCache)),
-			cache.WithGuildScheduledEventCache(cache.NewGuildScheduledEventCache(scheduledEventCache)),
-			cache.WithGuildSoundboardSoundCache(cache.NewGuildSoundboardSoundCache(soundboardSoundCache)),
-		),
+		bot.WithCacheConfigOpts(b.cacheConfig()...),
 		bot.WithGatewayConfigOpts(
 			gateway.WithIntents(
 				gateway.IntentGuilds,
@@ -423,19 +379,9 @@ func (b *Bot) Run() error {
 	b.startLoop(5*time.Minute, b.shortcuts.save)
 	b.startLoop(5*time.Minute, b.tickets.save)
 	b.startLoop(5*time.Minute, b.welcome.save)
-	b.startLoop(5*time.Minute, b.saveMessageCache)
+	b.startLoop(5*time.Minute, b.saveCaches)
 	b.startLoop(1*time.Hour, b.pruneMessageCache)
 	b.startLoop(1*time.Hour, func() { pruneCorruptBackups(b.S3, b.Log, time.Now()) })
-	b.startLoop(5*time.Minute, b.saveMemberCache)
-	b.startLoop(5*time.Minute, b.saveGuildCache)
-	b.startLoop(5*time.Minute, b.saveChannelCache)
-	b.startLoop(5*time.Minute, b.saveRoleCache)
-	b.startLoop(5*time.Minute, b.saveEmojiCache)
-	b.startLoop(5*time.Minute, b.saveStickerCache)
-	b.startLoop(5*time.Minute, b.saveVoiceStateCache)
-	b.startLoop(5*time.Minute, b.saveStageInstanceCache)
-	b.startLoop(5*time.Minute, b.saveScheduledEventCache)
-	b.startLoop(5*time.Minute, b.saveSoundboardSoundCache)
 	b.startLoop(5*time.Minute, b.saveStarboard)
 	b.startLoop(5*time.Minute, b.renameLogs.save)
 	b.startLoop(5*time.Minute, b.tempRoles.save)
@@ -444,16 +390,6 @@ func (b *Bot) Run() error {
 	shutdownErr := b.WaitForShutdown("Bot")
 	b.stopLoops()
 	b.saveState()
-	b.saveMessageCache()
-	b.saveMemberCache()
-	b.saveGuildCache()
-	b.saveChannelCache()
-	b.saveRoleCache()
-	b.saveEmojiCache()
-	b.saveStickerCache()
-	b.saveVoiceStateCache()
-	b.saveStageInstanceCache()
-	b.saveScheduledEventCache()
-	b.saveSoundboardSoundCache()
+	b.saveCaches()
 	return shutdownErr
 }

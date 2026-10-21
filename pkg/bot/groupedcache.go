@@ -1,7 +1,11 @@
 package bot
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"iter"
 	"os"
 	"path/filepath"
@@ -18,11 +22,12 @@ import (
 // message-content intent requirements.
 const messageRetention = 30 * 24 * time.Hour
 
-const cacheDir = "/sprobot-cache"
+// defaultCacheDir is where the caches are persisted (Bot.cacheDir).
+const defaultCacheDir = "/sprobot-cache"
 
 // enabledCacheFlags lists the disgo caches sprobot keeps; each is persisted to
-// cacheDir. It is explicit rather than cache.FlagsAll so that a cache added by
-// a disgo upgrade stays off until someone decides to keep it.
+// the cache dir. It is explicit rather than cache.FlagsAll so that a cache
+// added by a disgo upgrade stays off until someone decides to keep it.
 // TestCacheFlagsClassified fails until every disgo flag is either here or in
 // disabledCacheFlags.
 const enabledCacheFlags = cache.FlagGuilds |
@@ -51,7 +56,7 @@ var retiredCacheFiles = []string{"presencecache.json", "threadmembercache.json"}
 
 func (b *Bot) removeRetiredCacheFiles() {
 	for _, name := range retiredCacheFiles {
-		err := os.Remove(filepath.Join(cacheDir, name))
+		err := os.Remove(filepath.Join(b.cacheDir, name))
 		switch {
 		case err == nil:
 			b.Log.Info("Removed retired cache file", "file", name)
@@ -73,6 +78,39 @@ const stageInstanceCacheFile = "stageinstancecache.json"
 const scheduledEventCacheFile = "scheduledeventcache.json"
 const soundboardSoundCacheFile = "soundboardsoundcache.json"
 
+// initCaches creates the capped caches behind disgo's.
+func (b *Bot) initCaches() {
+	b.msgCache = newCappedGroupedCache[discord.Message](1000000)
+	b.memberCache = newCappedGroupedCache[discord.Member](100000)
+	b.guildCache = newCappedCache[discord.Guild](100)
+	b.channelCache = newCappedCache[discord.GuildChannel](10000)
+	b.roleCache = newCappedGroupedCache[discord.Role](5000)
+	b.emojiCache = newCappedGroupedCache[discord.Emoji](5000)
+	b.stickerCache = newCappedGroupedCache[discord.Sticker](1000)
+	b.voiceStateCache = newCappedGroupedCache[discord.VoiceState](10000)
+	b.stageInstanceCache = newCappedGroupedCache[discord.StageInstance](1000)
+	b.scheduledEventCache = newCappedGroupedCache[discord.GuildScheduledEvent](1000)
+	b.soundboardSoundCache = newCappedGroupedCache[discord.SoundboardSound](1000)
+}
+
+// cacheConfig points disgo at the caches made by initCaches.
+func (b *Bot) cacheConfig() []cache.ConfigOpt {
+	return []cache.ConfigOpt{
+		cache.WithCaches(enabledCacheFlags),
+		cache.WithGuildCache(cache.NewGuildCache(b.guildCache, cache.NewSet[snowflake.ID](), cache.NewSet[snowflake.ID]())),
+		cache.WithChannelCache(cache.NewChannelCache(b.channelCache)),
+		cache.WithMessageCache(cache.NewMessageCache(b.msgCache)),
+		cache.WithMemberCache(cache.NewMemberCache(b.memberCache)),
+		cache.WithRoleCache(cache.NewRoleCache(b.roleCache)),
+		cache.WithEmojiCache(cache.NewEmojiCache(b.emojiCache)),
+		cache.WithStickerCache(cache.NewStickerCache(b.stickerCache)),
+		cache.WithVoiceStateCache(cache.NewVoiceStateCache(b.voiceStateCache)),
+		cache.WithStageInstanceCache(cache.NewStageInstanceCache(b.stageInstanceCache)),
+		cache.WithGuildScheduledEventCache(cache.NewGuildScheduledEventCache(b.scheduledEventCache)),
+		cache.WithGuildSoundboardSoundCache(cache.NewGuildSoundboardSoundCache(b.soundboardSoundCache)),
+	}
+}
+
 type cacheKey struct {
 	GroupID snowflake.ID
 	ID      snowflake.ID
@@ -83,124 +121,34 @@ var _ cache.GroupedCache[discord.Member] = (*cappedGroupedCache[discord.Member])
 var _ cache.Cache[discord.Guild] = (*cappedCache[discord.Guild])(nil)
 var _ cache.Cache[discord.GuildChannel] = (*cappedCache[discord.GuildChannel])(nil)
 
+// cappedCache is a cappedGroupedCache with a single group (0), for disgo's
+// ungrouped caches.
 type cappedCache[T any] struct {
-	mu      sync.RWMutex
-	data    map[snowflake.ID]T
-	order   []snowflake.ID
-	head    int
-	size    int
-	maxSize int
+	*cappedGroupedCache[T]
 }
 
 func newCappedCache[T any](maxSize int) *cappedCache[T] {
-	return &cappedCache[T]{
-		data:    make(map[snowflake.ID]T),
-		maxSize: maxSize,
-	}
+	return &cappedCache[T]{newCappedGroupedCache[T](maxSize)}
 }
 
 func (c *cappedCache[T]) Get(id snowflake.ID) (T, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	entity, ok := c.data[id]
-	return entity, ok
+	return c.cappedGroupedCache.Get(0, id)
 }
 
 func (c *cappedCache[T]) Put(id snowflake.ID, entity T) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, exists := c.data[id]; !exists {
-		c.order = append(c.order, id)
-		c.size++
-	}
-	c.data[id] = entity
-	c.evict()
-}
-
-func (c *cappedCache[T]) evict() {
-	for c.size > c.maxSize && c.head < len(c.order) {
-		id := c.order[c.head]
-		c.order[c.head] = 0
-		c.head++
-		if _, ok := c.data[id]; ok {
-			delete(c.data, id)
-			c.size--
-			break
-		}
-	}
-	if c.head >= len(c.order)/2 && c.head > 0 {
-		remaining := copy(c.order, c.order[c.head:])
-		for i := remaining; i < len(c.order); i++ {
-			c.order[i] = 0
-		}
-		c.order = c.order[:remaining]
-		c.head = 0
-	}
+	c.cappedGroupedCache.Put(0, id, entity)
 }
 
 func (c *cappedCache[T]) Remove(id snowflake.ID) (T, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entity, ok := c.data[id]
-	if ok {
-		delete(c.data, id)
-		c.size--
-	}
-	return entity, ok
+	return c.cappedGroupedCache.Remove(0, id)
 }
 
 func (c *cappedCache[T]) RemoveIf(filterFunc cache.FilterFunc[T]) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for id, entity := range c.data {
-		if filterFunc(entity) {
-			delete(c.data, id)
-			c.size--
-		}
-	}
-}
-
-func (c *cappedCache[T]) Len() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.size
+	c.cappedGroupedCache.RemoveIf(func(_ snowflake.ID, entity T) bool { return filterFunc(entity) })
 }
 
 func (c *cappedCache[T]) All() iter.Seq[T] {
-	return func(yield func(T) bool) {
-		c.mu.RLock()
-		defer c.mu.RUnlock()
-		for _, entity := range c.data {
-			if !yield(entity) {
-				return
-			}
-		}
-	}
-}
-
-func (c *cappedCache[T]) snapshot() []T {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	items := make([]T, 0, len(c.data))
-	for _, entity := range c.data {
-		items = append(items, entity)
-	}
-	return items
-}
-
-func (c *cappedCache[T]) load(items []T, keyFn func(T) snowflake.ID) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.data = make(map[snowflake.ID]T)
-	c.order = nil
-	c.head = 0
-	c.size = 0
-	for _, item := range items {
-		id := keyFn(item)
-		c.data[id] = item
-		c.order = append(c.order, id)
-		c.size++
-	}
+	return c.GroupAll(0)
 }
 
 type cappedGroupedCache[T any] struct {
@@ -234,7 +182,11 @@ func (c *cappedGroupedCache[T]) Get(groupID snowflake.ID, id snowflake.ID) (T, b
 func (c *cappedGroupedCache[T]) Put(groupID snowflake.ID, id snowflake.ID, entity T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.put(groupID, id, entity)
+	c.evict()
+}
 
+func (c *cappedGroupedCache[T]) put(groupID snowflake.ID, id snowflake.ID, entity T) {
 	if group, ok := c.data[groupID]; ok {
 		if _, exists := group[id]; !exists {
 			c.order = append(c.order, cacheKey{GroupID: groupID, ID: id})
@@ -247,8 +199,6 @@ func (c *cappedGroupedCache[T]) Put(groupID snowflake.ID, id snowflake.ID, entit
 		c.order = append(c.order, cacheKey{GroupID: groupID, ID: id})
 		c.size++
 	}
-
-	c.evict()
 }
 
 func (c *cappedGroupedCache[T]) evict() {
@@ -398,46 +348,17 @@ func (c *cappedGroupedCache[T]) snapshot() []T {
 	return items
 }
 
-// load populates the cache from a slice of entities.
-// keyFn extracts the group ID and entity ID from each item.
-func (c *cappedGroupedCache[T]) load(items []T, keyFn func(T) (groupID, id snowflake.ID)) {
+// load replaces the cache's contents with the entries fill passes to add,
+// and returns how many it holds afterwards.
+func (c *cappedGroupedCache[T]) load(fill func(add func(groupID, id snowflake.ID, entity T)) error) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.data = make(map[snowflake.ID]map[snowflake.ID]T)
 	c.order = nil
 	c.head = 0
 	c.size = 0
-	for _, item := range items {
-		groupID, id := keyFn(item)
-		if _, ok := c.data[groupID]; !ok {
-			c.data[groupID] = make(map[snowflake.ID]T)
-		}
-		c.data[groupID][id] = item
-		c.order = append(c.order, cacheKey{GroupID: groupID, ID: id})
-		c.size++
-	}
-}
-
-// loadMessageCache reads the message cache from disk.
-func (b *Bot) loadMessageCache() {
-	path := filepath.Join(cacheDir, messageCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read message cache file", "error", err)
-		}
-		return
-	}
-	var msgs []discord.Message
-	if err := json.Unmarshal(data, &msgs); err != nil {
-		b.Log.Error("Failed to decode message cache", "error", err)
-		return
-	}
-	b.msgCache.load(msgs, func(msg discord.Message) (snowflake.ID, snowflake.ID) {
-		return msg.ChannelID, msg.ID
-	})
-	b.Log.Info("Loaded message cache", "count", len(msgs))
-	b.pruneMessageCache()
+	err := fill(c.put)
+	return c.size, err
 }
 
 // pruneMessageCache removes cached messages older than messageRetention,
@@ -453,386 +374,176 @@ func (b *Bot) pruneMessageCache() {
 	}
 }
 
-// saveMessageCache writes the message cache to disk.
-func (b *Bot) saveMessageCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-
-	msgs := b.msgCache.snapshot()
-	data, err := json.Marshal(msgs)
-	if err != nil {
-		b.Log.Error("Failed to marshal message cache", "error", err)
-		return
-	}
-
-	path := filepath.Join(cacheDir, messageCacheFile)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		b.Log.Error("Failed to write message cache file", "error", err)
-	}
-}
-
-// loadMemberCache reads the member cache from disk.
-func (b *Bot) loadMemberCache() {
-	path := filepath.Join(cacheDir, memberCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read member cache file", "error", err)
-		}
-		return
-	}
-	var members []discord.Member
-	if err := json.Unmarshal(data, &members); err != nil {
-		b.Log.Error("Failed to decode member cache", "error", err)
-		return
-	}
-	b.memberCache.load(members, func(m discord.Member) (snowflake.ID, snowflake.ID) {
-		return m.GuildID, m.User.ID
+// loadCaches fills the caches from the cache dir. New calls it before disgo
+// starts, so nothing else uses the caches yet.
+func (b *Bot) loadCaches() {
+	loadCache(b, messageCacheFile, b.msgCache, func(m discord.Message) (discord.Message, snowflake.ID, snowflake.ID, bool) {
+		return m, m.ChannelID, m.ID, true
 	})
-	b.Log.Info("Loaded member cache", "count", len(members))
-}
-
-// saveMemberCache writes the member cache to disk.
-func (b *Bot) saveMemberCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-
-	members := b.memberCache.snapshot()
-	data, err := json.Marshal(members)
-	if err != nil {
-		b.Log.Error("Failed to marshal member cache", "error", err)
-		return
-	}
-
-	path := filepath.Join(cacheDir, memberCacheFile)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		b.Log.Error("Failed to write member cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadGuildCache() {
-	path := filepath.Join(cacheDir, guildCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read guild cache file", "error", err)
-		}
-		return
-	}
-	var guilds []discord.Guild
-	if err := json.Unmarshal(data, &guilds); err != nil {
-		b.Log.Error("Failed to decode guild cache", "error", err)
-		return
-	}
-	b.guildCache.load(guilds, func(g discord.Guild) snowflake.ID { return g.ID })
-	b.Log.Info("Loaded guild cache", "count", len(guilds))
-}
-
-func (b *Bot) saveGuildCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.guildCache.snapshot())
-	if err != nil {
-		b.Log.Error("Failed to marshal guild cache", "error", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, guildCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write guild cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadChannelCache() {
-	path := filepath.Join(cacheDir, channelCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read channel cache file", "error", err)
-		}
-		return
-	}
-	var wrappers []discord.UnmarshalChannel
-	if err := json.Unmarshal(data, &wrappers); err != nil {
-		b.Log.Error("Failed to decode channel cache", "error", err)
-		return
-	}
-	channels := make([]discord.GuildChannel, 0, len(wrappers))
-	for _, w := range wrappers {
-		if gc, ok := w.Channel.(discord.GuildChannel); ok {
-			channels = append(channels, gc)
-		}
-	}
-	b.channelCache.load(channels, func(ch discord.GuildChannel) snowflake.ID { return ch.ID() })
-	b.Log.Info("Loaded channel cache", "count", len(channels))
-}
-
-func (b *Bot) saveChannelCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.channelCache.snapshot())
-	if err != nil {
-		b.Log.Error("Failed to marshal channel cache", "error", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, channelCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write channel cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadRoleCache() {
-	path := filepath.Join(cacheDir, roleCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read role cache file", "error", err)
-		}
-		return
-	}
-	var roles []discord.Role
-	if err := json.Unmarshal(data, &roles); err != nil {
-		b.Log.Error("Failed to decode role cache", "error", err)
-		return
-	}
-	b.roleCache.load(roles, func(r discord.Role) (snowflake.ID, snowflake.ID) {
-		return r.GuildID, r.ID
+	b.pruneMessageCache()
+	loadCache(b, memberCacheFile, b.memberCache, func(m discord.Member) (discord.Member, snowflake.ID, snowflake.ID, bool) {
+		return m, m.GuildID, m.User.ID, true
 	})
-	b.Log.Info("Loaded role cache", "count", len(roles))
-}
-
-func (b *Bot) saveRoleCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.roleCache.snapshot())
-	if err != nil {
-		b.Log.Error("Failed to marshal role cache", "error", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, roleCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write role cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadEmojiCache() {
-	path := filepath.Join(cacheDir, emojiCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read emoji cache file", "error", err)
-		}
-		return
-	}
-	var emojis []discord.Emoji
-	if err := json.Unmarshal(data, &emojis); err != nil {
-		b.Log.Error("Failed to decode emoji cache", "error", err)
-		return
-	}
-	b.emojiCache.load(emojis, func(e discord.Emoji) (snowflake.ID, snowflake.ID) {
-		return e.GuildID, e.ID
+	loadCache(b, guildCacheFile, b.guildCache.cappedGroupedCache, func(g discord.Guild) (discord.Guild, snowflake.ID, snowflake.ID, bool) {
+		return g, 0, g.ID, true
 	})
-	b.Log.Info("Loaded emoji cache", "count", len(emojis))
-}
-
-func (b *Bot) saveEmojiCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.emojiCache.snapshot())
-	if err != nil {
-		b.Log.Error("Failed to marshal emoji cache", "error", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, emojiCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write emoji cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadStickerCache() {
-	path := filepath.Join(cacheDir, stickerCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read sticker cache file", "error", err)
+	// Channels are an interface: UnmarshalChannel decodes the concrete type.
+	loadCache(b, channelCacheFile, b.channelCache.cappedGroupedCache, func(w discord.UnmarshalChannel) (discord.GuildChannel, snowflake.ID, snowflake.ID, bool) {
+		ch, ok := w.Channel.(discord.GuildChannel)
+		if !ok {
+			return nil, 0, 0, false
 		}
-		return
-	}
-	var stickers []discord.Sticker
-	if err := json.Unmarshal(data, &stickers); err != nil {
-		b.Log.Error("Failed to decode sticker cache", "error", err)
-		return
-	}
-	b.stickerCache.load(stickers, func(s discord.Sticker) (snowflake.ID, snowflake.ID) {
+		return ch, 0, ch.ID(), true
+	})
+	loadCache(b, roleCacheFile, b.roleCache, func(r discord.Role) (discord.Role, snowflake.ID, snowflake.ID, bool) {
+		return r, r.GuildID, r.ID, true
+	})
+	loadCache(b, emojiCacheFile, b.emojiCache, func(e discord.Emoji) (discord.Emoji, snowflake.ID, snowflake.ID, bool) {
+		return e, e.GuildID, e.ID, true
+	})
+	loadCache(b, stickerCacheFile, b.stickerCache, func(s discord.Sticker) (discord.Sticker, snowflake.ID, snowflake.ID, bool) {
 		if s.GuildID == nil {
-			return 0, s.ID
+			return s, 0, s.ID, true
 		}
-		return *s.GuildID, s.ID
+		return s, *s.GuildID, s.ID, true
 	})
-	b.Log.Info("Loaded sticker cache", "count", len(stickers))
-}
-
-func (b *Bot) saveStickerCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.stickerCache.snapshot())
-	if err != nil {
-		b.Log.Error("Failed to marshal sticker cache", "error", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, stickerCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write sticker cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadVoiceStateCache() {
-	path := filepath.Join(cacheDir, voiceStateCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read voice state cache file", "error", err)
-		}
-		return
-	}
-	var states []discord.VoiceState
-	if err := json.Unmarshal(data, &states); err != nil {
-		b.Log.Error("Failed to decode voice state cache", "error", err)
-		return
-	}
-	b.voiceStateCache.load(states, func(vs discord.VoiceState) (snowflake.ID, snowflake.ID) {
-		return vs.GuildID, vs.UserID
+	loadCache(b, voiceStateCacheFile, b.voiceStateCache, func(vs discord.VoiceState) (discord.VoiceState, snowflake.ID, snowflake.ID, bool) {
+		return vs, vs.GuildID, vs.UserID, true
 	})
-	b.Log.Info("Loaded voice state cache", "count", len(states))
-}
-
-func (b *Bot) saveVoiceStateCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.voiceStateCache.snapshot())
-	if err != nil {
-		b.Log.Error("Failed to marshal voice state cache", "error", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, voiceStateCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write voice state cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadStageInstanceCache() {
-	path := filepath.Join(cacheDir, stageInstanceCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read stage instance cache file", "error", err)
-		}
-		return
-	}
-	var instances []discord.StageInstance
-	if err := json.Unmarshal(data, &instances); err != nil {
-		b.Log.Error("Failed to decode stage instance cache", "error", err)
-		return
-	}
-	b.stageInstanceCache.load(instances, func(s discord.StageInstance) (snowflake.ID, snowflake.ID) {
-		return s.GuildID, s.ID
+	loadCache(b, stageInstanceCacheFile, b.stageInstanceCache, func(s discord.StageInstance) (discord.StageInstance, snowflake.ID, snowflake.ID, bool) {
+		return s, s.GuildID, s.ID, true
 	})
-	b.Log.Info("Loaded stage instance cache", "count", len(instances))
-}
-
-func (b *Bot) saveStageInstanceCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.stageInstanceCache.snapshot())
-	if err != nil {
-		b.Log.Error("Failed to marshal stage instance cache", "error", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, stageInstanceCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write stage instance cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadScheduledEventCache() {
-	path := filepath.Join(cacheDir, scheduledEventCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read scheduled event cache file", "error", err)
-		}
-		return
-	}
-	var events []discord.GuildScheduledEvent
-	if err := json.Unmarshal(data, &events); err != nil {
-		b.Log.Error("Failed to decode scheduled event cache", "error", err)
-		return
-	}
-	b.scheduledEventCache.load(events, func(e discord.GuildScheduledEvent) (snowflake.ID, snowflake.ID) {
-		return e.GuildID, e.ID
+	loadCache(b, scheduledEventCacheFile, b.scheduledEventCache, func(e discord.GuildScheduledEvent) (discord.GuildScheduledEvent, snowflake.ID, snowflake.ID, bool) {
+		return e, e.GuildID, e.ID, true
 	})
-	b.Log.Info("Loaded scheduled event cache", "count", len(events))
-}
-
-func (b *Bot) saveScheduledEventCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.scheduledEventCache.snapshot())
-	if err != nil {
-		b.Log.Error("Failed to marshal scheduled event cache", "error", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, scheduledEventCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write scheduled event cache file", "error", err)
-	}
-}
-
-func (b *Bot) loadSoundboardSoundCache() {
-	path := filepath.Join(cacheDir, soundboardSoundCacheFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			b.Log.Error("Failed to read soundboard sound cache file", "error", err)
-		}
-		return
-	}
-	var sounds []discord.SoundboardSound
-	if err := json.Unmarshal(data, &sounds); err != nil {
-		b.Log.Error("Failed to decode soundboard sound cache", "error", err)
-		return
-	}
-	b.soundboardSoundCache.load(sounds, func(s discord.SoundboardSound) (snowflake.ID, snowflake.ID) {
+	loadCache(b, soundboardSoundCacheFile, b.soundboardSoundCache, func(s discord.SoundboardSound) (discord.SoundboardSound, snowflake.ID, snowflake.ID, bool) {
 		if s.GuildID == nil {
-			return 0, s.SoundID
+			return s, 0, s.SoundID, true
 		}
-		return *s.GuildID, s.SoundID
+		return s, *s.GuildID, s.SoundID, true
 	})
-	b.Log.Info("Loaded soundboard sound cache", "count", len(sounds))
 }
 
-func (b *Bot) saveSoundboardSoundCache() {
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		b.Log.Error("Failed to create cache directory", "error", err)
-		return
-	}
-	data, err := json.Marshal(b.soundboardSoundCache.snapshot())
+// loadCache replaces c's contents with the items in file. entry turns each
+// decoded item into the entity and the group and ID to file it under, or
+// returns ok=false to skip it.
+func loadCache[D, T any](b *Bot, file string, c *cappedGroupedCache[T], entry func(D) (entity T, groupID, id snowflake.ID, ok bool)) {
+	n, err := c.load(func(add func(groupID, id snowflake.ID, entity T)) error {
+		return readCacheFile(b.cacheDir, file, func(item D) {
+			if entity, groupID, id, ok := entry(item); ok {
+				add(groupID, id, entity)
+			}
+		})
+	})
 	if err != nil {
-		b.Log.Error("Failed to marshal soundboard sound cache", "error", err)
+		b.Log.Error("Failed to load cache file", "file", file, "loaded", n, "error", err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(cacheDir, soundboardSoundCacheFile), data, 0o644); err != nil {
-		b.Log.Error("Failed to write soundboard sound cache file", "error", err)
+	b.Log.Info("Loaded cache file", "file", file, "count", n)
+}
+
+// saveCaches writes every persisted cache to the cache dir. The saves run one
+// after another, so only one snapshot is held at a time.
+func (b *Bot) saveCaches() {
+	saveCache(b, messageCacheFile, b.msgCache.snapshot())
+	saveCache(b, memberCacheFile, b.memberCache.snapshot())
+	saveCache(b, guildCacheFile, b.guildCache.snapshot())
+	saveCache(b, channelCacheFile, b.channelCache.snapshot())
+	saveCache(b, roleCacheFile, b.roleCache.snapshot())
+	saveCache(b, emojiCacheFile, b.emojiCache.snapshot())
+	saveCache(b, stickerCacheFile, b.stickerCache.snapshot())
+	saveCache(b, voiceStateCacheFile, b.voiceStateCache.snapshot())
+	saveCache(b, stageInstanceCacheFile, b.stageInstanceCache.snapshot())
+	saveCache(b, scheduledEventCacheFile, b.scheduledEventCache.snapshot())
+	saveCache(b, soundboardSoundCacheFile, b.soundboardSoundCache.snapshot())
+}
+
+func saveCache[T any](b *Bot, file string, items []T) {
+	if err := writeCacheFile(b.cacheDir, file, items); err != nil {
+		b.Log.Error("Failed to save cache file", "file", file, "error", err)
 	}
+}
+
+// readCacheFile decodes the JSON array in dir/name one element at a time,
+// passing each to add, so the file is never in memory whole. A missing file
+// is not an error.
+func readCacheFile[T any](dir, name string, add func(T)) error {
+	f, err := os.Open(filepath.Join(dir, name))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	dec := json.NewDecoder(f)
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if tok == nil {
+		return nil // null: older versions saved an empty cache this way
+	}
+	if tok != json.Delim('[') {
+		return fmt.Errorf("want a JSON array, got %v", tok)
+	}
+	for dec.More() {
+		var item T
+		if err := dec.Decode(&item); err != nil {
+			return err
+		}
+		add(item)
+	}
+	_, err = dec.Token()
+	return err
+}
+
+// writeCacheFile writes items to dir/name as a JSON array. It writes and
+// syncs a temp file, then renames it over the old one, so a crash mid-save
+// leaves the previous file intact. The files hold personal data, so they are
+// readable by the owner only. Saves of a file must not run concurrently: they
+// share the temp file.
+func writeCacheFile[T any](dir, name string, items []T) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, name)
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	err = writeJSONArray(f, items)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
+}
+
+// writeJSONArray encodes items one at a time, so the whole array is never in
+// memory as JSON.
+func writeJSONArray[T any](f *os.File, items []T) error {
+	w := bufio.NewWriter(f)
+	enc := json.NewEncoder(w)
+	w.WriteByte('[')
+	for i, item := range items {
+		if i > 0 {
+			w.WriteByte(',')
+		}
+		if err := enc.Encode(item); err != nil {
+			return err
+		}
+	}
+	w.WriteByte(']')
+	return w.Flush()
 }
