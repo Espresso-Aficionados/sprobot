@@ -2,14 +2,19 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
+	"github.com/sadbox/sprobot/pkg/s3client"
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
+
+const profileLoadFailed = "Couldn't load your profile, please try again."
 
 func (b *Bot) handleEdit(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
 	guildStr := guildIDStr(e)
@@ -24,10 +29,15 @@ func (b *Bot) handleEdit(e *events.ApplicationCommandInteractionCreate, tmpl spr
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	profile := make(map[string]string)
-	existing, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
-	if err == nil {
-		profile = existing
+	// A form that failed to load would come up empty, and submitting it would
+	// overwrite the saved profile.
+	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
+	if errors.Is(err, s3client.ErrNotFound) {
+		profile = make(map[string]string)
+	} else if err != nil {
+		b.Log.Error("Failed to fetch profile for edit", "user_id", userStr, "guild_id", guildStr, "error", err)
+		botutil.RespondEphemeral(e, profileLoadFailed)
+		return
 	}
 
 	// Build the modal with text inputs for each field
@@ -89,13 +99,17 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Preserve existing image URL from the saved profile
+	// Preserve existing image URL from the saved profile. If the profile
+	// can't be read, saving would drop the image, so don't.
 	existing, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
-	if err == nil {
-		if img, ok := existing[tmpl.Image.Name]; ok && img != "" {
-			profile[tmpl.Image.Name] = img
-			profile[sprobot.ImageVersionKey] = existing[sprobot.ImageVersionKey]
-		}
+	if err != nil && !errors.Is(err, s3client.ErrNotFound) {
+		b.Log.Error("Failed to fetch profile before saving", "user_id", userStr, "guild_id", guildStr, "error", err)
+		b.ephemeralFollowup(e.Token(), profileLoadFailed)
+		return
+	}
+	if img, ok := existing[tmpl.Image.Name]; ok && img != "" {
+		profile[tmpl.Image.Name] = img
+		profile[sprobot.ImageVersionKey] = existing[sprobot.ImageVersionKey]
 	}
 
 	for _, field := range tmpl.Fields {
