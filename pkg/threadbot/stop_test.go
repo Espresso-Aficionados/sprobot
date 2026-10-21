@@ -52,7 +52,7 @@ func (f *fakeRepostAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func startRepostInFlight(t *testing.T) (*Bot, *threadReminder, func()) {
 	t.Helper()
 	api := &fakeRepostAPI{
-		fakeThreadAPI: &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}},
+		fakeThreadAPI: newFakeThreadAPI(),
 		created:       make(chan struct{}, 1),
 		release:       make(chan struct{}),
 	}

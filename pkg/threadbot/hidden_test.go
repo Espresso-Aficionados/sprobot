@@ -35,7 +35,7 @@ func TestHiddenThreadsRoundTrip(t *testing.T) {
 }
 
 func TestHiddenThreadsExcludedPersistedAndPruned(t *testing.T) {
-	api := &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}}
+	api := newFakeThreadAPI()
 	srv := httptest.NewServer(api)
 	defer srv.Close()
 	s3srv := httptest.NewServer(testutil.NewFakeS3())

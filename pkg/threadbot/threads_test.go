@@ -40,7 +40,7 @@ func listLines(desc string) []string {
 // A channel list shows that channel's 10 busiest threads; channel 0 shows
 // the server's 25 busiest, each with its parent channel.
 func TestThreadsEmbedChannelAndServerLists(t *testing.T) {
-	api := &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}}
+	api := newFakeThreadAPI()
 	for i := range 30 {
 		id := fmt.Sprint(1000 + i)
 		api.addThread(id, 5, 5)
@@ -121,7 +121,7 @@ func TestThreadNamesCannotInjectLinks(t *testing.T) {
 // Private threads are left out of every list: reminders and /threads in the
 // channel, and fetchall across the server.
 func TestPrivateThreadsNeverListed(t *testing.T) {
-	api := &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}}
+	api := newFakeThreadAPI()
 	api.addThread("101", 5, 5)
 	api.addThread("102", 5, 5)
 	api.setField("102", "type", 12) // GUILD_PRIVATE_THREAD
@@ -171,7 +171,8 @@ func TestThreadListReportsFetchFailure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			api := &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}, failActive: tt.failActive}
+			api := newFakeThreadAPI()
+			api.failActive = tt.failActive
 			api.addThread("101", 5, 5)
 			api.setField("101", "parent_id", "999") // never in channel 500
 			if !tt.failActive {

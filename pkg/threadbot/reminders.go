@@ -13,6 +13,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -654,12 +655,34 @@ func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID
 	b.saveMemberCountsForGuild(guildID)
 }
 
+// threadMembersPageSize is the most members List Thread Members returns at a
+// time.
+const threadMembersPageSize = 100
+
+// countThreadMembers counts a thread's members with List Thread Members, page
+// by page: from API v11 the endpoint always paginates, so a single call would
+// stop at 100. Members are counted, never stored. Returns 0 on failure.
 func (b *Bot) countThreadMembers(threadID snowflake.ID) int {
-	members, err := b.Client.Rest.GetThreadMembers(threadID)
-	if err != nil {
-		b.Log.Error("Failed to count thread members", "thread_id", threadID, "error", err)
-		return 0
+	var n int
+	var after snowflake.ID
+	for {
+		// A new page per request: disgo's ThreadMemberPage.Next continues
+		// after the first member of the previous page instead of the last.
+		page := b.Client.Rest.GetThreadMembersPage(threadID, after, threadMembersPageSize)
+		if !page.Next() {
+			if errors.Is(page.Err, rest.ErrNoMorePages) {
+				break
+			}
+			b.Log.Error("Failed to count thread members", "thread_id", threadID, "error", page.Err)
+			return 0
+		}
+		n += len(page.Items)
+		if len(page.Items) < threadMembersPageSize {
+			break
+		}
+		// Members come ordered by user ID.
+		after = page.Items[len(page.Items)-1].UserID
 	}
-	b.Log.Info("Fetched thread member count", "thread_id", threadID, "count", len(members))
-	return len(members)
+	b.Log.Info("Fetched thread member count", "thread_id", threadID, "count", n)
+	return n
 }

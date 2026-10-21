@@ -84,7 +84,7 @@ func TestRemindersNeverSavedOverFailedLoad(t *testing.T) {
 }
 
 func TestMemberCountsNeverSavedOverFailedLoad(t *testing.T) {
-	api := &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}}
+	api := newFakeThreadAPI()
 	api.addThread("101", memberCountCap, 120)
 	apiSrv := httptest.NewServer(api)
 	defer apiSrv.Close()

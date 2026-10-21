@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,9 +25,16 @@ type fakeThreadAPI struct {
 	mu         sync.Mutex
 	threads    []map[string]any
 	members    map[string]int          // thread ID -> exact member count; -1 fails with 403
-	fetches    map[string]int          // thread ID -> List Thread Members calls
+	fetches    map[string]int          // thread ID -> List Thread Members first-page calls
 	failActive bool                    // Get Active Guild Threads answers 500
 	followups  []discord.MessageCreate // interaction follow-ups sent
+
+	pages         map[string]int // thread ID -> List Thread Members calls
+	withoutMember int            // List Thread Members calls without with_member=true
+}
+
+func newFakeThreadAPI() *fakeThreadAPI {
+	return &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}, pages: map[string]int{}}
 }
 
 func (f *fakeThreadAPI) sentFollowups() []discord.MessageCreate {
@@ -86,17 +94,38 @@ func (f *fakeThreadAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"timestamp": time.Now().Format(time.RFC3339),
 		})
 	case len(parts) >= 3 && parts[len(parts)-1] == "thread-members":
+		// Paginated, as API v11 always is: members ordered by user ID, those
+		// after the "after" user ID, at most "limit" (default 100) of them.
 		id := parts[len(parts)-2]
-		f.fetches[id]++
+		q := r.URL.Query()
+		after, _ := strconv.Atoi(q.Get("after"))
+		limit, err := strconv.Atoi(q.Get("limit"))
+		if err != nil {
+			limit = 100
+		}
+		if after == 0 {
+			f.fetches[id]++
+		}
+		f.pages[id]++
+		if q.Get("with_member") != "true" {
+			f.withoutMember++
+		}
 		n := f.members[id]
 		if n < 0 {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"message":"Missing Access","code":50001}`))
 			return
 		}
-		list := make([]map[string]any, n)
-		for i := range list {
-			list[i] = map[string]any{"id": id, "user_id": fmt.Sprint(1000 + i), "join_timestamp": time.Now().Format(time.RFC3339), "flags": 0}
+		list := []map[string]any{}
+		for i := range n {
+			userID := 1000 + i
+			if userID <= after {
+				continue
+			}
+			if len(list) == limit {
+				break
+			}
+			list = append(list, map[string]any{"id": id, "user_id": fmt.Sprint(userID), "join_timestamp": time.Now().Format(time.RFC3339), "flags": 0})
 		}
 		_ = json.NewEncoder(w).Encode(list)
 	default:
@@ -108,7 +137,7 @@ func (f *fakeThreadAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // against a fake API: threads at the member_count cap with no usable cached
 // count are fetched on first display, without waiting for any refresh window.
 func TestThreadEmbedFetchesNewAndUncachedThreads(t *testing.T) {
-	api := &fakeThreadAPI{members: map[string]int{}, fetches: map[string]int{}}
+	api := newFakeThreadAPI()
 	srv := httptest.NewServer(api)
 	defer srv.Close()
 	s3srv := httptest.NewServer(testutil.NewFakeS3())
@@ -182,4 +211,37 @@ func TestThreadEmbedFetchesNewAndUncachedThreads(t *testing.T) {
 	b.mu.Unlock()
 	desc()
 	wantFetches("104", 2)
+}
+
+// List Thread Members returns at most 100 members a call (always, from API
+// v11), so counts past 100 come from paging through every member.
+func TestCountThreadMembersPagesPast100(t *testing.T) {
+	api := newFakeThreadAPI()
+	b := newThreadListBot(t, api)
+	tests := []struct {
+		id              string
+		members         int
+		want, wantCalls int
+	}{
+		{"201", 250, 250, 3},
+		{"202", 200, 200, 3}, // a full last page takes one more call to confirm the end
+		{"203", 60, 60, 1},
+		{"204", -1, 0, 1}, // a failed fetch counts 0, never a partial count
+	}
+	for _, tt := range tests {
+		api.addThread(tt.id, memberCountCap, tt.members)
+		id, _ := snowflake.Parse(tt.id)
+		if got := b.countThreadMembers(id); got != tt.want {
+			t.Errorf("thread %s with %d members: counted %d, want %d", tt.id, tt.members, got, tt.want)
+		}
+		api.mu.Lock()
+		if api.pages[tt.id] != tt.wantCalls {
+			t.Errorf("thread %s: %d calls, want %d", tt.id, api.pages[tt.id], tt.wantCalls)
+		}
+		api.mu.Unlock()
+	}
+	// Until v11, Discord pages only with with_member=true.
+	if api.withoutMember != 0 {
+		t.Errorf("%d List Thread Members calls without with_member=true", api.withoutMember)
+	}
 }
