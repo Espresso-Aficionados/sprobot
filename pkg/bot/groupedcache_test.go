@@ -824,6 +824,125 @@ func TestDisabledCachesStoreNothing(t *testing.T) {
 	}
 }
 
+// --- Slim cached messages ---
+
+// messageReaderView is every field the readers of cached messages use: the
+// event log's onMessageDelete and onMessageUpdate, disgo's
+// RemoveMessagesByGuildID, and the cache keys.
+type messageReaderView struct {
+	ID, ChannelID   snowflake.ID
+	HasGuild        bool
+	GuildID         snowflake.ID
+	Content         string
+	AuthorID        snowflake.ID
+	AuthorUsername  string
+	AuthorBot       bool
+	AuthorAvatarURL string
+	Found           bool
+}
+
+func readerView(m discord.Message, ok bool) messageReaderView {
+	v := messageReaderView{
+		ID: m.ID, ChannelID: m.ChannelID, Content: m.Content,
+		AuthorID: m.Author.ID, AuthorUsername: m.Author.Username, AuthorBot: m.Author.Bot,
+		AuthorAvatarURL: m.Author.EffectiveAvatarURL(),
+		Found:           ok,
+	}
+	if m.GuildID != nil {
+		v.HasGuild, v.GuildID = true, *m.GuildID
+	}
+	return v
+}
+
+func fullMessages() []discord.Message {
+	guildID := snowflake.ID(1)
+	avatar := "a_0123456789abcdef"
+	nick := "nick"
+	id := snowflake.New(time.Now().Add(-time.Hour))
+	return []discord.Message{
+		{
+			ID: id, ChannelID: 2, GuildID: &guildID, Content: "with avatar",
+			Author:      discord.User{ID: 3, Username: "someone", Discriminator: "0", Avatar: &avatar, GlobalName: &nick},
+			Member:      &discord.Member{GuildID: guildID, User: discord.User{ID: 3, Username: "someone"}, Nick: &nick},
+			Embeds:      []discord.Embed{{Title: "embed"}},
+			Attachments: []discord.Attachment{{ID: 9, Filename: "a.png"}},
+		},
+		{
+			ID: id + 1, ChannelID: 2, GuildID: &guildID, Content: "legacy discriminator, default avatar",
+			Author: discord.User{ID: 4, Username: "old", Discriminator: "1234"},
+		},
+		{
+			ID: id + 2, ChannelID: 5, Content: "no guild, bot author",
+			Author: discord.User{ID: 6, Username: "bot", Discriminator: "0", Bot: true},
+		},
+	}
+}
+
+// TestMessageCache_KeepsWhatReadersUse checks that what readers see of a
+// cached message is the same as of the original, whether it comes back
+// straight from the cache, after a save and load, or after a rollback to a
+// version that decodes the file as discord.Message.
+func TestMessageCache_KeepsWhatReadersUse(t *testing.T) {
+	b := newCacheTestBot(t)
+	msgs := fullMessages()
+	for _, m := range msgs {
+		b.msgCache.Put(m.ChannelID, m.ID, m)
+	}
+	for _, m := range msgs {
+		if got, want := readerView(b.msgCache.Get(m.ChannelID, m.ID)), readerView(m, true); got != want {
+			t.Errorf("cached:\n got %+v\nwant %+v", got, want)
+		}
+	}
+
+	b.saveCaches()
+	loaded := newCacheTestBot(t)
+	loaded.cacheDir = b.cacheDir
+	loaded.loadCaches()
+	for _, m := range msgs {
+		if got, want := readerView(loaded.msgCache.Get(m.ChannelID, m.ID)), readerView(m, true); got != want {
+			t.Errorf("after save and load:\n got %+v\nwant %+v", got, want)
+		}
+	}
+
+	rolledBack := map[snowflake.ID]discord.Message{}
+	if err := readCacheFile(b.cacheDir, messageCacheFile, func(m discord.Message) { rolledBack[m.ID] = m }); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range msgs {
+		got, ok := rolledBack[m.ID]
+		if got, want := readerView(got, ok), readerView(m, true); got != want {
+			t.Errorf("decoded as discord.Message:\n got %+v\nwant %+v", got, want)
+		}
+	}
+}
+
+func TestMessageCache_Miss(t *testing.T) {
+	c := newMessageCache(10)
+	if m, ok := c.Get(1, 2); ok || m.Author.ID != 0 || m.GuildID != nil {
+		t.Errorf("Get on a miss = %+v, %v; want the zero message", m, ok)
+	}
+	if m, ok := c.Remove(1, 2); ok || m.Author.ID != 0 {
+		t.Errorf("Remove on a miss = %+v, %v; want the zero message", m, ok)
+	}
+}
+
+// TestMessageCache_RemoveMessagesByGuildID: disgo filters on the rebuilt
+// message's GuildID when the bot leaves a guild.
+func TestMessageCache_RemoveMessagesByGuildID(t *testing.T) {
+	c := newMessageCache(10)
+	msgs := fullMessages()
+	for _, m := range msgs {
+		c.Put(m.ChannelID, m.ID, m)
+	}
+	cache.NewMessageCache(c).RemoveMessagesByGuildID(*msgs[0].GuildID)
+	if c.Len() != 1 {
+		t.Fatalf("len = %d, want 1 (only the message outside the guild)", c.Len())
+	}
+	if _, ok := c.Get(msgs[2].ChannelID, msgs[2].ID); !ok {
+		t.Error("message outside the guild was removed")
+	}
+}
+
 // --- Fixes for disgo's cache handling ---
 
 // gatewayTestClient returns a disgo client over b's caches, to feed gateway

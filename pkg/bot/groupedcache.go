@@ -84,8 +84,7 @@ const soundboardSoundCacheFile = "soundboardsoundcache.json"
 
 // initCaches creates the capped caches behind disgo's.
 func (b *Bot) initCaches() {
-	b.msgCache = newCappedGroupedCache[discord.Message](1000000)
-	b.msgCache.loadByID = true
+	b.msgCache = newMessageCache(1000000)
 	b.memberCache = newCappedGroupedCache[discord.Member](100000)
 	b.guildCache = newCappedCache[discord.Guild](100)
 	b.channelCache = newCappedCache[discord.GuildChannel](10000)
@@ -197,7 +196,7 @@ type cacheEntry[T any] struct {
 // compacted, so small caches don't compact on every removal.
 const orderSlack = 1024
 
-var _ cache.GroupedCache[discord.Message] = (*cappedGroupedCache[discord.Message])(nil)
+var _ cache.GroupedCache[discord.Message] = (*messageCache)(nil)
 var _ cache.GroupedCache[discord.Member] = (*cappedGroupedCache[discord.Member])(nil)
 var _ cache.Cache[discord.Guild] = (*cappedCache[discord.Guild])(nil)
 var _ cache.Cache[discord.GuildChannel] = (*cappedCache[discord.GuildChannel])(nil)
@@ -230,6 +229,139 @@ func (c *cappedCache[T]) RemoveIf(filterFunc cache.FilterFunc[T]) {
 
 func (c *cappedCache[T]) All() iter.Seq[T] {
 	return c.GroupAll(0)
+}
+
+// cachedMessage is what the message cache keeps of a message: what the event
+// log reads from a deleted or edited message (content and author), and the
+// IDs disgo files and clears it by. A discord.Message is several times the
+// size, and holds the author twice. The JSON names match discord.Message's,
+// so older files load as they are, their other fields skipped, and older
+// versions can load these.
+type cachedMessage struct {
+	ID        snowflake.ID `json:"id"`
+	ChannelID snowflake.ID `json:"channel_id"`
+	GuildID   snowflake.ID `json:"guild_id,omitempty"` // 0 outside a guild
+	Content   string       `json:"content"`
+	Author    cachedAuthor `json:"author"`
+}
+
+// cachedAuthor is the part of a message's author the event log uses: the ID,
+// name and bot flag, and what User.EffectiveAvatarURL needs.
+type cachedAuthor struct {
+	ID            snowflake.ID `json:"id"`
+	Username      string       `json:"username"`
+	Discriminator string       `json:"discriminator"`
+	Avatar        string       `json:"avatar,omitempty"` // "" for the default avatar
+	Bot           bool         `json:"bot"`
+}
+
+func newCachedMessage(m discord.Message) cachedMessage {
+	c := cachedMessage{
+		ID:        m.ID,
+		ChannelID: m.ChannelID,
+		Content:   m.Content,
+		Author: cachedAuthor{
+			ID:            m.Author.ID,
+			Username:      m.Author.Username,
+			Discriminator: m.Author.Discriminator,
+			Bot:           m.Author.Bot,
+		},
+	}
+	if m.GuildID != nil {
+		c.GuildID = *m.GuildID
+	}
+	if m.Author.Avatar != nil {
+		c.Author.Avatar = *m.Author.Avatar
+	}
+	return c
+}
+
+// message rebuilds a discord.Message with the fields c keeps.
+func (c cachedMessage) message() discord.Message {
+	m := discord.Message{
+		ID:        c.ID,
+		ChannelID: c.ChannelID,
+		Content:   c.Content,
+		Author: discord.User{
+			ID:            c.Author.ID,
+			Username:      c.Author.Username,
+			Discriminator: c.Author.Discriminator,
+			Bot:           c.Author.Bot,
+		},
+	}
+	if c.GuildID != 0 {
+		m.GuildID = &c.GuildID
+	}
+	if c.Author.Avatar != "" {
+		m.Author.Avatar = &c.Author.Avatar
+	}
+	return m
+}
+
+// messageCache is disgo's message cache. It stores cachedMessage and rebuilds
+// a discord.Message on the way out, so cached messages (disgo's OldMessage,
+// and the message in a delete event) carry only cachedMessage's fields: a new
+// reader of them must check those are enough.
+type messageCache struct {
+	*cappedGroupedCache[cachedMessage]
+}
+
+func newMessageCache(maxSize int) *messageCache {
+	c := newCappedGroupedCache[cachedMessage](maxSize)
+	c.loadByID = true
+	return &messageCache{c}
+}
+
+func (c *messageCache) Get(channelID snowflake.ID, id snowflake.ID) (discord.Message, bool) {
+	m, ok := c.cappedGroupedCache.Get(channelID, id)
+	if !ok {
+		return discord.Message{}, false
+	}
+	return m.message(), true
+}
+
+func (c *messageCache) Put(channelID snowflake.ID, id snowflake.ID, msg discord.Message) {
+	c.cappedGroupedCache.Put(channelID, id, newCachedMessage(msg))
+}
+
+func (c *messageCache) Remove(channelID snowflake.ID, id snowflake.ID) (discord.Message, bool) {
+	m, ok := c.cappedGroupedCache.Remove(channelID, id)
+	if !ok {
+		return discord.Message{}, false
+	}
+	return m.message(), true
+}
+
+func (c *messageCache) RemoveIf(filterFunc cache.GroupedFilterFunc[discord.Message]) {
+	c.cappedGroupedCache.RemoveIf(func(channelID snowflake.ID, m cachedMessage) bool {
+		return filterFunc(channelID, m.message())
+	})
+}
+
+func (c *messageCache) GroupRemoveIf(channelID snowflake.ID, filterFunc cache.GroupedFilterFunc[discord.Message]) {
+	c.cappedGroupedCache.GroupRemoveIf(channelID, func(channelID snowflake.ID, m cachedMessage) bool {
+		return filterFunc(channelID, m.message())
+	})
+}
+
+func (c *messageCache) All() iter.Seq2[snowflake.ID, discord.Message] {
+	return func(yield func(snowflake.ID, discord.Message) bool) {
+		for channelID, m := range c.cappedGroupedCache.All() {
+			if !yield(channelID, m.message()) {
+				return
+			}
+		}
+	}
+}
+
+func (c *messageCache) GroupAll(channelID snowflake.ID) iter.Seq[discord.Message] {
+	return func(yield func(discord.Message) bool) {
+		for m := range c.cappedGroupedCache.GroupAll(channelID) {
+			if !yield(m.message()) {
+				return
+			}
+		}
+	}
 }
 
 // cappedGroupedCache is a disgo GroupedCache that holds at most maxSize
@@ -466,7 +598,7 @@ func messageExpired(id snowflake.ID, now time.Time) bool {
 func (b *Bot) pruneMessageCache() {
 	now := time.Now()
 	removed := 0
-	b.msgCache.RemoveIf(func(_ snowflake.ID, msg discord.Message) bool {
+	b.msgCache.cappedGroupedCache.RemoveIf(func(_ snowflake.ID, msg cachedMessage) bool {
 		expired := messageExpired(msg.ID, now)
 		if expired {
 			removed++
@@ -482,7 +614,7 @@ func (b *Bot) pruneMessageCache() {
 // New calls it before disgo starts, so nothing else uses the caches yet.
 func (b *Bot) loadCaches() {
 	now := time.Now()
-	loadCache(b, messageCacheFile, b.msgCache, func(m discord.Message) (discord.Message, snowflake.ID, snowflake.ID, bool) {
+	loadCache(b, messageCacheFile, b.msgCache.cappedGroupedCache, func(m cachedMessage) (cachedMessage, snowflake.ID, snowflake.ID, bool) {
 		return m, m.ChannelID, m.ID, !messageExpired(m.ID, now)
 	})
 	// Guilds before members: members filed under anything else (see

@@ -32,7 +32,7 @@ type Bot struct {
 	welcomeSentMu        sync.Mutex
 	welcomeSent          map[snowflake.ID]time.Time
 	cacheDir             string // where the caches below are persisted
-	msgCache             *cappedGroupedCache[discord.Message]
+	msgCache             *messageCache
 	memberCache          *cappedGroupedCache[discord.Member]
 	guildCache           *cappedCache[discord.Guild]
 	channelCache         *cappedCache[discord.GuildChannel]
