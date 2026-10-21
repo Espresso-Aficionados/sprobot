@@ -288,6 +288,24 @@ func (b *Bot) stopReminderGoroutine(r *threadReminder) {
 	h.Stop()
 }
 
+// onChannelDelete drops a deleted channel's reminder. Otherwise its loop keeps
+// running, it stays enabled in S3 and restarts on every boot, and no command
+// can disable it since the channel is gone.
+func (b *Bot) onChannelDelete(e *events.GuildChannelDelete) {
+	b.mu.Lock()
+	r, ok := b.reminders[e.GuildID][e.ChannelID]
+	if ok {
+		delete(b.reminders[e.GuildID], e.ChannelID)
+	}
+	b.mu.Unlock()
+	if !ok {
+		return
+	}
+	b.stopReminderGoroutine(r)
+	b.saveRemindersForGuild(e.GuildID)
+	b.Log.Info("Dropped reminder of deleted channel", "guild_id", e.GuildID, "channel_id", e.ChannelID)
+}
+
 func (b *Bot) stopAllReminderGoroutines() {
 	b.mu.Lock()
 	var handles []*idleloop.Handle

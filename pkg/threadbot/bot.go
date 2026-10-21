@@ -74,6 +74,7 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onThreadMemberAdd),
 		bot.WithEventListenerFunc(b.onThreadMemberRemove),
 		bot.WithEventListenerFunc(b.onThreadDelete),
+		bot.WithEventListenerFunc(b.onChannelDelete),
 	)
 	if err != nil {
 		return nil, err

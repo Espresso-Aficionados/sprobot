@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
@@ -176,4 +177,69 @@ func TestEnableTakesOverReplacedReminderMessage(t *testing.T) {
 		t.Error("new reminder's loop was not started")
 	}
 	b.stopAllReminderGoroutines()
+}
+
+func channelDelete(guildID, channelID snowflake.ID) *events.GuildChannelDelete {
+	return &events.GuildChannelDelete{GenericGuildChannel: &events.GenericGuildChannel{GuildID: guildID, ChannelID: channelID}}
+}
+
+// A deleted channel's reminder is stopped, waiting out a repost in flight,
+// so no loop keeps running for it.
+func TestChannelDeleteStopsReminderLoop(t *testing.T) {
+	b, r, release := startRepostInFlight(t)
+
+	done := make(chan struct{})
+	go func() {
+		b.onChannelDelete(channelDelete(r.GuildID, r.ChannelID))
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("channel delete returned while the reminder's repost was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("channel delete did not return after the repost finished")
+	}
+}
+
+// A deleted channel's reminder is dropped from S3 too, so it doesn't
+// restart on the next boot; other channels' reminders stay.
+func TestChannelDeleteDropsStoredReminder(t *testing.T) {
+	s3srv := httptest.NewServer(testutil.NewFakeS3())
+	defer s3srv.Close()
+	s3c := testutil.NewTestS3Client(t, s3srv)
+	guildID := snowflake.ID(1013566342345019512)
+
+	b := newTestBot(t, s3c)
+	b.reminders[guildID] = map[snowflake.ID]*threadReminder{
+		500: {ChannelID: 500, GuildID: guildID, Enabled: true, MinIdleMins: 30, MaxIdleMins: 720, MsgThreshold: 500},
+		600: {ChannelID: 600, GuildID: guildID, Enabled: true, MinIdleMins: 30, MaxIdleMins: 720, MsgThreshold: 500},
+	}
+	b.mu.Lock()
+	for _, r := range b.reminders[guildID] {
+		b.startReminderGoroutine(r)
+	}
+	b.mu.Unlock()
+	defer b.stopAllReminderGoroutines()
+	b.saveRemindersForGuild(guildID)
+
+	b.onChannelDelete(channelDelete(guildID, 500))
+	b.onChannelDelete(channelDelete(guildID, 700))            // no reminder there
+	b.onChannelDelete(channelDelete(726985544038612993, 500)) // guild not loaded
+
+	restarted := newTestBot(t, s3c)
+	restarted.loadReminders()
+	defer restarted.stopAllReminderGoroutines()
+	restarted.mu.Lock()
+	defer restarted.mu.Unlock()
+	if _, ok := restarted.reminders[guildID][500]; ok {
+		t.Error("deleted channel's reminder reloaded after restart")
+	}
+	if _, ok := restarted.reminders[guildID][600]; !ok {
+		t.Error("other channel's reminder lost")
+	}
 }
