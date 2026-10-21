@@ -379,8 +379,7 @@ func (b *Bot) Run() error {
 	b.startLoop(5*time.Minute, b.shortcuts.save)
 	b.startLoop(5*time.Minute, b.tickets.save)
 	b.startLoop(5*time.Minute, b.welcome.save)
-	b.startLoop(5*time.Minute, b.saveCaches)
-	b.startLoop(1*time.Hour, b.pruneMessageCache)
+	b.startLoop(5*time.Minute, b.saveCaches) // also prunes expired messages
 	b.startLoop(1*time.Hour, func() { pruneCorruptBackups(b.S3, b.Log, time.Now()) })
 	b.startLoop(5*time.Minute, b.saveStarboard)
 	b.startLoop(5*time.Minute, b.renameLogs.save)

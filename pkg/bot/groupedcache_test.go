@@ -16,23 +16,96 @@ import (
 	"github.com/sadbox/sprobot/pkg/botutil"
 )
 
-func TestPruneMessageCache(t *testing.T) {
-	b := &Bot{
-		BaseBot:  &botutil.BaseBot{Log: slog.Default()},
-		msgCache: newCappedGroupedCache[discord.Message](100),
+// --- Message retention ---
+
+// retentionTestMessages returns an expired and a fresh message in each of
+// two channels.
+func retentionTestMessages() (expired, fresh []discord.Message) {
+	for _, ch := range []snowflake.ID{1, 2} {
+		expiredID := snowflake.New(time.Now().Add(-messageRetention - time.Hour))
+		freshID := snowflake.New(time.Now().Add(-messageRetention + time.Hour))
+		expired = append(expired, makeMessage(ch, expiredID+ch))
+		fresh = append(fresh, makeMessage(ch, freshID+ch))
 	}
-	oldID := snowflake.New(time.Now().Add(-messageRetention - time.Hour))
-	freshID := snowflake.New(time.Now().Add(-time.Hour))
-	b.msgCache.Put(1, oldID, makeMessage(1, oldID))
-	b.msgCache.Put(1, freshID, makeMessage(1, freshID))
+	return expired, fresh
+}
+
+func TestPruneMessageCache(t *testing.T) {
+	b := newCacheTestBot(t)
+	expired, fresh := retentionTestMessages()
+	for _, m := range slices.Concat(expired, fresh) {
+		b.msgCache.Put(m.ChannelID, m.ID, m)
+	}
 
 	b.pruneMessageCache()
 
-	if _, ok := b.msgCache.Get(1, oldID); ok {
-		t.Error("expected message older than retention to be pruned")
+	for _, m := range expired {
+		if _, ok := b.msgCache.Get(m.ChannelID, m.ID); ok {
+			t.Errorf("expired message %d in channel %d was kept", m.ID, m.ChannelID)
+		}
 	}
-	if _, ok := b.msgCache.Get(1, freshID); !ok {
-		t.Error("expected fresh message to be retained")
+	for _, m := range fresh {
+		if _, ok := b.msgCache.Get(m.ChannelID, m.ID); !ok {
+			t.Errorf("fresh message %d in channel %d was pruned", m.ID, m.ChannelID)
+		}
+	}
+}
+
+func TestLoadCaches_DropsExpiredMessages(t *testing.T) {
+	b := newCacheTestBot(t)
+	expired, fresh := retentionTestMessages()
+	if err := writeCacheFile(b.cacheDir, messageCacheFile, slices.Concat(expired, fresh)); err != nil {
+		t.Fatal(err)
+	}
+
+	b.loadCaches()
+
+	if b.msgCache.Len() != len(fresh) {
+		t.Errorf("loaded %d messages, want the %d fresh ones", b.msgCache.Len(), len(fresh))
+	}
+	for _, m := range fresh {
+		if _, ok := b.msgCache.Get(m.ChannelID, m.ID); !ok {
+			t.Errorf("fresh message %d in channel %d not loaded", m.ID, m.ChannelID)
+		}
+	}
+}
+
+func TestSaveCaches_ExcludesExpiredMessages(t *testing.T) {
+	b := newCacheTestBot(t)
+	expired, fresh := retentionTestMessages()
+	for _, m := range slices.Concat(expired, fresh) {
+		b.msgCache.Put(m.ChannelID, m.ID, m)
+	}
+
+	b.saveCaches()
+
+	var saved []snowflake.ID
+	err := readCacheFile(b.cacheDir, messageCacheFile, func(m discord.Message) { saved = append(saved, m.ID) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []snowflake.ID
+	for _, m := range fresh {
+		want = append(want, m.ID)
+	}
+	if !slices.Equal(saved, want) {
+		t.Errorf("saved messages %v, want only the fresh ones %v", saved, want)
+	}
+}
+
+// TestMessageExpired_Boundary: a message exactly messageRetention old is
+// kept; a millisecond (snowflake resolution) older is not.
+func TestMessageExpired_Boundary(t *testing.T) {
+	now := time.UnixMilli(1_800_000_000_000)
+	atLimit := snowflake.New(now.Add(-messageRetention))
+	if messageExpired(atLimit, now) {
+		t.Error("message exactly at the retention limit counted as expired")
+	}
+	if !messageExpired(atLimit-1<<22, now) { // timestamp is the bits above 22
+		t.Error("message 1ms past the retention limit was kept")
+	}
+	if messageExpired(snowflake.New(now), now) {
+		t.Error("new message counted as expired")
 	}
 }
 

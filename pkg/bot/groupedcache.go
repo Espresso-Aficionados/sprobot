@@ -389,26 +389,37 @@ func (c *cappedGroupedCache[T]) load(fill func(add func(groupID, id snowflake.ID
 	return c.size, err
 }
 
-// pruneMessageCache removes cached messages older than messageRetention,
-// using the creation time embedded in the message snowflake.
+// messageExpired reports whether a message is past messageRetention at now,
+// judged by the creation time in its snowflake.
+func messageExpired(id snowflake.ID, now time.Time) bool {
+	return id.Time().Before(now.Add(-messageRetention))
+}
+
+// pruneMessageCache removes messages past messageRetention from the cache.
+// saveCaches runs it before every save, so the file never holds an expired
+// message for longer than the save interval.
 func (b *Bot) pruneMessageCache() {
-	cutoff := time.Now().Add(-messageRetention)
-	before := b.msgCache.Len()
+	now := time.Now()
+	removed := 0
 	b.msgCache.RemoveIf(func(_ snowflake.ID, msg discord.Message) bool {
-		return msg.ID.Time().Before(cutoff)
+		expired := messageExpired(msg.ID, now)
+		if expired {
+			removed++
+		}
+		return expired
 	})
-	if removed := before - b.msgCache.Len(); removed > 0 {
+	if removed > 0 {
 		b.Log.Info("Pruned expired messages from cache", "removed", removed, "remaining", b.msgCache.Len())
 	}
 }
 
-// loadCaches fills the caches from the cache dir. New calls it before disgo
-// starts, so nothing else uses the caches yet.
+// loadCaches fills the caches from the cache dir, skipping expired messages.
+// New calls it before disgo starts, so nothing else uses the caches yet.
 func (b *Bot) loadCaches() {
+	now := time.Now()
 	loadCache(b, messageCacheFile, b.msgCache, func(m discord.Message) (discord.Message, snowflake.ID, snowflake.ID, bool) {
-		return m, m.ChannelID, m.ID, true
+		return m, m.ChannelID, m.ID, !messageExpired(m.ID, now)
 	})
-	b.pruneMessageCache()
 	loadCache(b, memberCacheFile, b.memberCache, func(m discord.Member) (discord.Member, snowflake.ID, snowflake.ID, bool) {
 		return m, m.GuildID, m.User.ID, true
 	})
@@ -470,9 +481,11 @@ func loadCache[D, T any](b *Bot, file string, c *cappedGroupedCache[T], entry fu
 	b.Log.Info("Loaded cache file", "file", file, "count", n)
 }
 
-// saveCaches writes every persisted cache to the cache dir. The saves run one
-// after another, so only one snapshot is held at a time.
+// saveCaches prunes expired messages, then writes every persisted cache to
+// the cache dir. The saves run one after another, so only one snapshot is
+// held at a time.
 func (b *Bot) saveCaches() {
+	b.pruneMessageCache()
 	saveCache(b, messageCacheFile, b.msgCache.snapshot())
 	saveCache(b, memberCacheFile, b.memberCache.snapshot())
 	saveCache(b, guildCacheFile, b.guildCache.snapshot())
