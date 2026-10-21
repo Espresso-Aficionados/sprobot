@@ -161,6 +161,43 @@ func TestLoadersCoverAllowedGuilds(t *testing.T) {
 	}
 }
 
+// Every allowed guild loads at startup, but the periodic and shutdown saves
+// write only guilds the bot is in: a dev instance sharing the bucket must not
+// write its startup copy of prod's reminders back over prod's changes.
+func TestPeriodicSavesSkipGuildsBotIsNotIn(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	const prodRemindersKey = "/test-bucket/threadreminders/726985544038612993.json"
+	const prodCountsKey = "/test-bucket/threadmembercounts/726985544038612993.json"
+	fake.Objects[prodRemindersKey] = []byte(`{}`)
+	fake.Objects[prodCountsKey] = []byte(`{"counts":{},"fetched":{}}`)
+
+	b := newTestBot(t, testutil.NewTestS3Client(t, srv)) // in the dev guild only
+	b.loadReminders()
+	b.loadMemberCounts()
+	// Meanwhile the prod instance enables a reminder and saves it.
+	prodState := []byte(`{"111":{"channel_id":"111","guild_id":"726985544038612993"}}`)
+	fake.Mu.Lock()
+	fake.Objects[prodRemindersKey] = prodState
+	fake.Mu.Unlock()
+
+	b.saveAllReminders()
+	b.saveMemberCounts()
+
+	fake.Mu.Lock()
+	defer fake.Mu.Unlock()
+	if got := fake.Objects[prodRemindersKey]; !bytes.Equal(got, prodState) {
+		t.Errorf("prod reminders overwritten by a bot not in prod: %s", got)
+	}
+	if _, ok := fake.Objects[devRemindersKey]; !ok {
+		t.Error("dev reminders not saved")
+	}
+	if _, ok := fake.Objects[devCountsKey]; !ok {
+		t.Error("dev member counts not saved")
+	}
+}
+
 // Loaders write the maps that event handlers read; -race catches a load that
 // doesn't hold b.mu.
 func TestLoadRacesWithEvents(t *testing.T) {

@@ -239,15 +239,13 @@ func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) {
 	}
 }
 
+// saveAllReminders saves the reminders of the guilds the bot is in. Every
+// allowed guild loads at startup, before the bot knows which it is in, but
+// another deployment of the bot (prod or dev) may be the one changing a guild
+// this one isn't in, so its copy from startup is never written back. Changes
+// in the bot's own guilds are saved as they happen; this is the backstop.
 func (b *Bot) saveAllReminders() {
-	b.mu.Lock()
-	guildIDs := make([]snowflake.ID, 0, len(b.reminders))
-	for id := range b.reminders {
-		guildIDs = append(guildIDs, id)
-	}
-	b.mu.Unlock()
-
-	for _, guildID := range guildIDs {
+	for _, guildID := range b.GuildIDs() {
 		b.saveRemindersForGuild(guildID)
 	}
 }
@@ -584,15 +582,10 @@ func (b *Bot) ensureMemberCountsLoaded(guildID snowflake.ID) error {
 	return nil
 }
 
+// saveMemberCounts saves the member counts of the guilds the bot is in, for
+// the reason given at saveAllReminders.
 func (b *Bot) saveMemberCounts() {
-	b.mu.Lock()
-	guildIDs := make([]snowflake.ID, 0, len(b.memberCounts))
-	for id := range b.memberCounts {
-		guildIDs = append(guildIDs, id)
-	}
-	b.mu.Unlock()
-
-	for _, guildID := range guildIDs {
+	for _, guildID := range b.GuildIDs() {
 		b.saveMemberCountsForGuild(guildID)
 	}
 }
