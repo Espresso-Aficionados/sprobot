@@ -23,6 +23,7 @@ func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {
 		},
 		reminders:    make(map[snowflake.ID]map[snowflake.ID]*threadReminder),
 		memberCounts: make(map[snowflake.ID]*memberCountCache),
+		hidden:       make(map[snowflake.ID]map[snowflake.ID]struct{}),
 	}
 }
 

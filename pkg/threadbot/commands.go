@@ -20,6 +20,9 @@ const (
 	subList          = "list"
 	subRefreshCounts = "refreshcounts"
 	subFetchAll      = "fetchall"
+	subHide          = "hide"
+	subUnhide        = "unhide"
+	subHidden        = "hidden"
 
 	optMinIdle       = "min_idle"
 	optMaxIdle       = "max_idle"
@@ -27,7 +30,14 @@ const (
 	optTimeThreshold = "time_threshold"
 	optPublic        = "public"
 	optBuffer        = "buffer"
+	optThread        = "thread"
 )
+
+var threadChannelTypes = []discord.ChannelType{
+	discord.ChannelTypeGuildPublicThread,
+	discord.ChannelTypeGuildPrivateThread,
+	discord.ChannelTypeGuildNewsThread,
+}
 
 func intPtr(v int) *int { return &v }
 
@@ -114,6 +124,34 @@ func (b *Bot) registerAllCommands() error {
 						},
 					},
 				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        subHide,
+					Description: "Never promote a thread in reminders or /threads",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionChannel{
+							Name:         optThread,
+							Description:  "Thread to hide",
+							Required:     true,
+							ChannelTypes: threadChannelTypes,
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        subUnhide,
+					Description: "Allow a hidden thread to be promoted again",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionChannel{
+							Name:         optThread,
+							Description:  "Thread to unhide",
+							Required:     true,
+							ChannelTypes: threadChannelTypes,
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        subHidden,
+					Description: "List threads hidden from reminders and /threads",
+				},
 			},
 		},
 		discord.SlashCommandCreate{
@@ -162,6 +200,12 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			b.handleRefreshCounts(e)
 		case subFetchAll:
 			b.handleFetchAll(e)
+		case subHide:
+			b.handleHide(e, true)
+		case subUnhide:
+			b.handleHide(e, false)
+		case subHidden:
+			b.handleHiddenList(e)
 		}
 	}
 }

@@ -39,6 +39,8 @@ Posts periodic reminders in threads to keep them active. Configurable idle timer
 - `/threadbot enable` — enable reminders in the current thread (with optional min_idle, max_idle, msg_threshold, time_threshold)
 - `/threadbot disable` — disable reminders
 - `/threadbot list` — list active reminders
+- `/threadbot hide <thread>` / `/threadbot unhide <thread>` — never promote a thread in reminders or `/threads` (until unhidden or deleted)
+- `/threadbot hidden` — list hidden threads
 - `/threads` — show active threads in the current channel
 
 ### sprobot-web
