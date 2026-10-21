@@ -6,14 +6,16 @@ import (
 	"time"
 
 	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/testutil"
 )
 
 // startRepostInFlight starts a sticky whose first repost is stuck in Create
 // Message until the returned release func is called.
-func startRepostInFlight(t *testing.T) (*Bot, *stickyMessage, *fakeDiscord, func()) {
+func startRepostInFlight(t *testing.T) (*Bot, *stickyMessage, *fakeDiscord, *testutil.FakeS3, func()) {
 	t.Helper()
 	api := &fakeDiscord{created: make(chan struct{}, 1), hold: make(chan struct{})}
-	b, _ := newFakeBot(t, api)
+	b, fakeS3 := newFakeBot(t, api)
 	// Cleanups run last-in first-out, so a test that fails with the repost
 	// still parked releases it before the loops are stopped and the server
 	// closed, both of which wait for it.
@@ -36,7 +38,7 @@ func startRepostInFlight(t *testing.T) (*Bot, *stickyMessage, *fakeDiscord, func
 	case <-time.After(5 * time.Second):
 		t.Fatal("repost did not reach Create Message")
 	}
-	return b, s, api, release
+	return b, s, api, fakeS3, release
 }
 
 // The stop functions must wait for an in-flight repost without holding b.mu,
@@ -56,7 +58,7 @@ func TestStopWaitsForInFlightRepost(t *testing.T) {
 	}
 	for name, stop := range stops {
 		t.Run(name, func(t *testing.T) {
-			b, s, _, release := startRepostInFlight(t)
+			b, s, _, _, release := startRepostInFlight(t)
 
 			done := make(chan struct{})
 			go func() {

@@ -28,6 +28,7 @@ type fakeDiscord struct {
 	posts     []discord.MessageCreate
 	deleted   []snowflake.ID
 	failPosts bool // answer Create Message with a 400
+	gone      bool // answer Create Message with 404 Unknown Channel
 
 	// If hold is set, Create Message signals created and then waits for hold
 	// to close, so a test can keep a post in flight.
@@ -55,11 +56,16 @@ func (f *fakeDiscord) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&msg)
 		f.mu.Lock()
 		f.posts = append(f.posts, msg)
-		fail := f.failPosts
+		fail, gone := f.failPosts, f.gone
 		f.mu.Unlock()
 		if f.hold != nil {
 			f.created <- struct{}{}
 			<-f.hold
+		}
+		if gone {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"code": 10003, "message": "Unknown Channel"}`))
+			return
 		}
 		if fail {
 			w.WriteHeader(http.StatusBadRequest)
@@ -109,4 +115,33 @@ func newFakeBot(t *testing.T, f *fakeDiscord) (*Bot, *testutil.FakeS3) {
 // repeated.
 func testFileKey(letter string) string {
 	return "sticky_files/1013566342345019512/" + strings.Repeat(letter, 30) + ".png"
+}
+
+// storedStickies returns the test guild's stickies as stored in fake, keyed
+// by channel, or nil if none are stored.
+func storedStickies(t *testing.T, fake *testutil.FakeS3) map[string]*stickyMessage {
+	t.Helper()
+	fake.Mu.Lock()
+	data, ok := fake.Objects["/test-bucket/stickies/1013566342345019512.json"]
+	fake.Mu.Unlock()
+	if !ok {
+		return nil
+	}
+	var saved map[string]*stickyMessage
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("stored stickies: %v", err)
+	}
+	return saved
+}
+
+// waitFor polls cond until it holds, failing the test after 5 seconds.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

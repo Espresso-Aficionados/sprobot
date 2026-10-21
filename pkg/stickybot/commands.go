@@ -3,7 +3,7 @@ package stickybot
 import (
 	"context"
 	"fmt"
-	"slices"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +14,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
+	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
 const (
@@ -301,8 +302,24 @@ func (b *Bot) createSticky(s *stickyMessage, msg discord.Message) string {
 
 	// Saved files follow the message's own embeds, as image embeds.
 	s.Content = msg.Content
-	s.Embeds = slices.Clone(msg.Embeds)
 	var failed []string
+	for _, embed := range msg.Embeds {
+		// An image that is another sticky's file, as when a sticky's own post
+		// is stickied again to change its settings, is copied: that sticky
+		// deletes its files when it goes, often straight away by being
+		// replaced with this one.
+		if key, ok := b.stickyFileKey(s.GuildID, embed.Image); ok {
+			copied, err := b.S3.CopyStickyFile(ctx, s.GuildID.String(), key)
+			if err != nil {
+				b.Log.Error("Failed to copy sticky file", "error", err, "key", key)
+				failed = append(failed, path.Base(key))
+				continue
+			}
+			s.FileURLs = append(s.FileURLs, copied)
+			embed.Image = &discord.EmbedResource{URL: copied}
+		}
+		s.Embeds = append(s.Embeds, embed)
+	}
 	for _, att := range msg.Attachments {
 		key, err := b.S3.SaveStickyFile(ctx, s.GuildID.String(), att.ProxyURL)
 		if err != nil {
@@ -323,6 +340,20 @@ func (b *Bot) createSticky(s *stickyMessage, msg discord.Message) string {
 	}
 	b.Log.Info("Sticky created", "user_id", s.CreatedBy, "guild_id", s.GuildID, "channel_id", s.ChannelID, "min_idle", s.MinIdleMins, "max_idle", s.MaxIdleMins, "msg_threshold", s.MsgThreshold, "time_threshold", s.TimeThresholdMins, "buffer", s.Buffer)
 	return createdReply(s, failed)
+}
+
+// stickyFileKey returns the key of the saved sticky file of guildID that img
+// shows, if it shows one.
+func (b *Bot) stickyFileKey(guildID snowflake.ID, img *discord.EmbedResource) (string, bool) {
+	if img == nil {
+		return "", false
+	}
+	key, ok := b.S3.FileKey(img.URL)
+	if !ok {
+		return "", false
+	}
+	kind, keyGuildID, _, _ := sprobot.ParseFileKey(key)
+	return key, kind == "sticky" && keyGuildID == guildID.String()
 }
 
 // createdReply confirms a new sticky to the moderator, naming the attachments
@@ -353,10 +384,11 @@ func (b *Bot) installSticky(s *stickyMessage) error {
 	b.startStickyGoroutine(s)
 	b.mu.Unlock()
 
+	// Saved before the slow retire, which a shutdown doesn't wait for.
+	b.saveStickiesForGuild(s.GuildID)
 	if old != nil {
 		b.retireSticky(old)
 	}
-	b.saveStickiesForGuild(s.GuildID)
 	return nil
 }
 
@@ -378,10 +410,11 @@ func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {
 	b.mu.Unlock()
 
 	// Respond first: stopping waits for any repost in flight, which can
-	// outlast the interaction's 3-second deadline.
+	// outlast the interaction's 3-second deadline. Save before stopping,
+	// which a shutdown doesn't wait for.
 	botutil.RespondEphemeral(e, "Sticky paused.")
-	h.Stop()
 	b.saveStickiesForGuild(guildID)
+	h.Stop()
 }
 
 func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
@@ -423,10 +456,11 @@ func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) 
 		return
 	}
 	// Respond first: stopping waits for any repost in flight, which can
-	// outlast the interaction's 3-second deadline.
+	// outlast the interaction's 3-second deadline. Save before retiring,
+	// which a shutdown doesn't wait for.
 	botutil.RespondEphemeral(e, "Sticky removed.")
-	b.retireSticky(s)
 	b.saveStickiesForGuild(guildID)
+	b.retireSticky(s)
 }
 
 func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {

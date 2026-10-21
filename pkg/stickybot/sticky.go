@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -58,17 +59,27 @@ func (s *stickyMessage) messageCreate(fileURL func(string) string) discord.Messa
 	}
 }
 
-// loadStickies loads every allowed guild's stickies and starts their repost
-// loops. Run calls it before the gateway opens, so no command or event sees a
-// guild whose stickies aren't in memory yet. A guild that fails to load stays
-// out of b.stickies, and guildLoaded retries it when it is next used.
+// loadStickies loads the stickies of every allowed guild not yet loaded and
+// starts their repost loops. Run calls it before the gateway opens, so no
+// command or event sees a guild whose stickies aren't in memory yet. A guild
+// that fails to load stays out of b.stickies; retryFailed calls this again,
+// and guildLoaded retries it when it is next used.
 func (b *Bot) loadStickies() {
-	// Bounded, since the bot isn't online until this returns.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
 	for _, guildID := range botutil.AllowedGuildIDs {
-		b.loadGuildStickies(ctx, guildID)
+		// Bounded, since the bot isn't online until the boot load returns,
+		// and per guild, so one slow fetch doesn't fail the others.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		b.guildLoaded(ctx, guildID)
+		cancel()
 	}
+}
+
+// retryFailed retries what failed against S3: loads, saves and file
+// deletions.
+func (b *Bot) retryFailed() {
+	b.loadStickies()
+	b.saveUnsavedStickies()
+	b.retryFileDeletes()
 }
 
 // guildLoaded reports whether guildID's stickies are in memory, first
@@ -123,6 +134,11 @@ func (b *Bot) fetchStickies(ctx context.Context, guildID snowflake.ID) (map[snow
 	return channels, nil
 }
 
+// saveTimeout bounds each save, which holds saveMu and so stalls every other
+// save, and the reposts and stops that wait on them. A variable so tests can
+// shorten it.
+var saveTimeout = 30 * time.Second
+
 // saveStickiesForGuild writes guildID's stickies to S3, unless the guild
 // isn't loaded. Saves run one at a time, so the last one taken is the last
 // one stored. A failed save is retried by saveUnsavedStickies.
@@ -148,7 +164,8 @@ func (b *Bot) saveStickiesForGuild(guildID snowflake.ID) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+	defer cancel()
 	if err := b.S3.SaveStickies(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
 		b.Log.Error("Failed to save stickies", "guild_id", guildID, "error", err)
 		b.unsaved[guildID] = true
@@ -228,20 +245,38 @@ func (b *Bot) retireSticky(s *stickyMessage) {
 	b.deleteStickyFiles(s)
 }
 
-// deleteStickyFiles deletes s's saved files. Best effort: a failure only
-// leaves the files behind.
+// deleteStickyFiles deletes s's saved files.
 func (b *Bot) deleteStickyFiles(s *stickyMessage) {
-	keys := s.fileKeys(b.S3.Origin() + "/" + b.S3.Bucket() + "/")
+	b.deleteFiles(s.fileKeys(b.S3.Origin() + "/" + b.S3.Bucket() + "/"))
+}
+
+// deleteFiles deletes the saved files at keys. Once their sticky is gone they
+// are recorded nowhere else, so if that fails they are logged and kept for
+// retryFileDeletes. No sticky refers to them again: each sticky has its own
+// copies (see createSticky).
+func (b *Bot) deleteFiles(keys []string) {
 	if len(keys) == 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err := b.S3.DeleteKeys(ctx, keys...); err != nil {
-		b.Log.Error("Failed to delete sticky files", "guild_id", s.GuildID, "channel_id", s.ChannelID, "error", err)
+		b.Log.Error("Failed to delete sticky files; will retry", "keys", keys, "error", err)
+		b.mu.Lock()
+		b.undeleted = append(b.undeleted, keys...)
+		b.mu.Unlock()
 		return
 	}
-	b.Log.Info("Deleted sticky files", "guild_id", s.GuildID, "channel_id", s.ChannelID, "count", len(keys))
+	b.Log.Info("Deleted sticky files", "count", len(keys))
+}
+
+// retryFileDeletes retries the file deletions that failed.
+func (b *Bot) retryFileDeletes() {
+	b.mu.Lock()
+	keys := b.undeleted
+	b.undeleted = nil
+	b.mu.Unlock()
+	b.deleteFiles(keys)
 }
 
 // fileKeys returns the bucket keys of s's saved files. Stickies made before
@@ -310,6 +345,13 @@ func (b *Bot) repostSticky(s *stickyMessage) bool {
 	}
 
 	sent, err := botutil.PostWithRetry(b.Client.Rest, s.ChannelID, s.messageCreate(b.S3.FileURL), b.Log)
+	if rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownChannel) {
+		// Deleted without an event this bot saw: while it was offline, or a
+		// thread whose parent was deleted. In a goroutine, since dropping the
+		// sticky stops this loop, which waits for this repost to return.
+		go b.dropDeletedChannelSticky(s.GuildID, s.ChannelID)
+		return false
+	}
 	if err != nil {
 		b.Log.Error("Failed to repost sticky after retries", "channel_id", s.ChannelID, "error", err)
 		return false

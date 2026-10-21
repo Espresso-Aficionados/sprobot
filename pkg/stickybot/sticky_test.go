@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -355,6 +358,95 @@ func TestLoadFailureBlocksChangesUntilRetry(t *testing.T) {
 	fake.Mu.Unlock()
 	if err != nil || saved["111"] == nil || saved["500"] == nil {
 		t.Errorf("stored channels %v (%v), want the existing 111 and the new 500", keysOf(saved), err)
+	}
+}
+
+// A guild whose stickies failed to load at boot is loaded by the periodic
+// retry, so its loops start without waiting for a moderator's command.
+func TestRetryFailedLoadsUnloadedGuild(t *testing.T) {
+	f := &fakeDiscord{}
+	b, fake := newFakeBot(t, f)
+	delete(b.stickies, testGuildID) // not loaded yet
+	const path = "/test-bucket/stickies/1013566342345019512.json"
+	fake.Mu.Lock()
+	fake.Objects[path] = []byte(`{"111": {"channel_id": "111", "guild_id": "1013566342345019512", "content": "x", "active": true, "max_idle_mins": 10, "msg_threshold": 1}}`)
+	fake.Fail[path] = http.StatusForbidden
+	fake.Mu.Unlock()
+
+	b.loadStickies()
+	if _, ok := b.stickies[testGuildID]; ok {
+		t.Fatal("guild loaded although its fetch failed")
+	}
+	fake.Mu.Lock()
+	delete(fake.Fail, path)
+	fake.Mu.Unlock()
+	b.retryFailed()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if s := b.stickies[testGuildID][111]; s == nil || s.handle == nil {
+		t.Errorf("after the retry, sticky = %+v, want it loaded with its loop started", s)
+	}
+}
+
+// A retried load runs alongside the event handlers, so it must take b.mu.
+// Under -race this fails if the loader writes b.stickies without it.
+func TestLoadGuildStickiesConcurrentWithMessages(t *testing.T) {
+	f := &fakeDiscord{}
+	b, fake := newFakeBot(t, f)
+	delete(b.stickies, testGuildID) // not loaded yet
+	fake.Mu.Lock()
+	fake.Objects["/test-bucket/stickies/1013566342345019512.json"] = []byte(`{"111": {"channel_id": "111", "guild_id": "1013566342345019512", "content": "x"}}`)
+	fake.Mu.Unlock()
+	guildID := testGuildID
+	e := &events.MessageCreate{GenericMessage: &events.GenericMessage{
+		ChannelID: 111, GuildID: &guildID, Message: discord.Message{Author: discord.User{ID: 9}},
+	}}
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 100 {
+			b.onMessage(e)
+		}
+	})
+	wg.Go(func() { b.loadGuildStickies(context.Background(), testGuildID) })
+	wg.Wait()
+
+	if b.stickies[testGuildID][111] == nil {
+		t.Error("sticky not loaded")
+	}
+}
+
+// A save that hangs gives up rather than holding saveMu, and with it every
+// other save and every repost, indefinitely. It is retried later.
+func TestSaveStickiesForGuildTimesOut(t *testing.T) {
+	hang := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-hang:
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(hang) }) // first, so Close doesn't wait on the handler
+	orig := saveTimeout
+	saveTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { saveTimeout = orig })
+	b := newTestBot(t, testutil.NewTestS3Client(t, server))
+	b.stickies[testGuildID] = map[snowflake.ID]*stickyMessage{100: {ChannelID: 100, GuildID: testGuildID}}
+
+	done := make(chan struct{})
+	go func() {
+		b.saveStickiesForGuild(testGuildID)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("save still waiting on S3")
+	}
+	if !b.unsaved[testGuildID] {
+		t.Error("timed-out save not marked for retry")
 	}
 }
 

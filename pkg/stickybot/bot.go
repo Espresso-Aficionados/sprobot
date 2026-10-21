@@ -24,6 +24,8 @@ type Bot struct {
 	// loaded (see guildLoaded).
 	stickies map[snowflake.ID]map[snowflake.ID]*stickyMessage
 	pending  botutil.MessageStash // context-menu targets awaiting modal submit
+	// Keys of removed stickies' files whose deletion failed; guarded by mu.
+	undeleted []string
 
 	saveMu  sync.Mutex            // serializes saveStickiesForGuild
 	unsaved map[snowflake.ID]bool // guilds whose last save failed; guarded by saveMu
@@ -92,7 +94,7 @@ func (b *Bot) Run() error {
 		return fmt.Errorf("registering commands: %w", err)
 	}
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveUnsavedStickies)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.retryFailed)
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
 	shutdownErr := b.WaitForShutdown("Stickybot")
@@ -101,11 +103,12 @@ func (b *Bot) Run() error {
 }
 
 // shutdown stops the repost loops, waiting out reposts in flight, and retries
-// any saves that failed.
+// any saves and file deletions that failed.
 func (b *Bot) shutdown() {
 	close(b.stop)
 	b.stopAllStickyGoroutines()
 	b.saveUnsavedStickies()
+	b.retryFileDeletes()
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {
@@ -149,7 +152,8 @@ func (b *Bot) dropDeletedChannelSticky(guildID, channelID snowflake.ID) {
 		return
 	}
 	b.Log.Info("Removing sticky of deleted channel", "guild_id", guildID, "channel_id", channelID)
+	// Saved before the slow retire, which a shutdown doesn't wait for.
+	b.saveStickiesForGuild(guildID)
 	// The message went with the channel; deleting it again fails harmlessly.
 	b.retireSticky(s)
-	b.saveStickiesForGuild(guildID)
 }

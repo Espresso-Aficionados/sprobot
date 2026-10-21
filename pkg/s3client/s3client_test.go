@@ -29,10 +29,7 @@ import (
 // disableURLValidation overrides the URL validator for testing with local servers.
 func disableURLValidation(t *testing.T) {
 	t.Helper()
-	origValidator, origDial := urlValidator, dialCheck
-	urlValidator = func(string) error { return nil }
-	dialCheck = func(string) error { return nil }
-	t.Cleanup(func() { urlValidator, dialCheck = origValidator, origDial })
+	t.Cleanup(AllowLocalFetchesForTesting())
 }
 
 // The dial-time check must block loopback even when the URL passed the
@@ -760,6 +757,42 @@ func TestFileURL(t *testing.T) {
 	for _, tt := range tests {
 		if got := c.FileURL(tt.stored); got != tt.want {
 			t.Errorf("FileURL(%q) = %q, want %q", tt.stored, got, tt.want)
+		}
+	}
+}
+
+func TestFileKey(t *testing.T) {
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+
+	c := newTestClient(t, server)
+	const name = "abcdefghijABCDEFGHIJ0123456789"
+	key := "sticky_files/123/" + name + ".png"
+
+	tests := []struct {
+		ref    string
+		want   string
+		wantOK bool
+	}{
+		{key, key, true},
+		{c.FileURL(key), key, true},
+		{server.URL + "/test-bucket/" + key, key, true},
+		{server.URL + "/test-bucket/sticky_files%2F123%2F" + name + ".png?X-Amz-Signature=abc", key, true},
+		{sprobot.WebEndpoint + "files/mod/123/" + name + ".jpg", "mod_files/123/" + name + ".jpg", true},
+		// Not a saved file: external URLs, profile images, bad routes and names.
+		{"https://cdn.discordapp.com/attachments/1/2/a.png", "", false},
+		{"https://other.example/files/sticky/123/" + name + ".png", "", false},
+		{"images/123/Coffee Setup/456.png", "", false},
+		{sprobot.WebEndpoint + "files/sticky/123/short.png", "", false},
+		{sprobot.WebEndpoint + "files/sticky/../123/" + name, "", false},
+		{sprobot.WebEndpoint + "files/other/123/" + name, "", false},
+		{"", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := c.FileKey(tt.ref)
+		if got != tt.want || ok != tt.wantOK {
+			t.Errorf("FileKey(%q) = %q, %v; want %q, %v", tt.ref, got, ok, tt.want, tt.wantOK)
 		}
 	}
 }

@@ -62,6 +62,36 @@ func TestChannelDeleteDropsSticky(t *testing.T) {
 	}
 }
 
+// A channel deleted without an event the bot saw, such as while it was
+// offline or as the parent of a sticky's thread, is noticed by the next
+// repost, which drops the sticky the same way.
+func TestRepostToUnknownChannelDropsSticky(t *testing.T) {
+	f := &fakeDiscord{gone: true}
+	b, fakeS3 := newFakeBot(t, f)
+	key := testFileKey("a")
+	stored := seedFiles(fakeS3, key)
+	s := &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, FileURLs: []string{key}, MinIdleMins: 0, MaxIdleMins: 10, MsgThreshold: 1}
+	other := &stickyMessage{ChannelID: 600, GuildID: testGuildID, Content: "other channel"}
+	b.stickies[testGuildID] = map[snowflake.ID]*stickyMessage{500: s, 600: other}
+	b.mu.Lock()
+	b.startStickyGoroutine(s)
+	h := s.handle
+	b.mu.Unlock()
+
+	h.Signal() // the repost fails with Unknown Channel
+	waitFor(t, "the sticky to be dropped", func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.stickies[testGuildID][500] == nil
+	})
+	// The files go only once the sticky's loop has stopped, so this also
+	// shows that dropping it from its own repost doesn't deadlock.
+	waitFor(t, "the files to be deleted", func() bool { return len(stored()) == 0 })
+	if saved := storedStickies(t, fakeS3); saved["500"] != nil || saved["600"] == nil {
+		t.Errorf("stored channels %v, want only 600", keysOf(saved))
+	}
+}
+
 func keysOf[V any](m map[string]V) []string {
 	var keys []string
 	for k := range m {

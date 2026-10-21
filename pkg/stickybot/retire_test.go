@@ -1,11 +1,14 @@
 package stickybot
 
 import (
+	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/testutil"
@@ -94,6 +97,75 @@ func TestInstallStickyRetiresReplacedSticky(t *testing.T) {
 	}
 }
 
+// Stickying a sticky's own post, the way to change its settings, replaces
+// the sticky, which deletes its files. The new sticky shows its own copies.
+func TestRestickyingOwnPostCopiesFiles(t *testing.T) {
+	f := &fakeDiscord{}
+	b, fakeS3 := newFakeBot(t, f)
+	key := testFileKey("a")
+	stored := seedFiles(fakeS3, key)
+	old := &stickyMessage{
+		ChannelID: 500, GuildID: testGuildID, Content: "old", LastMessageID: 100,
+		Embeds: []discord.Embed{{Image: &discord.EmbedResource{URL: key}}}, FileURLs: []string{key},
+	}
+	b.stickies[testGuildID] = map[snowflake.ID]*stickyMessage{500: old}
+	post := old.messageCreate(b.S3.FileURL)
+
+	s := &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
+	reply := b.createSticky(s, discord.Message{ID: 100, ChannelID: 500, Content: post.Content, Embeds: post.Embeds})
+
+	if !strings.HasPrefix(reply, "Sticky created") || strings.Contains(reply, "Couldn't save") {
+		t.Errorf("reply = %q, want a plain confirmation", reply)
+	}
+	if left := stored(); len(left) != 0 {
+		t.Errorf("replaced sticky's files left %q, want none", left)
+	}
+	if len(s.FileURLs) != 1 || s.FileURLs[0] == key {
+		t.Fatalf("new sticky's files = %q, want one copy of %q", s.FileURLs, key)
+	}
+	copied := s.FileURLs[0]
+	fakeS3.Mu.Lock()
+	data := fakeS3.Objects["/test-bucket/"+copied]
+	fakeS3.Mu.Unlock()
+	if string(data) != "file" {
+		t.Errorf("copy %q holds %q, want the original's contents", copied, data)
+	}
+	if len(s.Embeds) != 1 || s.Embeds[0].Image == nil || s.Embeds[0].Image.URL != copied {
+		t.Errorf("stored embeds = %+v, want one image at the copy's key %q", s.Embeds, copied)
+	}
+	if posts := f.postsMade(); len(posts) != 1 || len(posts[0].Embeds) != 1 || posts[0].Embeds[0].Image.URL != b.S3.FileURL(copied) {
+		t.Errorf("posts = %+v, want one showing %s", posts, b.S3.FileURL(copied))
+	}
+}
+
+// Once its sticky is gone, nothing else records a file, so a deletion that
+// fails is retried.
+func TestFailedFileDeletesAreRetried(t *testing.T) {
+	f := &fakeDiscord{}
+	b, fakeS3 := newFakeBot(t, f)
+	key := testFileKey("a")
+	stored := seedFiles(fakeS3, key)
+	fakeS3.Mu.Lock()
+	fakeS3.Fail["/test-bucket/"+key] = http.StatusForbidden
+	fakeS3.Mu.Unlock()
+
+	b.retireSticky(&stickyMessage{ChannelID: 500, GuildID: testGuildID, FileURLs: []string{key}})
+	if left := stored(); len(left) != 1 {
+		t.Fatalf("files left %q, want the one whose delete failed", left)
+	}
+	fakeS3.Mu.Lock()
+	delete(fakeS3.Fail, "/test-bucket/"+key)
+	fakeS3.Mu.Unlock()
+	b.retryFailed()
+
+	if left := stored(); len(left) != 0 {
+		t.Errorf("files left %q after the retry, want none", left)
+	}
+	if len(b.undeleted) != 0 {
+		t.Errorf("still to delete: %q", b.undeleted)
+	}
+}
+
 // A sticky that fails to post is never stored, so nothing would ever delete
 // the files saved for it.
 func TestInstallStickyPostFailureDeletesFiles(t *testing.T) {
@@ -117,7 +189,7 @@ func TestInstallStickyPostFailureDeletesFiles(t *testing.T) {
 // Removing a sticky mid-repost must delete the message the repost posts, not
 // the one it replaces.
 func TestRetireStickyDeletesInFlightRepostMessage(t *testing.T) {
-	b, _, api, release := startRepostInFlight(t)
+	b, _, api, _, release := startRepostInFlight(t)
 	s := b.takeSticky(testGuildID, 500)
 	if s == nil {
 		t.Fatal("takeSticky found no sticky")
