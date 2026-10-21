@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -43,6 +45,10 @@ type posterRoleState struct {
 	Counts   map[string]int     `json:"counts"`
 	Fetched  map[string]bool    `json:"fetched"`
 
+	searches    map[string]*historySearch // history searches in flight, by user
+	searchRetry retryAfter                // users whose history search failed
+	grantRetry  retryAfter                // users whose role grant failed
+
 	parentCache sync.Map // channelID → channelParents
 }
 
@@ -50,6 +56,84 @@ func (st *posterRoleState) lock()                          { st.mu.Lock() }
 func (st *posterRoleState) unlock()                        { st.mu.Unlock() }
 func (st *posterRoleState) getBlacklist() []snowflake.ID   { return st.Settings.SkipChannels }
 func (st *posterRoleState) setBlacklist(bl []snowflake.ID) { st.Settings.SkipChannels = bl }
+
+// posterSearchRetry is how long a user's history search waits after the
+// search index wasn't ready or the search failed.
+const posterSearchRetry = 5 * time.Minute
+
+// historySearch is a search of one user's post history in flight. before is
+// their count when it started.
+type historySearch struct {
+	before int
+}
+
+// countMessage counts a message from userID and, if their history still needs
+// fetching, returns a search for the caller to run. Only one search runs per
+// user: messages that arrive meanwhile are only counted. Callers hold st.mu.
+func (st *posterRoleState) countMessage(userID snowflake.ID, now time.Time) *historySearch {
+	key := userID.String()
+	st.Counts[key]++
+	if st.Fetched[key] || st.searches[key] != nil || !st.searchRetry.ready(userID, now) {
+		return nil
+	}
+	if st.searches == nil {
+		st.searches = make(map[string]*historySearch)
+	}
+	s := &historySearch{before: st.Counts[key]}
+	st.searches[key] = s
+	return s
+}
+
+// finishSearch records the searched count plus the messages counted while the
+// search ran. It drops the result, returning false, if tracking was cleared or
+// the user was banned meanwhile. Callers hold st.mu.
+func (st *posterRoleState) finishSearch(userID snowflake.ID, s *historySearch, searched int) bool {
+	key := userID.String()
+	if st.searches[key] != s {
+		return false
+	}
+	delete(st.searches, key)
+	if st.Settings.isUserBlacklisted(userID) {
+		return false
+	}
+	st.Counts[key] = searched + max(0, st.Counts[key]-s.before)
+	st.Fetched[key] = true
+	return true
+}
+
+// failSearch ends a search that failed and holds off the next one for the
+// user. Callers hold st.mu.
+func (st *posterRoleState) failSearch(userID snowflake.ID, s *historySearch, now time.Time) {
+	key := userID.String()
+	if st.searches[key] != s {
+		return
+	}
+	delete(st.searches, key)
+	st.searchRetry.fail(userID, now, posterSearchRetry)
+}
+
+// grantDue reports whether userID should get the poster role now: their
+// history is fetched, their count has reached the threshold, they aren't
+// banned and no failed grant is holding off. Callers hold st.mu.
+func (st *posterRoleState) grantDue(userID snowflake.ID, now time.Time) (roleID snowflake.ID, count int, due bool) {
+	key := userID.String()
+	s := st.Settings
+	count = st.Counts[key]
+	due = s.RoleID != 0 && s.Threshold != 0 && st.Fetched[key] && count >= s.Threshold &&
+		!s.isUserBlacklisted(userID) && st.grantRetry.ready(userID, now)
+	return s.RoleID, count, due
+}
+
+// clearTracking forgets userID's count, and any search still running for
+// them, whose result is then dropped. Callers hold st.mu.
+func (st *posterRoleState) clearTracking(userID snowflake.ID) {
+	key := userID.String()
+	delete(st.Counts, key)
+	delete(st.Fetched, key)
+	delete(st.searches, key)
+	st.searchRetry.clear(userID)
+	st.grantRetry.clear(userID)
+}
 
 func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg discord.Message) {
 	st := b.posterRole.get(guildID)
@@ -83,30 +167,56 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg 
 	}
 
 	userID := msg.Author.ID
-	userIDStr := fmt.Sprintf("%d", userID)
+	now := time.Now()
 
 	st.mu.Lock()
-	st.Counts[userIDStr]++
-	fetched := st.Fetched[userIDStr]
+	search := st.countMessage(userID, now)
 	st.mu.Unlock()
 
-	if !fetched {
-		b.fetchPosterRoleHistory(guildID, userID, userIDStr)
+	if search != nil {
+		b.fetchPosterRoleHistory(guildID, st, userID, search)
+	}
+
+	b.grantPosterRoleIfDue(guildID, st, userID, now)
+}
+
+// grantPosterRoleIfDue grants the poster role once grantDue says so. A market
+// ban can land while the grant is in flight, so the ban list is checked under
+// the lock right before it and again after it, revoking the role if needed.
+func (b *Bot) grantPosterRoleIfDue(guildID snowflake.ID, st *posterRoleState, userID snowflake.ID, now time.Time) {
+	st.mu.Lock()
+	roleID, count, due := st.grantDue(userID, now)
+	st.mu.Unlock()
+	if !due {
+		return
+	}
+
+	var err error
+	if reason := b.grantBlocked(guildID, roleID); reason != "" {
+		err = errors.New(reason)
+	} else {
+		err = b.Client.Rest.AddMemberRole(guildID, userID, roleID, rest.WithReason("Reached marketplace post threshold"))
+	}
+	if err != nil {
+		st.mu.Lock()
+		st.grantRetry.fail(userID, now, roleGrantRetry)
+		st.mu.Unlock()
+		b.Log.Error("Failed to grant poster role", "user_id", userID, "guild_id", guildID, "role_id", roleID, "error", err)
+		return
 	}
 
 	st.mu.Lock()
-	count := st.Counts[userIDStr]
-	fetched = st.Fetched[userIDStr]
+	banned := st.Settings.isUserBlacklisted(userID)
 	st.mu.Unlock()
-
-	if fetched && count >= cfg.Threshold {
-		if err := b.Client.Rest.AddMemberRole(guildID, userID, cfg.RoleID, rest.WithReason("Reached marketplace post threshold")); err != nil {
-			b.Log.Error("Failed to grant poster role", "user_id", userID, "guild_id", guildID, "error", err)
-		} else {
-			b.Log.Info("Granted poster role", "user_id", userID, "guild_id", guildID, "total", count)
-			b.clearPosterRoleTracking(guildID, userIDStr)
+	if banned {
+		b.Log.Info("Market ban landed while granting poster role, revoking it", "user_id", userID, "guild_id", guildID)
+		if err := b.Client.Rest.RemoveMemberRole(guildID, userID, roleID, rest.WithReason("Banned from the marketplace")); err != nil {
+			b.Log.Error("Failed to revoke poster role from banned user", "user_id", userID, "guild_id", guildID, "role_id", roleID, "error", err)
 		}
+		return
 	}
+	b.Log.Info("Granted poster role", "user_id", userID, "guild_id", guildID, "total", count)
+	b.clearPosterRoleTracking(guildID, userID)
 }
 
 type searchHitMessage struct {
@@ -212,19 +322,17 @@ func (b *Bot) searchUserMessages(guildID, userID snowflake.ID) (*discordSearchRe
 	return &result, nil
 }
 
-func (b *Bot) fetchPosterRoleHistory(guildID snowflake.ID, userID snowflake.ID, userIDStr string) {
+func (b *Bot) fetchPosterRoleHistory(guildID snowflake.ID, st *posterRoleState, userID snowflake.ID, search *historySearch) {
 	result, err := b.searchUserMessages(guildID, userID)
 	if err != nil {
+		st.mu.Lock()
+		st.failSearch(userID, search, time.Now())
+		st.mu.Unlock()
 		if errors.Is(err, errSearchIndexing) {
-			b.Log.Info("Search index not ready, will retry on next message", "user_id", userID)
+			b.Log.Info("Search index not ready, will retry later", "user_id", userID, "retry_in", posterSearchRetry)
 		} else {
-			b.Log.Error("Failed to fetch poster role history", "user_id", userID, "error", err)
+			b.Log.Error("Failed to fetch poster role history", "user_id", userID, "retry_in", posterSearchRetry, "error", err)
 		}
-		return
-	}
-
-	st := b.posterRole.get(guildID)
-	if st == nil {
 		return
 	}
 
@@ -238,21 +346,23 @@ func (b *Bot) fetchPosterRoleHistory(guildID snowflake.ID, userID snowflake.ID, 
 	count := filteredSearchCount(result, skip)
 
 	st.mu.Lock()
-	st.Counts[userIDStr] += count
-	st.Fetched[userIDStr] = true
+	recorded := st.finishSearch(userID, search, count)
 	st.mu.Unlock()
 
-	b.Log.Info("Cached historical post count", "user_id", userID, "guild_id", guildID, "count", count)
+	if recorded {
+		b.Log.Info("Cached historical post count", "user_id", userID, "guild_id", guildID, "count", count)
+	} else {
+		b.Log.Info("Dropped post history search: tracking was cleared or the user was banned", "user_id", userID, "guild_id", guildID)
+	}
 }
 
-func (b *Bot) clearPosterRoleTracking(guildID snowflake.ID, userIDStr string) {
+func (b *Bot) clearPosterRoleTracking(guildID snowflake.ID, userID snowflake.ID) {
 	st := b.posterRole.get(guildID)
 	if st == nil {
 		return
 	}
 	st.mu.Lock()
-	delete(st.Counts, userIDStr)
-	delete(st.Fetched, userIDStr)
+	st.clearTracking(userID)
 	st.mu.Unlock()
 }
 
@@ -298,26 +408,22 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 		return
 	}
 
+	p := marketProgress{
+		Username:  user.Username,
+		Threshold: cfg.Threshold,
+		Banned:    cfg.isUserBlacklisted(user.ID),
+	}
+
 	// Fetch member info (for role check + join date)
-	var hasRole bool
-	var joinedAt *string
-	member, memberErr := b.Client.Rest.GetMember(guildID, user.ID)
-	if memberErr == nil {
-		for _, roleID := range member.RoleIDs {
-			if roleID == cfg.RoleID {
-				hasRole = true
-				break
-			}
-		}
-		if member.JoinedAt != nil {
-			ts := fmt.Sprintf("<t:%d:R>", member.JoinedAt.Unix())
-			joinedAt = &ts
-		}
+	if member, err := b.Client.Rest.GetMember(guildID, user.ID); err == nil {
+		p.MemberKnown = true
+		p.HasRole = slices.Contains(member.RoleIDs, cfg.RoleID)
+		p.JoinedAt = member.JoinedAt
 	}
 
 	// Fetch live search results
 	searchResult, searchErr := b.searchUserMessages(guildID, user.ID)
-	if searchErr != nil && errors.Is(searchErr, errSearchIndexing) {
+	if errors.Is(searchErr, errSearchIndexing) {
 		msg := discord.MessageCreate{
 			Content: "Search index is building, please try again shortly.",
 		}
@@ -327,28 +433,51 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
 		return
 	}
-
-	skip := func(chID snowflake.ID) bool {
-		return cfg.isSkipped(b.resolveChannelParents(chID, &st.parentCache)...)
+	if searchErr != nil {
+		b.Log.Error("Failed to search post history for market progress", "guild_id", guildID, "target_user", user.ID, "error", searchErr)
+	} else {
+		skip := func(chID snowflake.ID) bool {
+			return cfg.isSkipped(b.resolveChannelParents(chID, &st.parentCache)...)
+		}
+		p.Searched = true
+		p.Count = filteredSearchCount(searchResult, skip)
+		p.Top = topChannels(&discordSearchResponse{Messages: filterMessages(searchResult, skip)}, 5)
 	}
 
-	count := 0
-	if searchResult != nil {
-		count = filteredSearchCount(searchResult, skip)
+	msg := discord.MessageCreate{
+		Embeds: []discord.Embed{p.embed()},
 	}
+	if ephemeral {
+		msg.Flags = discord.MessageFlagEphemeral
+	}
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
+}
 
-	// Build embed fields
+// marketProgress is what /market progress shows about a user.
+type marketProgress struct {
+	Username    string
+	Threshold   int
+	Banned      bool
+	MemberKnown bool // the member lookup worked, so HasRole is known
+	HasRole     bool
+	JoinedAt    *time.Time
+	Searched    bool // the history search worked, so Count and Top are known
+	Count       int
+	Top         []channelCount
+}
+
+func (p marketProgress) embed() discord.Embed {
 	var fields []discord.EmbedField
-	if cfg.isUserBlacklisted(user.ID) {
+	if p.Banned {
 		fields = append(fields, discord.EmbedField{
 			Name:   "Banned",
 			Value:  "Yes",
 			Inline: boolPtr(true),
 		})
 	}
-	if memberErr == nil {
+	if p.MemberKnown {
 		hasRoleStr := "No"
-		if hasRole {
+		if p.HasRole {
 			hasRoleStr = "Yes"
 		}
 		fields = append(fields, discord.EmbedField{
@@ -357,62 +486,60 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 			Inline: boolPtr(true),
 		})
 	}
-	if joinedAt != nil {
+	if p.JoinedAt != nil {
 		fields = append(fields, discord.EmbedField{
 			Name:   "Joined",
-			Value:  *joinedAt,
+			Value:  fmt.Sprintf("<t:%d:R>", p.JoinedAt.Unix()),
 			Inline: boolPtr(true),
 		})
 	}
 
-	fields = append(fields, discord.EmbedField{
-		Name:   "Total Posts",
-		Value:  fmt.Sprintf("%d", count),
-		Inline: boolPtr(true),
-	})
-
-	if !hasRole {
-		pct := 0
-		if cfg.Threshold > 0 {
-			pct = count * 100 / cfg.Threshold
-		}
-		remaining := cfg.Threshold - count
-		if remaining < 0 {
-			remaining = 0
-		}
+	if !p.Searched {
+		// A failed search says nothing about the count; don't show it as 0.
 		fields = append(fields, discord.EmbedField{
-			Name:  "Progress",
-			Value: fmt.Sprintf("%d / %d (%d%%) — %d more needed", count, cfg.Threshold, pct, remaining),
+			Name:  "Total Posts",
+			Value: "Couldn't fetch post history. Please try again later.",
+		})
+	} else {
+		fields = append(fields, discord.EmbedField{
+			Name:   "Total Posts",
+			Value:  fmt.Sprintf("%d", p.Count),
+			Inline: boolPtr(true),
 		})
 	}
 
-	if searchResult != nil {
-		filtered := &discordSearchResponse{Messages: filterMessages(searchResult, skip)}
-		top := topChannels(filtered, 5)
-		if len(top) > 0 {
-			var lines []string
-			for _, tc := range top {
-				lines = append(lines, fmt.Sprintf("<#%d>: %d", tc.ChannelID, tc.Count))
-			}
-			fields = append(fields, discord.EmbedField{
-				Name:  "Recent Activity (last 25 posts)",
-				Value: strings.Join(lines, "\n"),
-			})
-		}
+	if p.Searched && !p.HasRole {
+		pct, remaining := thresholdProgress(p.Count, p.Threshold)
+		fields = append(fields, discord.EmbedField{
+			Name:  "Progress",
+			Value: fmt.Sprintf("%d / %d (%d%%) — %d more needed", p.Count, p.Threshold, pct, remaining),
+		})
 	}
 
-	embed := discord.Embed{
-		Title:  fmt.Sprintf("Marketplace Progress for %s", user.Username),
+	if len(p.Top) > 0 {
+		var lines []string
+		for _, tc := range p.Top {
+			lines = append(lines, fmt.Sprintf("<#%d>: %d", tc.ChannelID, tc.Count))
+		}
+		fields = append(fields, discord.EmbedField{
+			Name:  "Recent Activity (last 25 posts)",
+			Value: strings.Join(lines, "\n"),
+		})
+	}
+
+	return discord.Embed{
+		Title:  fmt.Sprintf("Marketplace Progress for %s", p.Username),
 		Fields: fields,
 	}
+}
 
-	msg := discord.MessageCreate{
-		Embeds: []discord.Embed{embed},
+// thresholdProgress returns count as a percentage of threshold and how many
+// posts are still needed.
+func thresholdProgress(count, threshold int) (pct, remaining int) {
+	if threshold > 0 {
+		pct = count * 100 / threshold
 	}
-	if ephemeral {
-		msg.Flags = discord.MessageFlagEphemeral
-	}
-	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
+	return pct, max(0, threshold-count)
 }
 
 type leaderboardEntry struct {
@@ -477,14 +604,7 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 	// Build embed
 	var lines []string
 	for rank, entry := range entries {
-		pct := 0
-		if cfg.Threshold > 0 {
-			pct = entry.Total * 100 / cfg.Threshold
-		}
-		remaining := cfg.Threshold - entry.Total
-		if remaining < 0 {
-			remaining = 0
-		}
+		pct, remaining := thresholdProgress(entry.Total, cfg.Threshold)
 		lines = append(lines, fmt.Sprintf("%d. <@%s> — %d/%d (%d%%) — %d remaining",
 			rank+1, entry.UserID, entry.Total, cfg.Threshold, pct, remaining))
 	}
@@ -563,8 +683,16 @@ func (b *Bot) handleMarketConfigSet(e *events.ApplicationCommandInteractionCreat
 
 	b.Log.Info("Market config set", "user_id", e.User().ID, "guild_id", guildID)
 
+	role, setRole := data.OptRole("role")
+	if setRole {
+		if reason := b.checkGrantableRole(e, guildID, role); reason != "" {
+			botutil.RespondEphemeral(e, reason)
+			return
+		}
+	}
+
 	st.mu.Lock()
-	if role, ok := data.OptRole("role"); ok {
+	if setRole {
 		st.Settings.RoleID = role.ID
 	}
 	if v, ok := data.OptInt("threshold"); ok {
@@ -624,29 +752,37 @@ func (b *Bot) handleMarketBanAdd(e *events.ApplicationCommandInteractionCreate, 
 	b.Log.Info("Market ban add", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID, "reason", reason)
 
 	st.mu.Lock()
-	if st.Settings.isUserBlacklisted(user.ID) {
-		st.mu.Unlock()
-		botutil.RespondEphemeral(e, fmt.Sprintf("%s is already banned from the marketplace.", userMention(user.ID)))
-		return
+	alreadyBanned := st.Settings.isUserBlacklisted(user.ID)
+	if !alreadyBanned {
+		st.Settings.BlacklistedUsers = append(st.Settings.BlacklistedUsers, user.ID)
 	}
-	st.Settings.BlacklistedUsers = append(st.Settings.BlacklistedUsers, user.ID)
 	roleID := st.Settings.RoleID
 	st.mu.Unlock()
 
-	if err := b.posterRole.persist(guildID); err != nil {
-		b.Log.Error("Failed to persist market ban", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save ban.")
-		return
+	if !alreadyBanned {
+		if err := b.posterRole.persist(guildID); err != nil {
+			b.Log.Error("Failed to persist market ban", "guild_id", guildID, "error", err)
+			// Undo the ban so that a retry runs all of it, not "already banned".
+			st.mu.Lock()
+			st.Settings.BlacklistedUsers, _ = withoutID(st.Settings.BlacklistedUsers, user.ID)
+			st.mu.Unlock()
+			botutil.RespondEphemeral(e, "Failed to save ban.")
+			return
+		}
 	}
 
-	// Clear any tracking data for the user.
-	b.clearPosterRoleTracking(guildID, fmt.Sprintf("%d", user.ID))
-
-	// Remove the poster role if they have it.
+	// Clear tracking and remove the poster role even if the user was already
+	// banned: an earlier ban may have failed before getting this far.
+	b.clearPosterRoleTracking(guildID, user.ID)
 	if roleID != 0 {
 		if err := b.Client.Rest.RemoveMemberRole(guildID, user.ID, roleID, rest.WithReason(fmt.Sprintf("Marketplace ban by %s: %s", e.User().Username, reason))); err != nil {
 			b.Log.Error("Failed to remove poster role during market ban", "guild_id", guildID, "user_id", user.ID, "role_id", roleID, "error", err)
 		}
+	}
+
+	if alreadyBanned {
+		botutil.RespondEphemeral(e, fmt.Sprintf("%s is already banned from the marketplace.", userMention(user.ID)))
+		return
 	}
 
 	b.crossPostToModLog(guildID, user, discord.Embed{
@@ -668,14 +804,8 @@ func (b *Bot) handleMarketBanRemove(e *events.ApplicationCommandInteractionCreat
 	b.Log.Info("Market ban remove", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID)
 
 	st.mu.Lock()
-	found := false
-	for i, id := range st.Settings.BlacklistedUsers {
-		if id == user.ID {
-			st.Settings.BlacklistedUsers = append(st.Settings.BlacklistedUsers[:i], st.Settings.BlacklistedUsers[i+1:]...)
-			found = true
-			break
-		}
-	}
+	list, found := withoutID(st.Settings.BlacklistedUsers, user.ID)
+	st.Settings.BlacklistedUsers = list
 	st.mu.Unlock()
 
 	if !found {

@@ -1,8 +1,11 @@
 package bot
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -15,6 +18,8 @@ import (
 type autoRoleState struct {
 	mu     sync.Mutex
 	RoleID snowflake.ID `json:"role_id"`
+
+	retry retryAfter // users whose grant on message failed
 }
 
 func defaultAutoRoleConfig() map[snowflake.ID]snowflake.ID {
@@ -38,6 +43,10 @@ func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
 	if roleID == 0 {
 		return
 	}
+	if reason := b.grantBlocked(e.GuildID, roleID); reason != "" {
+		b.Log.Error("Refusing to assign auto-role on join", "user_id", e.Member.User.ID, "guild_id", e.GuildID, "role_id", roleID, "reason", reason)
+		return
+	}
 	if err := b.Client.Rest.AddMemberRole(e.GuildID, e.Member.User.ID, roleID, rest.WithReason("Auto-role on member join")); err != nil {
 		b.Log.Error("Failed to assign auto-role on join", "user_id", e.Member.User.ID, "guild_id", e.GuildID, "error", err)
 	}
@@ -48,22 +57,34 @@ func (b *Bot) ensureAutoRole(guildID snowflake.ID, msg discord.Message) {
 	if st == nil {
 		return
 	}
-	st.mu.Lock()
-	roleID := st.RoleID
-	st.mu.Unlock()
-	if roleID == 0 {
-		return
-	}
 	if msg.Member == nil {
 		return
 	}
-	for _, r := range msg.Member.RoleIDs {
-		if r == roleID {
-			return
-		}
+	userID := msg.Author.ID
+	now := time.Now()
+	st.mu.Lock()
+	roleID := st.RoleID
+	ready := st.retry.ready(userID, now)
+	st.mu.Unlock()
+	if roleID == 0 || !ready || slices.Contains(msg.Member.RoleIDs, roleID) {
+		return
 	}
-	if err := b.Client.Rest.AddMemberRole(guildID, msg.Author.ID, roleID, rest.WithReason("Auto-role on first message")); err != nil {
-		b.Log.Error("Failed to assign auto-role on message", "user_id", msg.Author.ID, "guild_id", guildID, "error", err)
+
+	var err error
+	if reason := b.grantBlocked(guildID, roleID); reason != "" {
+		err = errors.New(reason)
+	} else {
+		err = b.Client.Rest.AddMemberRole(guildID, userID, roleID, rest.WithReason("Auto-role on first message"))
+	}
+	st.mu.Lock()
+	if err != nil {
+		st.retry.fail(userID, now, roleGrantRetry)
+	} else {
+		st.retry.clear(userID)
+	}
+	st.mu.Unlock()
+	if err != nil {
+		b.Log.Error("Failed to assign auto-role on message", "user_id", userID, "guild_id", guildID, "role_id", roleID, "error", err)
 	}
 }
 
@@ -112,8 +133,14 @@ func (b *Bot) handleAutoRoleConfigSet(e *events.ApplicationCommandInteractionCre
 
 	b.Log.Info("Autorole config set", "user_id", e.User().ID, "guild_id", guildID, "role_id", role.ID)
 
+	if reason := b.checkGrantableRole(e, guildID, role); reason != "" {
+		botutil.RespondEphemeral(e, reason)
+		return
+	}
+
 	st.mu.Lock()
 	st.RoleID = role.ID
+	st.retry = retryAfter{}
 	st.mu.Unlock()
 
 	if err := b.autoRole.persist(guildID); err != nil {

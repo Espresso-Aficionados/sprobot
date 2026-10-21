@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/disgoorg/disgo/discord"
@@ -21,6 +22,17 @@ func containsAny(list []snowflake.ID, ids ...snowflake.ID) bool {
 		}
 	}
 	return false
+}
+
+// withoutID returns list without id, and whether id was in it. It builds a new
+// slice rather than shifting list in place: other goroutines may be reading a
+// copy of list taken under the lock.
+func withoutID(list []snowflake.ID, id snowflake.ID) ([]snowflake.ID, bool) {
+	i := slices.Index(list, id)
+	if i < 0 {
+		return list, false
+	}
+	return slices.Delete(slices.Clone(list), i, i+1), true
 }
 
 // blacklistable abstracts access to a mutex-protected []snowflake.ID blacklist.
@@ -70,14 +82,9 @@ func (b *Bot) handleBlacklistRemove(e *events.ApplicationCommandInteractionCreat
 	b.Log.Info(prefix+" blacklist remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
 
 	bl.lock()
-	found := false
-	list := bl.getBlacklist()
-	for i, id := range list {
-		if id == ch.ID {
-			bl.setBlacklist(append(list[:i], list[i+1:]...))
-			found = true
-			break
-		}
+	list, found := withoutID(bl.getBlacklist(), ch.ID)
+	if found {
+		bl.setBlacklist(list)
 	}
 	bl.unlock()
 
