@@ -52,6 +52,7 @@ type Bot struct {
 	autoRole             *guildStateStore[autoRoleState]
 	eventLog             *guildStateStore[eventLogState]
 	modLog               *guildStateStore[modLogState]
+	modLogPending        botutil.MessageStash // context-menu targets awaiting the mod note modal
 	tempRoleConfig       *guildStateStore[tempRoleConfigState]
 	tempRoles            *guildStateStore[tempRoleState]
 	threadHelpConfig     map[snowflake.ID]threadHelpInfo
