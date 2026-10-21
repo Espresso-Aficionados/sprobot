@@ -1,7 +1,9 @@
 package stickybot
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -17,12 +19,9 @@ import (
 func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {
 	t.Helper()
 	return &Bot{
-		BaseBot: &botutil.BaseBot{
-			S3:                   s3c,
-			Log:                  testutil.DiscardLogger(),
-			TestGuildIDsOverride: []snowflake.ID{1013566342345019512},
-		},
+		BaseBot:  &botutil.BaseBot{S3: s3c, Log: testutil.DiscardLogger()},
 		stickies: make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
+		unsaved:  make(map[snowflake.ID]bool),
 	}
 }
 
@@ -326,27 +325,102 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSaveAllStickies(t *testing.T) {
+// The periodic save retries failed saves and writes nothing else, so it never
+// overwrites a guild's stored stickies with an unchanged, possibly stale copy.
+func TestSaveUnsavedStickiesRetriesOnlyFailedSaves(t *testing.T) {
 	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
+	b := newTestBot(t, testutil.NewTestS3Client(t, server))
 
-	c := testutil.NewTestS3Client(t, server)
-	b := newTestBot(t, c)
-
-	guild1 := snowflake.ID(1013566342345019512)
-	b.stickies[guild1] = map[snowflake.ID]*stickyMessage{
-		100: {ChannelID: 100, GuildID: guild1, Content: "g1", Active: true, MinIdleMins: 5, MaxIdleMins: 10, MsgThreshold: 2},
-	}
-
-	b.saveAllStickies()
-
+	const failedPath = "/test-bucket/stickies/1013566342345019512.json"
+	const untouchedPath = "/test-bucket/stickies/726985544038612993.json"
+	b.stickies[1013566342345019512] = map[snowflake.ID]*stickyMessage{100: {ChannelID: 100, GuildID: 1013566342345019512, Content: "changed"}}
+	b.stickies[726985544038612993] = map[snowflake.ID]*stickyMessage{200: {ChannelID: 200, GuildID: 726985544038612993, Content: "loaded"}}
 	fake.Mu.Lock()
-	_, ok := fake.Objects["/test-bucket/stickies/1013566342345019512.json"]
+	fake.Objects[untouchedPath] = []byte(`{"written": "elsewhere"}`)
+	fake.Fail[failedPath] = http.StatusForbidden
 	fake.Mu.Unlock()
 
-	if !ok {
-		t.Error("saveAllStickies did not save guild data")
+	b.saveStickiesForGuild(1013566342345019512)
+	fake.Mu.Lock()
+	delete(fake.Fail, failedPath)
+	fake.Mu.Unlock()
+	b.saveUnsavedStickies()
+
+	fake.Mu.Lock()
+	defer fake.Mu.Unlock()
+	if !strings.Contains(string(fake.Objects[failedPath]), "changed") {
+		t.Errorf("failed save not retried: stored %q", fake.Objects[failedPath])
+	}
+	if got := string(fake.Objects[untouchedPath]); got != `{"written": "elsewhere"}` {
+		t.Errorf("unchanged guild overwritten with %q", got)
+	}
+}
+
+// After a load fails, nothing may be saved over the stored stickies; the next
+// use retries the load and then goes ahead.
+func TestLoadFailureBlocksChangesUntilRetry(t *testing.T) {
+	f := &fakeDiscord{}
+	b, fake := newFakeBot(t, f)
+	delete(b.stickies, testGuildID) // not loaded yet
+	const path = "/test-bucket/stickies/1013566342345019512.json"
+	stored := `{"111": {"channel_id": "111", "guild_id": "1013566342345019512", "content": "existing", "max_idle_mins": 10, "msg_threshold": 1}}`
+	fake.Mu.Lock()
+	fake.Objects[path] = []byte(stored)
+	fake.Fail[path] = http.StatusForbidden
+	fake.Mu.Unlock()
+
+	b.loadStickies()
+	newSticky := func() *stickyMessage {
+		return &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
+	}
+	if reply := b.createSticky(newSticky(), discord.Message{Content: "new"}); reply != notLoadedReply {
+		t.Errorf("create while not loaded replied %q, want %q", reply, notLoadedReply)
+	}
+	b.saveStickiesForGuild(testGuildID)
+	fake.Mu.Lock()
+	got := string(fake.Objects[path])
+	delete(fake.Fail, path)
+	fake.Mu.Unlock()
+	if got != stored {
+		t.Errorf("stored stickies overwritten with %q", got)
+	}
+	if posts := f.postsMade(); len(posts) != 0 {
+		t.Errorf("posted %d stickies while not loaded", len(posts))
+	}
+
+	if reply := b.createSticky(newSticky(), discord.Message{Content: "new"}); !strings.HasPrefix(reply, "Sticky created") {
+		t.Fatalf("create after S3 recovered replied %q", reply)
+	}
+	fake.Mu.Lock()
+	var saved map[string]*stickyMessage
+	err := json.Unmarshal(fake.Objects[path], &saved)
+	fake.Mu.Unlock()
+	if err != nil || saved["111"] == nil || saved["500"] == nil {
+		t.Errorf("stored channels %v (%v), want the existing 111 and the new 500", keysOf(saved), err)
+	}
+}
+
+// A retried load that loses a race with another keeps the stickies already
+// loaded, whose loops are running, rather than replacing them.
+func TestLoadGuildStickiesKeepsLoadedGuild(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	fake.Objects["/test-bucket/stickies/1013566342345019512.json"] = []byte(`{"111": {"channel_id": "111", "guild_id": "1013566342345019512"}}`)
+	b := newTestBot(t, testutil.NewTestS3Client(t, server))
+
+	ctx := context.Background()
+	if !b.loadGuildStickies(ctx, 1013566342345019512) {
+		t.Fatal("first load failed")
+	}
+	first := b.stickies[1013566342345019512][111]
+	if !b.loadGuildStickies(ctx, 1013566342345019512) {
+		t.Fatal("second load failed")
+	}
+	if b.stickies[1013566342345019512][111] != first {
+		t.Error("second load replaced the loaded stickies")
 	}
 }
 

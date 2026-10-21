@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
@@ -79,7 +80,7 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 	case discord.SlashCommandInteractionData:
 		if d.CommandName() == cmdSlash {
 			sub := d.SubCommandName
-			if sub == nil {
+			if sub == nil || b.rejectUnloadedGuild(e) {
 				return
 			}
 			switch *sub {
@@ -94,6 +95,21 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 			}
 		}
 	}
+}
+
+const notLoadedReply = "This server's stickies couldn't be loaded from storage. Try again in a minute."
+
+// rejectUnloadedGuild turns away a command in a guild whose stickies failed
+// to load and still don't after a retry, and reports whether it did.
+func (b *Bot) rejectUnloadedGuild(e *events.ApplicationCommandInteractionCreate) bool {
+	// Leave time to answer within the interaction's 3 seconds.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if b.guildLoaded(ctx, *e.GuildID()) {
+		return false
+	}
+	botutil.RespondEphemeral(e, notLoadedReply)
+	return true
 }
 
 func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
@@ -279,6 +295,9 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 func (b *Bot) createSticky(s *stickyMessage, msg discord.Message) string {
 	ctx, cancel := context.WithTimeout(context.Background(), botutil.DeferredWorkBudget)
 	defer cancel()
+	if !b.guildLoaded(ctx, s.GuildID) {
+		return notLoadedReply
+	}
 
 	// Saved files follow the message's own embeds, as image embeds.
 	s.Content = msg.Content
@@ -319,7 +338,7 @@ func createdReply(s *stickyMessage, failed []string) string {
 
 // installSticky posts s and makes it its channel's sticky, retiring any
 // sticky already there. If the post fails, s's saved files are deleted, as
-// nothing will refer to them.
+// nothing will refer to them. s's guild must be loaded (see guildLoaded).
 func (b *Bot) installSticky(s *stickyMessage) error {
 	sent, err := b.Client.Rest.CreateMessage(s.ChannelID, s.messageCreate(b.S3.FileURL))
 	if err != nil {
@@ -329,9 +348,6 @@ func (b *Bot) installSticky(s *stickyMessage) error {
 	s.LastMessageID = sent.ID
 
 	b.mu.Lock()
-	if b.stickies[s.GuildID] == nil {
-		b.stickies[s.GuildID] = make(map[snowflake.ID]*stickyMessage)
-	}
 	old := b.stickies[s.GuildID][s.ChannelID]
 	b.stickies[s.GuildID][s.ChannelID] = s
 	b.startStickyGoroutine(s)

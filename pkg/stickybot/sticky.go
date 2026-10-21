@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -56,41 +58,78 @@ func (s *stickyMessage) messageCreate(fileURL func(string) string) discord.Messa
 	}
 }
 
+// loadStickies loads every allowed guild's stickies and starts their repost
+// loops. Run calls it before the gateway opens, so no command or event sees a
+// guild whose stickies aren't in memory yet. A guild that fails to load stays
+// out of b.stickies, and guildLoaded retries it when it is next used.
 func (b *Bot) loadStickies() {
-	ctx := context.Background()
-	for _, guildID := range b.GuildIDs() {
-		data, err := b.S3.FetchStickies(ctx, fmt.Sprintf("%d", guildID))
-		if errors.Is(err, s3client.ErrNotFound) {
-			b.Log.Info("No existing stickies data", "guild_id", guildID)
-			continue
-		}
-		if err != nil {
-			b.Log.Error("Failed to load stickies", "guild_id", guildID, "error", err)
-			continue
-		}
-
-		var loaded map[string]*stickyMessage
-		if err := json.Unmarshal(data, &loaded); err != nil {
-			b.Log.Error("Failed to decode stickies", "guild_id", guildID, "error", err)
-			continue
-		}
-
-		channels := make(map[snowflake.ID]*stickyMessage, len(loaded))
-		for _, s := range loaded {
-			channels[s.ChannelID] = s
-		}
-		// The gateway is already dispatching events that read b.stickies.
-		b.mu.Lock()
-		b.stickies[guildID] = channels
-		for _, s := range channels {
-			b.startStickyGoroutine(s)
-		}
-		b.mu.Unlock()
-		b.Log.Info("Loaded stickies", "guild_id", guildID, "count", len(channels))
+	// Bounded, since the bot isn't online until this returns.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	for _, guildID := range botutil.AllowedGuildIDs {
+		b.loadGuildStickies(ctx, guildID)
 	}
 }
 
+// guildLoaded reports whether guildID's stickies are in memory, first
+// retrying the load if it failed. Nothing may change a guild that isn't
+// loaded: saving it would overwrite the stickies that failed to load.
+func (b *Bot) guildLoaded(ctx context.Context, guildID snowflake.ID) bool {
+	b.mu.Lock()
+	_, loaded := b.stickies[guildID]
+	b.mu.Unlock()
+	return loaded || (botutil.GuildAllowed(guildID) && b.loadGuildStickies(ctx, guildID))
+}
+
+// loadGuildStickies reads guildID's stored stickies into b.stickies and
+// starts their loops, reporting whether the guild is now loaded.
+func (b *Bot) loadGuildStickies(ctx context.Context, guildID snowflake.ID) bool {
+	channels, err := b.fetchStickies(ctx, guildID)
+	if err != nil {
+		b.Log.Error("Failed to load stickies; they can't be changed until a retry succeeds", "guild_id", guildID, "error", err)
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, loaded := b.stickies[guildID]; loaded {
+		return true // a concurrent retry got there first
+	}
+	b.stickies[guildID] = channels
+	for _, s := range channels {
+		b.startStickyGoroutine(s)
+	}
+	b.Log.Info("Loaded stickies", "guild_id", guildID, "count", len(channels))
+	return true
+}
+
+// fetchStickies reads guildID's stored stickies, keyed by channel. A guild
+// with none stored gets an empty map.
+func (b *Bot) fetchStickies(ctx context.Context, guildID snowflake.ID) (map[snowflake.ID]*stickyMessage, error) {
+	channels := make(map[snowflake.ID]*stickyMessage)
+	data, err := b.S3.FetchStickies(ctx, guildID.String())
+	if errors.Is(err, s3client.ErrNotFound) {
+		return channels, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var loaded map[string]*stickyMessage
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		return nil, fmt.Errorf("decoding stickies: %w", err)
+	}
+	for _, s := range loaded {
+		channels[s.ChannelID] = s
+	}
+	return channels, nil
+}
+
+// saveStickiesForGuild writes guildID's stickies to S3, unless the guild
+// isn't loaded. Saves run one at a time, so the last one taken is the last
+// one stored. A failed save is retried by saveUnsavedStickies.
 func (b *Bot) saveStickiesForGuild(guildID snowflake.ID) {
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
+
 	b.mu.Lock()
 	channels, ok := b.stickies[guildID]
 	if !ok {
@@ -112,18 +151,21 @@ func (b *Bot) saveStickiesForGuild(guildID snowflake.ID) {
 	ctx := context.Background()
 	if err := b.S3.SaveStickies(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
 		b.Log.Error("Failed to save stickies", "guild_id", guildID, "error", err)
-	} else {
-		b.Log.Info("Saved stickies", "guild_id", guildID, "count", len(toSave))
+		b.unsaved[guildID] = true
+		return
 	}
+	delete(b.unsaved, guildID)
+	b.Log.Info("Saved stickies", "guild_id", guildID, "count", len(toSave))
 }
 
-func (b *Bot) saveAllStickies() {
-	b.mu.Lock()
-	guildIDs := make([]snowflake.ID, 0, len(b.stickies))
-	for id := range b.stickies {
-		guildIDs = append(guildIDs, id)
-	}
-	b.mu.Unlock()
+// saveUnsavedStickies retries the saves that failed. Every change saves its
+// guild straight away, so these are the only guilds S3 is behind on. Saving
+// the rest could only overwrite changes made elsewhere, such as by another
+// instance using the same bucket.
+func (b *Bot) saveUnsavedStickies() {
+	b.saveMu.Lock()
+	guildIDs := slices.Collect(maps.Keys(b.unsaved))
+	b.saveMu.Unlock()
 
 	for _, guildID := range guildIDs {
 		b.saveStickiesForGuild(guildID)

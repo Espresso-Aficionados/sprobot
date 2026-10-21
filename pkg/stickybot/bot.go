@@ -18,10 +18,15 @@ import (
 
 type Bot struct {
 	*botutil.BaseBot
-	mu       sync.Mutex
-	stop     chan struct{}
-	stickies map[snowflake.ID]map[snowflake.ID]*stickyMessage // guild -> channel -> sticky
-	pending  botutil.MessageStash                             // context-menu targets awaiting modal submit
+	mu   sync.Mutex
+	stop chan struct{}
+	// guild -> channel -> sticky. A guild is absent until its stickies have
+	// loaded (see guildLoaded).
+	stickies map[snowflake.ID]map[snowflake.ID]*stickyMessage
+	pending  botutil.MessageStash // context-menu targets awaiting modal submit
+
+	saveMu  sync.Mutex            // serializes saveStickiesForGuild
+	unsaved map[snowflake.ID]bool // guilds whose last save failed; guarded by saveMu
 }
 
 func New(token string) (*Bot, error) {
@@ -34,6 +39,7 @@ func New(token string) (*Bot, error) {
 		BaseBot:  base,
 		stop:     make(chan struct{}),
 		stickies: make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
+		unsaved:  make(map[snowflake.ID]bool),
 	}
 
 	client, err := disgo.New(token,
@@ -69,26 +75,37 @@ func New(token string) (*Bot, error) {
 func (b *Bot) Run() error {
 	ctx := context.Background()
 
+	// Before the gateway opens, so no command or event sees a guild whose
+	// stickies aren't in memory yet.
+	b.loadStickies()
+
 	if err := b.OpenGateway(ctx); err != nil {
+		b.shutdown()
 		return err
 	}
 	defer b.Client.Close(ctx)
 
 	b.WaitForGuilds(30 * time.Second)
 
-	b.loadStickies()
 	if err := b.registerAllCommands(); err != nil {
+		b.shutdown()
 		return fmt.Errorf("registering commands: %w", err)
 	}
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveAllStickies)
+	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveUnsavedStickies)
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
 	shutdownErr := b.WaitForShutdown("Stickybot")
+	b.shutdown()
+	return shutdownErr
+}
+
+// shutdown stops the repost loops, waiting out reposts in flight, and retries
+// any saves that failed.
+func (b *Bot) shutdown() {
 	close(b.stop)
 	b.stopAllStickyGoroutines()
-	b.saveAllStickies()
-	return shutdownErr
+	b.saveUnsavedStickies()
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {
@@ -122,6 +139,11 @@ func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
 // Left alone, it would keep its repost loop and stay stored as active, to be
 // started again on every boot.
 func (b *Bot) dropDeletedChannelSticky(guildID, channelID snowflake.ID) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if !b.guildLoaded(ctx, guildID) {
+		return
+	}
 	s := b.takeSticky(guildID, channelID)
 	if s == nil {
 		return

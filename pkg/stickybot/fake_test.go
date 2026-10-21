@@ -86,8 +86,9 @@ func (f *fakeDiscord) deletedIDs() []snowflake.ID {
 	return slices.Clone(f.deleted)
 }
 
-// newFakeBot returns a test bot whose REST calls go to f and whose S3 calls go
-// to the returned fake. Its repost loops are stopped when the test ends.
+// newFakeBot returns a test bot, with the test guild loaded, whose REST calls
+// go to f and whose S3 calls go to the returned fake. Its repost loops are
+// stopped when the test ends.
 func newFakeBot(t *testing.T, f *fakeDiscord) (*Bot, *testutil.FakeS3) {
 	t.Helper()
 	srv := httptest.NewServer(f)
@@ -98,6 +99,7 @@ func newFakeBot(t *testing.T, f *fakeDiscord) (*Bot, *testutil.FakeS3) {
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, s3srv))
 	b.Client = &bot.Client{Rest: rest.New(rest.NewClient("test", rest.WithURL(srv.URL)))}
+	b.stickies[testGuildID] = make(map[snowflake.ID]*stickyMessage) // loaded, none stored
 	// Cleanups run last-in first-out: the loops stop before the servers close.
 	t.Cleanup(b.stopAllStickyGoroutines)
 	return b, fakeS3
