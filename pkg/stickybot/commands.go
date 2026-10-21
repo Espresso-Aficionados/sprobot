@@ -321,6 +321,7 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 
 	if old != nil {
 		b.stopStickyGoroutine(old)
+		// Read only after the stop: a repost in flight replaces the message.
 		if old.LastMessageID != 0 {
 			_ = b.Client.Rest.DeleteMessage(channelID, old.LastMessageID)
 		}
@@ -351,9 +352,11 @@ func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {
 	s.Active = false
 	b.mu.Unlock()
 
+	// Respond first: stopping waits for any repost in flight, which can
+	// outlast the interaction's 3-second deadline.
+	botutil.RespondEphemeral(e, "Sticky paused.")
 	b.stopStickyGoroutine(s)
 	b.saveStickiesForGuild(guildID)
-	botutil.RespondEphemeral(e, "Sticky paused.")
 }
 
 func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
@@ -405,12 +408,15 @@ func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) 
 	delete(channels, channelID)
 	b.mu.Unlock()
 
+	// Respond first: stopping waits for any repost in flight, which can
+	// outlast the interaction's 3-second deadline.
+	botutil.RespondEphemeral(e, "Sticky removed.")
 	b.stopStickyGoroutine(s)
+	// Read only after the stop: a repost in flight replaces the message.
 	if s.LastMessageID != 0 {
 		_ = b.Client.Rest.DeleteMessage(channelID, s.LastMessageID)
 	}
 	b.saveStickiesForGuild(guildID)
-	botutil.RespondEphemeral(e, "Sticky removed.")
 }
 
 func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {

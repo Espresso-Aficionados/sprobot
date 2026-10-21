@@ -10,6 +10,7 @@ type Handle struct {
 	msgCh  chan struct{}
 	stopCh chan struct{}
 	once   sync.Once
+	wg     sync.WaitGroup
 }
 
 // NewHandle creates a Handle with buffered channels.
@@ -22,15 +23,21 @@ func NewHandle() *Handle {
 
 // Start launches a Run goroutine using this handle's channels.
 func (h *Handle) Start(cfg Config, repost func() bool) {
-	go Run(cfg, h.msgCh, h.stopCh, repost)
+	h.wg.Go(func() { Run(cfg, h.msgCh, h.stopCh, repost) })
 }
 
-// Stop closes the stop channel, terminating the goroutine. Safe to call on nil or multiple times.
+// Stop ends the goroutine and waits for it to exit, including any repost in
+// progress, so whatever the repost writes is final once Stop returns. Safe to
+// call on nil, more than once, or before Start.
+//
+// It must not be called from inside the repost callback, or while holding a
+// lock the callback takes: either deadlocks.
 func (h *Handle) Stop() {
 	if h == nil {
 		return
 	}
 	h.once.Do(func() { close(h.stopCh) })
+	h.wg.Wait()
 }
 
 // Signal sends a non-blocking message signal. Safe to call on nil.
@@ -63,6 +70,13 @@ type Config struct {
 // counting from the moment of arming and forces a repost after that duration.
 func Run(cfg Config, msgCh <-chan struct{}, stopCh <-chan struct{}, repost func() bool) {
 	safeRepost := func() (ok bool) {
+		// A timer can fire together with stop, and select picks either, so
+		// don't start a repost once stop is closed.
+		select {
+		case <-stopCh:
+			return false
+		default:
+		}
 		defer func() {
 			if r := recover(); r != nil {
 				ok = false

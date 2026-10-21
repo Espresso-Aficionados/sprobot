@@ -161,3 +161,84 @@ func TestPanicRecovery(t *testing.T) {
 		t.Error("repost should have been called at least once")
 	}
 }
+
+// Stop must not return while a repost is in flight: callers read the message
+// ID the repost writes and delete that message, so returning early would
+// leave the new message posted and untracked.
+func TestStopWaitsForInFlightRepost(t *testing.T) {
+	h := NewHandle()
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var finished atomic.Bool
+	h.Start(Config{MinIdleMins: 0, MaxIdleMins: 10, MsgThreshold: 1}, func() bool {
+		entered <- struct{}{}
+		<-release
+		finished.Store(true)
+		return true
+	})
+
+	h.Signal()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("repost did not start")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		h.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while a repost was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after the repost finished")
+	}
+	if !finished.Load() {
+		t.Error("Stop returned before the repost finished")
+	}
+}
+
+func TestStopIsIdempotentAndNilSafe(t *testing.T) {
+	var nilHandle *Handle
+	nilHandle.Stop()
+
+	NewHandle().Stop() // never started
+
+	h := NewHandle()
+	h.Start(Config{MinIdleMins: 1, MaxIdleMins: 5, MsgThreshold: 10}, func() bool { return true })
+	done := make(chan struct{})
+	go func() {
+		h.Stop()
+		h.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("repeated Stop did not return")
+	}
+	h.Signal() // after Stop: must not block or panic
+}
+
+// When stop and a timer are both ready, select picks either; no repost may
+// start once stop is closed.
+func TestNoRepostAfterStop(t *testing.T) {
+	for range 200 {
+		msgCh := make(chan struct{}, 1)
+		stopCh := make(chan struct{})
+		msgCh <- struct{}{}
+		close(stopCh)
+		Run(Config{MinIdleMins: 0, MaxIdleMins: 0, MsgThreshold: 1}, msgCh, stopCh, func() bool {
+			t.Fatal("repost called after stop was closed")
+			return true
+		})
+	}
+}

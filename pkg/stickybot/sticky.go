@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
@@ -121,12 +122,15 @@ func (b *Bot) saveAllStickies() {
 }
 
 func (b *Bot) startStickyGoroutine(s *stickyMessage) {
-	s.handle = idleloop.NewHandle()
+	h := idleloop.NewHandle()
+	b.mu.Lock()
+	s.handle = h
 	var lastPostTime time.Time
 	if s.LastMessageID != 0 {
 		lastPostTime = s.LastMessageID.Time()
 	}
-	s.handle.Start(idleloop.Config{
+	b.mu.Unlock()
+	h.Start(idleloop.Config{
 		MinIdleMins:       s.MinIdleMins,
 		MaxIdleMins:       s.MaxIdleMins,
 		MsgThreshold:      s.MsgThreshold,
@@ -135,20 +139,35 @@ func (b *Bot) startStickyGoroutine(s *stickyMessage) {
 	}, func() bool { return b.repostSticky(s) })
 }
 
+// stopStickyGoroutine stops s's repost loop and waits out any repost in
+// progress, so s.LastMessageID is final when it returns. The caller must not
+// hold b.mu, which the repost takes.
 func (b *Bot) stopStickyGoroutine(s *stickyMessage) {
-	s.handle.Stop()
+	b.mu.Lock()
+	h := s.handle
 	s.handle = nil
+	b.mu.Unlock()
+	h.Stop()
 }
 
 func (b *Bot) stopAllStickyGoroutines() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	var handles []*idleloop.Handle
 	for _, channels := range b.stickies {
 		for _, s := range channels {
-			s.handle.Stop()
+			handles = append(handles, s.handle)
 			s.handle = nil
 		}
 	}
+	b.mu.Unlock()
+
+	// Stop in parallel so shutdown waits for the slowest in-flight repost,
+	// not the sum of them.
+	var wg sync.WaitGroup
+	for _, h := range handles {
+		wg.Go(h.Stop)
+	}
+	wg.Wait()
 }
 
 func (b *Bot) repostSticky(s *stickyMessage) bool {

@@ -262,6 +262,9 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	b.reminders[guildID][channelID] = r
 	b.mu.Unlock()
 
+	// Respond first: stopping the old reminder waits for any repost in
+	// flight, which can outlast the interaction's 3-second deadline.
+	botutil.RespondEphemeral(e, fmt.Sprintf("Thread reminders enabled in <#%d>. Idle: %d–%d min, msg threshold: %d, time threshold: %d min, buffer: %d msgs.", channelID, r.MinIdleMins, r.MaxIdleMins, r.MsgThreshold, r.TimeThresholdMins, r.Buffer))
 	if old != nil {
 		b.stopReminderGoroutine(old)
 	}
@@ -269,7 +272,6 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	b.saveRemindersForGuild(guildID)
 
 	b.Log.Info("Reminder enabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", msgThreshold, "time_threshold", timeThreshold, "buffer", buffer)
-	botutil.RespondEphemeral(e, fmt.Sprintf("Thread reminders enabled in <#%d>. Idle: %d–%d min, msg threshold: %d, time threshold: %d min, buffer: %d msgs.", channelID, r.MinIdleMins, r.MaxIdleMins, r.MsgThreshold, r.TimeThresholdMins, r.Buffer))
 }
 
 func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
@@ -294,13 +296,16 @@ func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
 	delete(channels, channelID)
 	b.mu.Unlock()
 
+	// Respond first: stopping waits for any repost in flight, which can
+	// outlast the interaction's 3-second deadline.
+	botutil.RespondEphemeral(e, "Thread reminders disabled.")
 	b.stopReminderGoroutine(r)
+	// Read only after the stop: a repost in flight replaces the message.
 	if r.LastMessageID != 0 {
 		_ = b.Client.Rest.DeleteMessage(channelID, r.LastMessageID)
 	}
 	b.saveRemindersForGuild(guildID)
 	b.Log.Info("Reminder disabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
-	botutil.RespondEphemeral(e, "Thread reminders disabled.")
 }
 
 func (b *Bot) handleThreads(e *events.ApplicationCommandInteractionCreate) {

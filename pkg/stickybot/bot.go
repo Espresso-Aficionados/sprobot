@@ -104,6 +104,7 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 		b.mu.Unlock()
 		return
 	}
+	h := s.handle
 	b.mu.Unlock()
-	s.handle.Signal()
+	h.Signal()
 }

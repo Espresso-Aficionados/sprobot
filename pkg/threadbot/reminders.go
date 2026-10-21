@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
@@ -243,30 +244,49 @@ func (b *Bot) saveAllReminders() {
 }
 
 func (b *Bot) startReminderGoroutine(r *threadReminder) {
-	r.handle = idleloop.NewHandle()
-	r.handle.Start(idleloop.Config{
+	h := idleloop.NewHandle()
+	b.mu.Lock()
+	r.handle = h
+	lastPostTime := r.LastPostTime
+	b.mu.Unlock()
+	h.Start(idleloop.Config{
 		MinIdleMins:       r.MinIdleMins,
 		MaxIdleMins:       r.MaxIdleMins,
 		MsgThreshold:      r.MsgThreshold,
 		TimeThresholdMins: r.TimeThresholdMins,
-		LastPostTime:      r.LastPostTime,
+		LastPostTime:      lastPostTime,
 	}, func() bool { return b.repostReminder(r) })
 }
 
+// stopReminderGoroutine stops r's repost loop and waits out any repost in
+// progress, so r.LastMessageID is final when it returns. The caller must not
+// hold b.mu, which the repost takes.
 func (b *Bot) stopReminderGoroutine(r *threadReminder) {
-	r.handle.Stop()
+	b.mu.Lock()
+	h := r.handle
 	r.handle = nil
+	b.mu.Unlock()
+	h.Stop()
 }
 
 func (b *Bot) stopAllReminderGoroutines() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	var handles []*idleloop.Handle
 	for _, channels := range b.reminders {
 		for _, r := range channels {
-			r.handle.Stop()
+			handles = append(handles, r.handle)
 			r.handle = nil
 		}
 	}
+	b.mu.Unlock()
+
+	// Stop in parallel so shutdown waits for the slowest in-flight repost,
+	// not the sum of them.
+	var wg sync.WaitGroup
+	for _, h := range handles {
+		wg.Go(h.Stop)
+	}
+	wg.Wait()
 }
 
 // buildThreadEmbed fetches active threads for the given guild/channel and
