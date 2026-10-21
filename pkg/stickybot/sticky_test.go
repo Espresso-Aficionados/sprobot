@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,74 +26,29 @@ func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {
 	}
 }
 
-func TestJSONRoundTrip(t *testing.T) {
-	s := &stickyMessage{
-		ChannelID:         100,
-		GuildID:           200,
-		Content:           "sticky text",
-		Active:            true,
-		MinIdleMins:       15,
-		MaxIdleMins:       30,
-		MsgThreshold:      5,
-		TimeThresholdMins: 10,
-		LastMessageID:     500,
+// The JSON names are the stored format: renaming one drops that field from
+// every sticky already in S3. file_urls in particular is what lets a removed
+// sticky's files be deleted.
+func TestStoredFormat(t *testing.T) {
+	const stored = `{"channel_id":"100","guild_id":"200","content":"text","file_urls":["sticky_files/200/a.png"],"created_by":"300","active":true,"last_message_id":"500","min_idle_mins":0,"max_idle_mins":30,"msg_threshold":0,"time_threshold_mins":10,"buffer":0}`
+	want := stickyMessage{
+		ChannelID: 100, GuildID: 200, Content: "text", FileURLs: []string{"sticky_files/200/a.png"},
+		CreatedBy: 300, Active: true, LastMessageID: 500, MaxIdleMins: 30, TimeThresholdMins: 10,
 	}
 
-	data, err := json.Marshal(s)
+	var got stickyMessage
+	if err := json.Unmarshal([]byte(stored), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("decoded %+v, want %+v", got, want)
+	}
+	data, err := json.Marshal(&want)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatal(err)
 	}
-
-	var s2 stickyMessage
-	if err := json.Unmarshal(data, &s2); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if s2.ChannelID != s.ChannelID {
-		t.Errorf("ChannelID = %d, want %d", s2.ChannelID, s.ChannelID)
-	}
-	if s2.Content != s.Content {
-		t.Errorf("Content = %q, want %q", s2.Content, s.Content)
-	}
-	if s2.Active != s.Active {
-		t.Errorf("Active = %v, want %v", s2.Active, s.Active)
-	}
-	if s2.MinIdleMins != s.MinIdleMins {
-		t.Errorf("MinIdleMins = %d, want %d", s2.MinIdleMins, s.MinIdleMins)
-	}
-	if s2.MaxIdleMins != s.MaxIdleMins {
-		t.Errorf("MaxIdleMins = %d, want %d", s2.MaxIdleMins, s.MaxIdleMins)
-	}
-	if s2.MsgThreshold != s.MsgThreshold {
-		t.Errorf("MsgThreshold = %d, want %d", s2.MsgThreshold, s.MsgThreshold)
-	}
-	if s2.TimeThresholdMins != s.TimeThresholdMins {
-		t.Errorf("TimeThresholdMins = %d, want %d", s2.TimeThresholdMins, s.TimeThresholdMins)
-	}
-	// handle should be nil after unmarshal
-	if s2.handle != nil {
-		t.Error("handle should be nil after unmarshal")
-	}
-}
-
-func TestJSONOmitsEmptyEmbeds(t *testing.T) {
-	s := &stickyMessage{
-		ChannelID: 100,
-		GuildID:   200,
-		Content:   "test",
-		Active:    true,
-	}
-
-	data, err := json.Marshal(s)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	if strings.Contains(string(data), "embeds") {
-		t.Error("expected embeds to be omitted when empty")
-	}
-	if strings.Contains(string(data), "file_urls") {
-		t.Error("expected file_urls to be omitted when empty")
+	if string(data) != stored {
+		t.Errorf("encoded %s, want %s", data, stored)
 	}
 }
 
@@ -525,12 +481,15 @@ func TestLoadStickiesInvalidJSON(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	// Should not panic
 	b.loadStickies()
 
-	guildID := snowflake.ID(1013566342345019512)
-	if channels, ok := b.stickies[guildID]; ok && len(channels) > 0 {
-		t.Error("should not load stickies from invalid JSON")
+	// Not loaded, so nothing saves over the stored stickies; another allowed
+	// guild with none stored still loads.
+	if _, ok := b.stickies[1013566342345019512]; ok {
+		t.Error("guild with unreadable stickies counted as loaded")
+	}
+	if _, ok := b.stickies[726985544038612993]; !ok {
+		t.Error("guild with no stored stickies not loaded")
 	}
 }
 
