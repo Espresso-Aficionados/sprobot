@@ -301,11 +301,13 @@ func (b *Bot) createSticky(s *stickyMessage, msg discord.Message) string {
 	return fmt.Sprintf("Sticky created in <#%d>! Idle: %d–%d min, msg threshold: %d, time threshold: %d min.", s.ChannelID, s.MinIdleMins, s.MaxIdleMins, s.MsgThreshold, s.TimeThresholdMins)
 }
 
-// installSticky posts s and makes it its channel's sticky, replacing any
-// sticky already there.
+// installSticky posts s and makes it its channel's sticky, retiring any
+// sticky already there. If the post fails, s's saved files are deleted, as
+// nothing will refer to them.
 func (b *Bot) installSticky(s *stickyMessage) error {
 	sent, err := b.Client.Rest.CreateMessage(s.ChannelID, s.messageCreate(b.S3.FileURL))
 	if err != nil {
+		b.deleteStickyFiles(s)
 		return err
 	}
 	s.LastMessageID = sent.ID
@@ -320,11 +322,7 @@ func (b *Bot) installSticky(s *stickyMessage) error {
 	b.mu.Unlock()
 
 	if old != nil {
-		b.stopStickyGoroutine(old)
-		// Read only after the stop: a repost in flight replaces the message.
-		if old.LastMessageID != 0 {
-			_ = b.Client.Rest.DeleteMessage(s.ChannelID, old.LastMessageID)
-		}
+		b.retireSticky(old)
 	}
 	b.saveStickiesForGuild(s.GuildID)
 	return nil
@@ -387,30 +385,15 @@ func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) 
 
 	b.Log.Info("Sticky remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 
-	b.mu.Lock()
-	channels, ok := b.stickies[guildID]
-	if !ok {
-		b.mu.Unlock()
+	s := b.takeSticky(guildID, channelID)
+	if s == nil {
 		botutil.RespondEphemeral(e, "No sticky in this channel.")
 		return
 	}
-	s, ok := channels[channelID]
-	if !ok {
-		b.mu.Unlock()
-		botutil.RespondEphemeral(e, "No sticky in this channel.")
-		return
-	}
-	delete(channels, channelID)
-	b.mu.Unlock()
-
 	// Respond first: stopping waits for any repost in flight, which can
 	// outlast the interaction's 3-second deadline.
 	botutil.RespondEphemeral(e, "Sticky removed.")
-	b.stopStickyGoroutine(s)
-	// Read only after the stop: a repost in flight replaces the message.
-	if s.LastMessageID != 0 {
-		_ = b.Client.Rest.DeleteMessage(channelID, s.LastMessageID)
-	}
+	b.retireSticky(s)
 	b.saveStickiesForGuild(guildID)
 }
 
@@ -440,12 +423,21 @@ func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {
 	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
 }
 
+// getSticky returns channelID's sticky, or nil. The caller holds b.mu.
 func (b *Bot) getSticky(guildID, channelID snowflake.ID) *stickyMessage {
-	channels, ok := b.stickies[guildID]
-	if !ok {
-		return nil
+	return b.stickies[guildID][channelID]
+}
+
+// takeSticky removes channelID's sticky from b.stickies and returns it, or nil
+// if the channel has none.
+func (b *Bot) takeSticky(guildID, channelID snowflake.ID) *stickyMessage {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s := b.getSticky(guildID, channelID)
+	if s != nil {
+		delete(b.stickies[guildID], channelID)
 	}
-	return channels[channelID]
+	return s
 }
 
 // validateStickyParams checks cross-field constraints for sticky message settings.

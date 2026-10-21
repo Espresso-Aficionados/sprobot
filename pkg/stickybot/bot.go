@@ -97,15 +97,9 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 		return
 	}
 
-	guildID := *e.GuildID
 	b.mu.Lock()
-	channels, ok := b.stickies[guildID]
-	if !ok {
-		b.mu.Unlock()
-		return
-	}
-	s, ok := channels[e.ChannelID]
-	if !ok || !s.Active {
+	s := b.getSticky(*e.GuildID, e.ChannelID)
+	if s == nil || !s.Active {
 		b.mu.Unlock()
 		return
 	}

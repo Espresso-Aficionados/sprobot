@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/idleloop"
 	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/sadbox/sprobot/pkg/sprobot"
 )
 
 type stickyMessage struct {
@@ -166,6 +169,55 @@ func (b *Bot) stopStickyGoroutine(s *stickyMessage) {
 	h := s.handle
 	b.mu.Unlock()
 	h.Stop()
+}
+
+// retireSticky stops s's repost loop, then deletes its last posted message and
+// its saved files. s must already be out of b.stickies (see
+// stopStickyGoroutine).
+func (b *Bot) retireSticky(s *stickyMessage) {
+	b.stopStickyGoroutine(s)
+	// Read only after the stop: a repost in flight replaces the message.
+	b.mu.Lock()
+	lastMessageID := s.LastMessageID
+	b.mu.Unlock()
+	if lastMessageID != 0 {
+		_ = b.Client.Rest.DeleteMessage(s.ChannelID, lastMessageID)
+	}
+	b.deleteStickyFiles(s)
+}
+
+// deleteStickyFiles deletes s's saved files. Best effort: a failure only
+// leaves the files behind.
+func (b *Bot) deleteStickyFiles(s *stickyMessage) {
+	keys := s.fileKeys(b.S3.Origin() + "/" + b.S3.Bucket() + "/")
+	if len(keys) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := b.S3.DeleteKeys(ctx, keys...); err != nil {
+		b.Log.Error("Failed to delete sticky files", "guild_id", s.GuildID, "channel_id", s.ChannelID, "error", err)
+		return
+	}
+	b.Log.Info("Deleted sticky files", "guild_id", s.GuildID, "channel_id", s.ChannelID, "count", len(keys))
+}
+
+// fileKeys returns the bucket keys of s's saved files. Stickies made before
+// files were stored as keys hold the file's bucket URL instead: bucketURL
+// followed by the path-escaped key. Only keys of this guild's sticky files
+// are returned, so nothing else can be deleted through them.
+func (s *stickyMessage) fileKeys(bucketURL string) []string {
+	var keys []string
+	for _, stored := range s.FileURLs {
+		key, err := url.PathUnescape(strings.TrimPrefix(stored, bucketURL))
+		if err != nil {
+			continue
+		}
+		if kind, guildID, _, ok := sprobot.ParseFileKey(key); ok && kind == "sticky" && guildID == s.GuildID.String() {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 func (b *Bot) stopAllStickyGoroutines() {
