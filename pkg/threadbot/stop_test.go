@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +25,13 @@ type fakeRepostAPI struct {
 	*fakeThreadAPI
 	created chan struct{}
 	release chan struct{}
+	deleted []string // paths of deleted messages
+}
+
+func (f *fakeRepostAPI) deletedMessages() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.deleted...)
 }
 
 func (f *fakeRepostAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +44,9 @@ func (f *fakeRepostAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		_, _ = w.Write([]byte(`[]`))
 	case http.MethodDelete:
+		f.mu.Lock()
+		f.deleted = append(f.deleted, r.URL.Path)
+		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodPost:
 		f.created <- struct{}{}
@@ -49,8 +60,9 @@ func (f *fakeRepostAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // startRepostInFlight starts a reminder whose first repost is stuck in Create
-// Message until the returned release func is called.
-func startRepostInFlight(t *testing.T) (*Bot, *threadReminder, func()) {
+// Message until the returned release func is called. It also returns the fake
+// Discord API.
+func startRepostInFlight(t *testing.T) (*Bot, *threadReminder, func(), *fakeRepostAPI) {
 	t.Helper()
 	api := &fakeRepostAPI{
 		fakeThreadAPI: newFakeThreadAPI(),
@@ -86,7 +98,7 @@ func startRepostInFlight(t *testing.T) (*Bot, *threadReminder, func()) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("repost did not reach Create Message")
 	}
-	return b, r, release
+	return b, r, release, api
 }
 
 // The stop functions must wait for an in-flight repost without holding b.mu,
@@ -107,7 +119,7 @@ func TestStopWaitsForInFlightRepost(t *testing.T) {
 	}
 	for name, stop := range stops {
 		t.Run(name, func(t *testing.T) {
-			b, r, release := startRepostInFlight(t)
+			b, r, release, _ := startRepostInFlight(t)
 
 			done := make(chan struct{})
 			go func() {
@@ -137,7 +149,7 @@ func TestStopWaitsForInFlightRepost(t *testing.T) {
 // over the message the old one shows, including one its in-flight repost
 // posts while being stopped, or that message stays in the channel for good.
 func TestEnableTakesOverReplacedReminderMessage(t *testing.T) {
-	b, old, release := startRepostInFlight(t)
+	b, old, release, _ := startRepostInFlight(t)
 	e, responses := commandEvent(t, old.GuildID, enableData)
 
 	done := make(chan struct{})
@@ -179,6 +191,46 @@ func TestEnableTakesOverReplacedReminderMessage(t *testing.T) {
 	b.stopAllReminderGoroutines()
 }
 
+// If /threadbot disable removes the new reminder while enable is still
+// stopping the old one, nothing takes over the old reminder's message, so
+// enable deletes it instead of leaving it in the channel.
+func TestEnableDeletesReplacedMessageWhenDisabledMeanwhile(t *testing.T) {
+	b, old, release, api := startRepostInFlight(t)
+	enable, enabled := commandEvent(t, old.GuildID, enableData)
+	done := make(chan struct{})
+	go func() {
+		b.onCommand(enable)
+		close(done)
+	}()
+	select {
+	case <-enabled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("enable did not respond while the old reminder's repost was in flight")
+	}
+
+	disable, disabled := commandEvent(t, old.GuildID, `{"id":"3","name":"threadbot","type":1,"options":[{"name":"disable","type":1}]}`)
+	b.onCommand(disable)
+	if m := <-disabled; m.Content != "Thread reminders disabled." {
+		t.Fatalf("disable answered %q", m.Content)
+	}
+
+	release()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("enable did not return after the old reminder's repost finished")
+	}
+	if deleted := api.deletedMessages(); !slices.Contains(deleted, "/channels/500/messages/777") {
+		t.Errorf("deleted messages = %v, want 777, the message the old reminder's repost posted", deleted)
+	}
+	b.mu.Lock()
+	_, ok := b.reminders[old.GuildID][old.ChannelID]
+	b.mu.Unlock()
+	if ok {
+		t.Error("channel has a reminder after disable")
+	}
+}
+
 func channelDelete(guildID, channelID snowflake.ID) *events.GuildChannelDelete {
 	return &events.GuildChannelDelete{GenericGuildChannel: &events.GenericGuildChannel{GuildID: guildID, ChannelID: channelID}}
 }
@@ -186,7 +238,7 @@ func channelDelete(guildID, channelID snowflake.ID) *events.GuildChannelDelete {
 // A deleted channel's reminder is stopped, waiting out a repost in flight,
 // so no loop keeps running for it.
 func TestChannelDeleteStopsReminderLoop(t *testing.T) {
-	b, r, release := startRepostInFlight(t)
+	b, r, release, _ := startRepostInFlight(t)
 
 	done := make(chan struct{})
 	go func() {
