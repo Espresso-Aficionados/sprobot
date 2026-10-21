@@ -1,7 +1,10 @@
 package bot
 
 import (
+	"encoding/json"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 
@@ -202,6 +205,41 @@ func TestPruneDropsUsernamesWithoutCounts(t *testing.T) {
 	// 1 only posted on the pruned day, and 3 has no counts at all.
 	if len(gc.Usernames) != 1 || gc.Usernames["2"] != "bob" {
 		t.Errorf("usernames = %v, want only 2:bob", gc.Usernames)
+	}
+}
+
+// What saveTopPosters writes to S3 holds only the last 7 days and the
+// usernames those days still count.
+func TestSaveTopPostersPrunesWhatItStores(t *testing.T) {
+	b, fake := newProfileNamesBot(t)
+	b.topPosters = newGuildStateStore[guildPostCounts](b.S3, b.Log, "topposters", nil,
+		func(gc *guildPostCounts) *sync.Mutex { return &gc.mu })
+	today := time.Now().UTC().Format("2006-01-02")
+	b.topPosters.set(1, &guildPostCounts{
+		Counts: map[string]map[string]int{
+			"2026-01-01": {"1": 5},
+			today:        {"2": 3},
+		},
+		Usernames: map[string]string{"1": "alice", "2": "bob"},
+	})
+
+	b.saveTopPosters()
+
+	fake.Mu.Lock()
+	body, ok := fake.Objects["/test-bucket/topposters/1.json"]
+	fake.Mu.Unlock()
+	if !ok {
+		t.Fatal("topposters/1.json was not saved")
+	}
+	var saved guildPostCounts
+	if err := json.Unmarshal(body, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := saved.Counts["2026-01-01"]; ok || saved.Counts[today]["2"] != 3 {
+		t.Errorf("saved counts = %v, want only today's", saved.Counts)
+	}
+	if len(saved.Usernames) != 1 || saved.Usernames["2"] != "bob" {
+		t.Errorf("saved usernames = %v, want only 2:bob", saved.Usernames)
 	}
 }
 

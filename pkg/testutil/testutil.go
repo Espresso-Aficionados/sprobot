@@ -82,6 +82,9 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+		if t, ok := f.Modified[key]; ok {
+			w.Header().Set("Last-Modified", t.UTC().Format(http.TimeFormat))
+		}
 		w.WriteHeader(http.StatusOK)
 
 	case http.MethodPut:

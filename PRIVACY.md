@@ -19,7 +19,8 @@ plus the **sprobot-web** server, which renders profile pages and files saved by 
   than 7 days, and the usernames of users with no remaining counts, are dropped.
   Counts only; no message text is stored.
 - **Poster-role counts** — a per-user count of messages in the channels that earn the
-  poster role. A user's count is removed once the role is granted.
+  poster role. A user's count is removed when sprobot grants them the role, or at
+  their next message once they have it.
 - **Moderation event log** — message edits and deletions, member joins and leaves, and
   moderation actions (bans, kicks, timeouts, warnings) are posted to a staff-only
   channel **on Discord**. To show the content of an edited or deleted message, the bot
@@ -28,12 +29,12 @@ plus the **sprobot-web** server, which renders profile pages and files saved by 
   messages are deleted automatically after at most 30 days. The cache is used for the
   moderation log and, in limited form, for the development and troubleshooting
   described below.
-- **Server member cache** — Discord's record of each current member (user ID, username,
-  avatar, server nickname, roles, and join date), kept the same way as the message
-  cache, so the moderation log can show nickname changes and who left, and for staff
-  commands such as `/topposters`. A member's record is removed when they leave the
-  server. Alongside it the bot caches other server details Discord sends it, such as
-  channels, roles, and who is in a voice channel.
+- **Server member cache** — Discord's record of server members, such as user ID,
+  username, display name, avatar, server nickname, roles, and join date, so the
+  moderation log can show nickname changes and who left, and for staff commands such
+  as `/topposters`. It has no time limit: a member's record is removed when they leave
+  the server while the bot is running. Alongside it the bot caches other server
+  details Discord sends it, such as channels, roles, and who is in a voice channel.
 - **Starboard** — when a message gets enough reactions, sprobot reposts its text, first
   image, and author to the starboard channel on Discord. Only messages from channels at
   least as visible as the starboard channel are reposted, and the repost is removed if
@@ -76,9 +77,8 @@ Discord after a restart and never written to disk.
 
 For messages sent on or after 2026-10-15, the bot maintainers may evaluate the
 moderation cache to find bugs or to test new or changed bot features against
-previously sent messages (for example, checking that the moderation log shows real
-edited and deleted messages correctly, including long messages and messages with
-links). When we do this:
+previously sent messages (for example, checking that a new feature that handles
+links in messages works correctly on real links). When we do this:
 
 - We extract only what the evaluation needs (for example, the URLs in a message), not
   message text, usernames, or user IDs.

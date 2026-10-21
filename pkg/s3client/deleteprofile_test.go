@@ -172,3 +172,42 @@ func TestDeleteProfileImageKeepsProfile(t *testing.T) {
 		t.Errorf("objects left = %v, want the profile and everyone else's data", left)
 	}
 }
+
+// Images under the user's key with an extension uploads no longer use, such as
+// the Python bot's, are found by listing, even when the profile can't be read.
+func TestDeleteProfileDeletesEveryExtension(t *testing.T) {
+	fake, c := newDeleteTest(t, "")
+	fake.Mu.Lock()
+	fake.Objects[profileJSON] = []byte("not json")
+	fake.Objects["/test-bucket/images/1/Coffee Setup/2.heic"] = []byte("x")
+	fake.Objects["/test-bucket/images/1/Coffee Setup/23.png"] = []byte("x") // user 23
+	fake.Mu.Unlock()
+
+	if err := c.DeleteProfile(context.Background(), sprobot.ProfileTemplate, "1", "2"); err != nil {
+		t.Fatalf("DeleteProfile: %v", err)
+	}
+	left := remaining(fake)
+	for _, gone := range []string{profileJSON, imagePNG, "/test-bucket/images/1/Coffee Setup/2.jpg", "/test-bucket/images/1/Coffee Setup/2.heic"} {
+		if left[gone] {
+			t.Errorf("%s should be deleted", gone)
+		}
+	}
+	if !left["/test-bucket/images/1/Coffee Setup/23.png"] {
+		t.Error("another user's image whose ID starts with the user's was deleted")
+	}
+}
+
+// If the bucket can't be listed, the extensions uploads use are still deleted.
+func TestDeleteProfileListFailureFallsBack(t *testing.T) {
+	fake, c := newDeleteTest(t, "images/1/Coffee Setup/2.png")
+	fake.Mu.Lock()
+	fake.Fail["/test-bucket"] = http.StatusForbidden
+	fake.Mu.Unlock()
+
+	if err := c.DeleteProfile(context.Background(), sprobot.ProfileTemplate, "1", "2"); err != nil {
+		t.Fatalf("DeleteProfile: %v", err)
+	}
+	if left := remaining(fake); left[profileJSON] || left[imagePNG] || left["/test-bucket/images/1/Coffee Setup/2.jpg"] {
+		t.Error("the profile and its uploads should be deleted")
+	}
+}

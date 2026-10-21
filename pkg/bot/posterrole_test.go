@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/testutil"
 )
 
@@ -753,5 +755,48 @@ func TestMarketProgressEmbed(t *testing.T) {
 	has := marketProgress{Username: "seller", Threshold: 100, Searched: true, Count: 300, MemberKnown: true, HasRole: true}.embed()
 	if v, ok := fieldValue(has, "Progress"); ok {
 		t.Errorf("Progress shown for a user with the role: %q", v)
+	}
+}
+
+// A member who got the poster role some other way, such as from staff, has
+// their count dropped at their next message instead of keeping it forever.
+func TestCheckPosterRoleForgetsMembersWithTheRole(t *testing.T) {
+	const roleID, guildID = snowflake.ID(10), snowflake.ID(1)
+	b := &Bot{
+		BaseBot: &botutil.BaseBot{Log: testutil.DiscardLogger()},
+		posterRole: newGuildStateStore[posterRoleState](nil, testutil.DiscardLogger(), "posterroles", nil,
+			func(st *posterRoleState) *sync.Mutex { return &st.mu }),
+	}
+	st := &posterRoleState{
+		Settings: posterRoleSettings{RoleID: roleID, Threshold: 50},
+		Counts:   map[string]int{"2": 12, "3": 4},
+		Fetched:  map[string]bool{"2": true, "3": true},
+	}
+	b.posterRole.set(guildID, st)
+
+	b.checkPosterRole(guildID, 100, discord.Message{
+		Author: discord.User{ID: 2},
+		Member: &discord.Member{RoleIDs: []snowflake.ID{9, roleID}},
+	})
+
+	if _, ok := st.Counts["2"]; ok {
+		t.Error("count of a member with the role was kept")
+	}
+	if _, ok := st.Fetched["2"]; ok {
+		t.Error("fetched flag of a member with the role was kept")
+	}
+	if st.Counts["3"] != 4 || !st.Fetched["3"] {
+		t.Error("another member's count was touched")
+	}
+}
+
+func TestForgetIfRoleHeldWithoutRole(t *testing.T) {
+	st := &posterRoleState{
+		Settings: posterRoleSettings{RoleID: 10},
+		Counts:   map[string]int{"2": 12},
+		Fetched:  map[string]bool{"2": true},
+	}
+	if st.forgetIfRoleHeld(2, []snowflake.ID{9}) || st.Counts["2"] != 12 || !st.Fetched["2"] {
+		t.Error("a member without the role lost their count")
 	}
 }

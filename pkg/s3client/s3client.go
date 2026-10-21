@@ -452,20 +452,30 @@ func (c *Client) PresignFile(ctx context.Context, key string, ttl time.Duration,
 
 // StatFile returns the size of an object in our bucket, or ErrNotFound.
 func (c *Client) StatFile(ctx context.Context, key string) (int64, error) {
+	o, err := c.StatObject(ctx, key)
+	return o.Size, err
+}
+
+// StatObject returns an object's size and last-modified time, or ErrNotFound.
+func (c *Client) StatObject(ctx context.Context, key string) (Object, error) {
 	out, err := c.s3.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &c.bucket,
 		Key:    &key,
 	})
 	if err != nil {
 		if isNotFound(err) {
-			return 0, ErrNotFound
+			return Object{}, ErrNotFound
 		}
-		return 0, fmt.Errorf("stat %q: %w", key, err)
+		return Object{}, fmt.Errorf("stat %q: %w", key, err)
 	}
-	if out.ContentLength == nil {
-		return 0, nil
+	o := Object{Key: key}
+	if out.ContentLength != nil {
+		o.Size = *out.ContentLength
 	}
-	return *out.ContentLength, nil
+	if out.LastModified != nil {
+		o.LastModified = *out.LastModified
+	}
+	return o, nil
 }
 
 // OpenImage streams a stored image from our bucket. The caller must close the
@@ -676,11 +686,16 @@ func (c *Client) ProfileImageKey(tmpl sprobot.Template, guildID, userID string, 
 }
 
 // DeleteProfileImage deletes the stored copies of a user's profile image: the
-// object their profile points at, and the object for every extension an
-// upload is saved under, which also covers copies earlier uploads left behind.
-// profile may be nil.
+// object their profile points at, and every object under their image key with
+// any extension, which also covers copies earlier uploads left behind,
+// including the Python bot's. If the bucket can't be listed, it deletes the
+// key for every extension an upload is saved under now. profile may be nil.
 func (c *Client) DeleteProfileImage(ctx context.Context, tmpl sprobot.Template, guildID, userID string, profile map[string]string) error {
-	keys := uploadedImageKeys(guildID, tmpl.Name, userID)
+	keys, err := c.storedImageKeys(ctx, guildID, tmpl.Name, userID)
+	if err != nil {
+		c.log.Error("Failed to list profile images; deleting the current upload extensions only", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "error", err)
+		keys = uploadedImageKeys(guildID, tmpl.Name, userID)
+	}
 	if key, ok := c.ProfileImageKey(tmpl, guildID, userID, profile); ok && !slices.Contains(keys, key) {
 		keys = append(keys, key)
 	}
@@ -922,6 +937,23 @@ func uploadedImageKeys(guildID, templateName, userID string) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// storedImageKeys lists the user's profile images in the bucket, whatever
+// their extension.
+func (c *Client) storedImageKeys(ctx context.Context, guildID, templateName, userID string) ([]string, error) {
+	objects, err := c.ListObjects(ctx, sprobot.ProfileImageS3Path(guildID, templateName, userID, ""))
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	for _, o := range objects {
+		// The prefix also matches longer user IDs.
+		if g, t, u, ok := sprobot.ParseProfileImageKey(o.Key); ok && g == guildID && t == templateName && u == userID {
+			keys = append(keys, o.Key)
+		}
+	}
+	return keys, nil
 }
 
 func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guildID, userID string, profile map[string]string) (userErr string, s3URL string) {

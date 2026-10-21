@@ -149,6 +149,14 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg 
 		return
 	}
 
+	if msg.Member == nil {
+		return
+	}
+	userID := msg.Author.ID
+	if st.forgetIfRoleHeld(userID, msg.Member.RoleIDs) {
+		return
+	}
+
 	if cfg.isSkipped(b.resolveChannelParents(channelID, &st.parentCache)...) {
 		return
 	}
@@ -157,16 +165,6 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg 
 		return
 	}
 
-	if msg.Member == nil {
-		return
-	}
-	for _, roleID := range msg.Member.RoleIDs {
-		if roleID == cfg.RoleID {
-			return
-		}
-	}
-
-	userID := msg.Author.ID
 	now := time.Now()
 
 	st.mu.Lock()
@@ -354,6 +352,18 @@ func (b *Bot) fetchPosterRoleHistory(guildID snowflake.ID, st *posterRoleState, 
 	} else {
 		b.Log.Info("Dropped post history search: tracking was cleared or the user was banned", "user_id", userID, "guild_id", guildID)
 	}
+}
+
+// forgetIfRoleHeld reports whether a member has the poster role and, if so,
+// drops their count, so a role granted by staff doesn't leave one behind.
+func (st *posterRoleState) forgetIfRoleHeld(userID snowflake.ID, roleIDs []snowflake.ID) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !slices.Contains(roleIDs, st.Settings.RoleID) {
+		return false
+	}
+	st.clearTracking(userID)
+	return true
 }
 
 func (b *Bot) clearPosterRoleTracking(guildID snowflake.ID, userID snowflake.ID) {
