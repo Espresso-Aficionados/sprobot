@@ -47,6 +47,7 @@ func New(token string) (*Bot, error) {
 			gateway.WithCloseHandler(b.OnGatewayClose),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
+		bot.WithEventListenerFunc(b.OnGuildJoin),
 		bot.WithEventListenerFunc(b.onCommand),
 		bot.WithEventListenerFunc(b.onModal),
 		bot.WithEventListenerFunc(b.onMessage),

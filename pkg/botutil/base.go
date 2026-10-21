@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,6 +33,9 @@ type BaseBot struct {
 	healthcheckEndpoint  string
 	httpClient           *http.Client
 	gatewayFailed        chan error // receives the error when the gateway closes for good
+
+	ignoredGuildsMu sync.Mutex
+	ignoredGuilds   map[snowflake.ID]bool // guilds outside AllowedGuildIDs already warned about
 }
 
 // NewBaseBot creates a BaseBot by reading env vars and initializing S3.
@@ -106,7 +110,8 @@ func gatewayCloseFatal(err error, reconnect bool) bool {
 	return !errors.Is(err, discord.ErrGatewayAlreadyConnected) && !errors.Is(err, net.ErrClosed)
 }
 
-// GuildIDs returns the IDs of all guilds in the gateway cache.
+// GuildIDs returns the IDs of the guilds in the gateway cache that are in
+// AllowedGuildIDs: the guilds to register commands and load state for.
 // In tests without a gateway, set TestGuildIDsOverride.
 func (b *BaseBot) GuildIDs() []snowflake.ID {
 	if b.TestGuildIDsOverride != nil {
@@ -117,7 +122,9 @@ func (b *BaseBot) GuildIDs() []snowflake.ID {
 	}
 	var ids []snowflake.ID
 	for g := range b.Client.Caches.Guilds() {
-		ids = append(ids, g.ID)
+		if GuildAllowed(g.ID) {
+			ids = append(ids, g.ID)
+		}
 	}
 	return ids
 }
@@ -140,7 +147,10 @@ func (b *BaseBot) WaitForGuilds(timeout time.Duration) {
 }
 
 // OnReady is the shared ready handler for all bots.
-func (b *BaseBot) OnReady(_ *events.Ready) {
+func (b *BaseBot) OnReady(e *events.Ready) {
 	b.Log.Info("Logged in")
+	for _, g := range e.Guilds {
+		b.warnIfNotAllowed(g.ID)
+	}
 	b.Ready.Store(true)
 }
