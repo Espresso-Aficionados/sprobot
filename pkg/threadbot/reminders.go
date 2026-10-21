@@ -156,21 +156,6 @@ type threadReminder struct {
 	Buffer            int          `json:"buffer"`
 }
 
-func (r *threadReminder) applyDefaults() {
-	if r.MinIdleMins == 0 {
-		r.MinIdleMins = 30
-	}
-	if r.MaxIdleMins == 0 {
-		r.MaxIdleMins = 720
-	}
-	if r.MsgThreshold == 0 {
-		r.MsgThreshold = 30
-	}
-	if r.Buffer == 0 {
-		r.Buffer = 5
-	}
-}
-
 func (b *Bot) loadReminders() {
 	ctx := context.Background()
 	for _, guildID := range b.GuildIDs() {
@@ -192,7 +177,6 @@ func (b *Bot) loadReminders() {
 
 		channels := make(map[snowflake.ID]*threadReminder, len(loaded))
 		for _, r := range loaded {
-			r.applyDefaults()
 			channels[r.ChannelID] = r
 		}
 		// The gateway is already dispatching events that read b.reminders.
