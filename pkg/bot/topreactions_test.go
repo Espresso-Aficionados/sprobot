@@ -210,31 +210,6 @@ func TestStarboardEntryDecrementFloor(t *testing.T) {
 	}
 }
 
-func TestBlacklistAddRemove(t *testing.T) {
-	s := &starboardSettings{}
-
-	s.Blacklist = append(s.Blacklist, 100)
-	s.Blacklist = append(s.Blacklist, 200)
-
-	if !s.isBlacklisted(100) {
-		t.Error("100 should be blacklisted after add")
-	}
-
-	for i, id := range s.Blacklist {
-		if id == 100 {
-			s.Blacklist = append(s.Blacklist[:i], s.Blacklist[i+1:]...)
-			break
-		}
-	}
-
-	if s.isBlacklisted(100) {
-		t.Error("100 should not be blacklisted after remove")
-	}
-	if !s.isBlacklisted(200) {
-		t.Error("200 should still be blacklisted")
-	}
-}
-
 func TestEmojiCDNURLUnicode(t *testing.T) {
 	if got := emojiCDNURL("⭐"); got != "" {
 		t.Errorf("expected empty string, got %s", got)

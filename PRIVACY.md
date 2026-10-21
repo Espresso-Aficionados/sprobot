@@ -75,7 +75,9 @@ links correctly). When we do this:
 
 Persistent data lives in a private S3 bucket, encrypted at rest and accessible
 only to the bot infrastructure. Time-bounded records (such as temporary-role
-assignments) are removed automatically when they expire. Profile pages served by sprobot-web are public URLs by design — do not
+assignments) are removed automatically when they expire. A temporary-role record
+is kept past its expiry only until the bot has removed the role, or the member or
+role no longer exists. Profile pages served by sprobot-web are public URLs by design — do not
 put anything in a profile you do not want visible outside Discord.
 
 If sprobot finds stored data it cannot read back (for example top-poster counts or
