@@ -56,15 +56,22 @@ func newDiscordStub(t *testing.T) (*discordStub, *bot.Client) {
 // newStubBot returns a Bot wired to a stub API and a fake S3.
 func newStubBot(t *testing.T) (*Bot, *discordStub) {
 	t.Helper()
+	b, stub, _ := newStubBotWithS3(t)
+	return b, stub
+}
+
+func newStubBotWithS3(t *testing.T) (*Bot, *discordStub, *testutil.FakeS3) {
+	t.Helper()
 	stub, client := newDiscordStub(t)
-	s3srv := httptest.NewServer(testutil.NewFakeS3())
+	fake := testutil.NewFakeS3()
+	s3srv := httptest.NewServer(fake)
 	t.Cleanup(s3srv.Close)
 	b := &Bot{BaseBot: &botutil.BaseBot{
 		Client: client,
 		S3:     testutil.NewTestS3Client(t, s3srv),
 		Log:    testutil.DiscardLogger(),
 	}}
-	return b, stub
+	return b, stub, fake
 }
 
 // on answers route ("METHOD /path") with status and a JSON body.
