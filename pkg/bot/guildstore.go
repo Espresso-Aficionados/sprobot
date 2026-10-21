@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"path"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +21,21 @@ import (
 
 // errNotLoaded is returned by persist for a guild whose state failed to load.
 var errNotLoaded = errors.New("state not loaded from S3 yet")
+
+// storeS3Timeout bounds each S3 call a store makes. The SDK's HTTP client has
+// no timeout, and persist holds the guild's save lock across its PUT while
+// shutdown waits for the save loops, so an unanswered request would otherwise
+// block both for good.
+var storeS3Timeout = 30 * time.Second
+
+// Stored state that fails to decode is copied to
+// corrupt/<s3Key>/<guild>-<unix time>.json for a human to recover, and
+// pruneCorruptBackups deletes the copy after corruptRetention, as PRIVACY.md
+// states.
+const (
+	corruptPrefix    = "corrupt"
+	corruptRetention = 30 * 24 * time.Hour
+)
 
 // guildStateStore provides generic per-guild state management backed by S3.
 // T is the state type; it must have a sync.Mutex field accessible via getMu.
@@ -33,6 +51,13 @@ type guildStateStore[T any] struct {
 	onMissing func(snowflake.ID, *T) // called on fresh state: S3 key not found, or its data undecodable
 	s3        *s3client.Client
 	log       *slog.Logger
+
+	// guilds, if set, returns the guilds this instance is in; save and each
+	// skip every other guild. Every allowed guild is loaded before the gateway
+	// says which ones the bot is in, and another deployment sharing the bucket
+	// (prod or dev) may be the one changing a guild this one isn't in, so this
+	// one's startup copy must never be written back or acted on.
+	guilds func() []snowflake.ID
 
 	mu        sync.RWMutex
 	states    map[snowflake.ID]*T
@@ -94,6 +119,10 @@ func (s *guildStateStore[T]) getOrCreate(guildID snowflake.ID) *T {
 	return st
 }
 
+func (s *guildStateStore[T]) setGuilds(guilds func() []snowflake.ID) {
+	s.guilds = guilds
+}
+
 func (s *guildStateStore[T]) persistLock(guildID snowflake.ID) *sync.Mutex {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -126,14 +155,14 @@ func (s *guildStateStore[T]) persist(guildID snowflake.ID) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	return s.s3.SaveGuildJSON(context.Background(), s.s3Key, guildID.String(), data)
+	ctx, cancel := context.WithTimeout(context.Background(), storeS3Timeout)
+	defer cancel()
+	return s.s3.SaveGuildJSON(ctx, s.s3Key, guildID.String(), data)
 }
 
+// save persists every guild with state that this instance is in.
 func (s *guildStateStore[T]) save() {
-	s.mu.RLock()
-	guildIDs := slices.Collect(maps.Keys(s.states))
-	s.mu.RUnlock()
-	for _, guildID := range guildIDs {
+	for guildID := range s.served() {
 		if err := s.persist(guildID); err != nil {
 			s.log.Error("Failed to save "+s.s3Key, "guild_id", guildID, "error", err)
 		}
@@ -173,11 +202,12 @@ func (s *guildStateStore[T]) retryFailedLoads() {
 }
 
 // fetch reads a guild's state from S3. A missing key gives fresh state.
-// Undecodable data is copied to "<s3Key>-corrupt/" and then also replaced by
+// Undecodable data is copied under corruptPrefix and then also replaced by
 // fresh state, so the feature keeps working; recovering it is left to a human.
 func (s *guildStateStore[T]) fetch(guildID snowflake.ID) (*T, error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), storeS3Timeout)
 	data, err := s.s3.FetchGuildJSON(ctx, s.s3Key, guildID.String())
+	cancel()
 	if errors.Is(err, s3client.ErrNotFound) {
 		s.log.Info("No existing "+s.s3Key+" data, starting fresh", "guild_id", guildID)
 		return s.fresh(guildID), nil
@@ -188,8 +218,10 @@ func (s *guildStateStore[T]) fetch(guildID snowflake.ID) (*T, error) {
 
 	st := s.newState()
 	if decodeErr := json.Unmarshal(data, st); decodeErr != nil {
-		backupPrefix := s.s3Key + "-corrupt"
+		backupPrefix := corruptPrefix + "/" + s.s3Key
 		backupID := fmt.Sprintf("%d-%d", guildID, time.Now().Unix())
+		ctx, cancel = context.WithTimeout(context.Background(), storeS3Timeout)
+		defer cancel()
 		if err := s.s3.SaveGuildJSON(ctx, backupPrefix, backupID, data); err != nil {
 			return nil, fmt.Errorf("decoding: %w; backing up: %w", decodeErr, err)
 		}
@@ -211,13 +243,50 @@ func (s *guildStateStore[T]) fresh(guildID snowflake.ID) *T {
 	return st
 }
 
-// each calls fn for every guild with state. It holds no store lock while
-// calling fn, so fn may use the store.
+// each calls fn for every guild with state that this instance is in. It
+// holds no store lock while calling fn, so fn may use the store.
 func (s *guildStateStore[T]) each(fn func(snowflake.ID, *T)) {
+	for guildID, st := range s.served() {
+		fn(guildID, st)
+	}
+}
+
+// served returns the state of every guild that this instance is in.
+func (s *guildStateStore[T]) served() map[snowflake.ID]*T {
 	s.mu.RLock()
 	states := maps.Clone(s.states)
 	s.mu.RUnlock()
-	for guildID, st := range states {
-		fn(guildID, st)
+	if s.guilds != nil {
+		guildIDs := s.guilds()
+		maps.DeleteFunc(states, func(guildID snowflake.ID, _ *T) bool { return !slices.Contains(guildIDs, guildID) })
 	}
+	return states
+}
+
+// pruneCorruptBackups deletes the copies fetch made of undecodable state once
+// they are older than corruptRetention. Keys it can't date are left alone.
+func pruneCorruptBackups(s3 *s3client.Client, log *slog.Logger, now time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeS3Timeout)
+	defer cancel()
+	keys, err := s3.ListKeys(ctx, corruptPrefix+"/")
+	if err != nil {
+		log.Error("Failed to list corrupt state backups", "error", err)
+		return
+	}
+	var expired []string
+	for _, key := range keys {
+		_, created, _ := strings.Cut(strings.TrimSuffix(path.Base(key), ".json"), "-")
+		secs, err := strconv.ParseInt(created, 10, 64)
+		if err == nil && now.Sub(time.Unix(secs, 0)) > corruptRetention {
+			expired = append(expired, key)
+		}
+	}
+	if len(expired) == 0 {
+		return
+	}
+	if err := s3.DeleteKeys(ctx, expired...); err != nil {
+		log.Error("Failed to delete expired corrupt state backups", "error", err)
+		return
+	}
+	log.Info("Deleted expired corrupt state backups", "keys", expired)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -304,6 +305,26 @@ func (b *Bot) initStateStores() {
 			st.Counter = 1
 		}
 	}
+
+	for _, s := range b.stateStores() {
+		s.setGuilds(b.servedGuilds)
+	}
+}
+
+// servedGuilds returns the allowed guilds the bot is in: those in the gateway
+// cache, plus those the gateway listed that are still loading or unavailable
+// through an outage. The stores' periodic and shutdown saves cover only these.
+func (b *Bot) servedGuilds() []snowflake.ID {
+	guildIDs := b.GuildIDs()
+	if b.Client == nil || b.TestGuildIDsOverride != nil {
+		return guildIDs
+	}
+	for _, id := range slices.Concat(b.Client.Caches.UnreadyGuildIDs(), b.Client.Caches.UnavailableGuildIDs()) {
+		if botutil.GuildAllowed(id) && !slices.Contains(guildIDs, id) {
+			guildIDs = append(guildIDs, id)
+		}
+	}
+	return guildIDs
 }
 
 // guildStateLoader is the part of a guildStateStore that doesn't depend on
@@ -311,6 +332,7 @@ func (b *Bot) initStateStores() {
 type guildStateLoader interface {
 	load(guildIDs []snowflake.ID)
 	retryFailedLoads()
+	setGuilds(guilds func() []snowflake.ID)
 }
 
 // stateStores lists every per-guild state store.
@@ -333,10 +355,15 @@ func (b *Bot) loadState() {
 	wg.Wait()
 }
 
+// retryFailedLoads retries every failed load, the stores concurrently as in
+// loadState, so a hung S3 holds up shutdown by about a storeS3Timeout per
+// guild rather than per guild and store.
 func (b *Bot) retryFailedLoads() {
+	var wg sync.WaitGroup
 	for _, s := range b.stateStores() {
-		s.retryFailedLoads()
+		wg.Go(s.retryFailedLoads)
 	}
+	wg.Wait()
 }
 
 // saveState saves every per-guild state store.
@@ -398,6 +425,7 @@ func (b *Bot) Run() error {
 	b.startLoop(5*time.Minute, b.welcome.save)
 	b.startLoop(5*time.Minute, b.saveMessageCache)
 	b.startLoop(1*time.Hour, b.pruneMessageCache)
+	b.startLoop(1*time.Hour, func() { pruneCorruptBackups(b.S3, b.Log, time.Now()) })
 	b.startLoop(5*time.Minute, b.saveMemberCache)
 	b.startLoop(5*time.Minute, b.saveGuildCache)
 	b.startLoop(5*time.Minute, b.saveChannelCache)

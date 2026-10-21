@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,7 +47,28 @@ func (h *hookedS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Forbidden</Message></Error>`)
 		return
 	}
+	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
+		h.list(w, r)
+		return
+	}
 	h.fake.ServeHTTP(w, r)
+}
+
+// list answers a ListObjectsV2 request, which FakeS3 doesn't, in one page.
+func (h *hookedS3) list(w http.ResponseWriter, r *http.Request) {
+	bucketPath := "/" + strings.Trim(r.URL.Path, "/") + "/"
+	prefix := r.URL.Query().Get("prefix")
+	var contents strings.Builder
+	h.fake.Mu.Lock()
+	for path := range h.fake.Objects {
+		if key, ok := strings.CutPrefix(path, bucketPath); ok && strings.HasPrefix(key, prefix) {
+			fmt.Fprintf(&contents, "<Contents><Key>%s</Key></Contents>", key)
+		}
+	}
+	h.fake.Mu.Unlock()
+	w.Header().Set("Content-Type", "application/xml")
+	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Prefix>%s</Prefix><IsTruncated>false</IsTruncated>%s</ListBucketResult>`,
+		prefix, contents.String())
 }
 
 // newHookedS3 starts a fake S3 server behind a hookedS3.
@@ -235,7 +257,7 @@ func corruptBackups(h *hookedS3) map[string]string {
 	defer h.fake.Mu.Unlock()
 	backups := make(map[string]string)
 	for key, body := range h.fake.Objects {
-		if strings.HasPrefix(key, "/test-bucket/test-corrupt/123-") {
+		if strings.HasPrefix(key, "/test-bucket/corrupt/test/123-") {
 			backups[key] = string(body)
 		}
 	}
@@ -268,7 +290,7 @@ func TestGuildStateStoreDecodeErrorBacksUpThenUsesDefaults(t *testing.T) {
 func TestGuildStateStoreDecodeErrorBackupFailureIsALoadFailure(t *testing.T) {
 	store, h := newTestStore(t)
 	h.put(testObject(testGuild), `{"value":`)
-	h.setHook(func(r *http.Request) bool { return !strings.HasPrefix(r.URL.Path, "/test-bucket/test-corrupt/") })
+	h.setHook(func(r *http.Request) bool { return !strings.HasPrefix(r.URL.Path, "/test-bucket/corrupt/") })
 
 	store.load([]snowflake.ID{testGuild})
 
@@ -286,6 +308,89 @@ func TestGuildStateStoreDecodeErrorBackupFailureIsALoadFailure(t *testing.T) {
 	}
 	if len(corruptBackups(h)) != 1 {
 		t.Error("retry wrote no backup")
+	}
+}
+
+// Backups hold user data, so they are deleted once corruptRetention is up.
+func TestGuildStateStoreCorruptBackupsExpire(t *testing.T) {
+	store, h := newTestStore(t)
+	h.put(testObject(testGuild), `{"value":`)
+	const undated = "/test-bucket/corrupt/test/notes.json"
+	h.put(undated, "{}")
+	store.load([]snowflake.ID{testGuild})
+	if len(corruptBackups(h)) != 1 {
+		t.Fatal("no backup written")
+	}
+
+	pruneCorruptBackups(store.s3, store.log, time.Now())
+	if len(corruptBackups(h)) != 1 {
+		t.Fatal("backup deleted before its retention ended")
+	}
+
+	pruneCorruptBackups(store.s3, store.log, time.Now().Add(corruptRetention+time.Minute))
+	if backups := corruptBackups(h); len(backups) != 0 {
+		t.Errorf("backups kept past their retention: %v", backups)
+	}
+	for _, path := range []string{undated, testObject(testGuild)} {
+		if _, ok := h.object(path); !ok {
+			t.Errorf("%s deleted; only dated backups expire", path)
+		}
+	}
+}
+
+// save and each skip guilds the instance isn't in: another deployment
+// sharing the bucket may be the one changing them.
+func TestGuildStateStoreSkipsGuildsNotServed(t *testing.T) {
+	store, h := newTestStore(t)
+	const served, notServed snowflake.ID = 100, 200
+	store.setGuilds(func() []snowflake.ID { return []snowflake.ID{served} })
+	store.set(served, &testState{Value: "a"})
+	store.set(notServed, &testState{Value: "b"})
+
+	var seen []snowflake.ID
+	store.each(func(guildID snowflake.ID, _ *testState) { seen = append(seen, guildID) })
+	if !slices.Equal(seen, []snowflake.ID{served}) {
+		t.Errorf("each visited %v, want only %d", seen, served)
+	}
+
+	store.save()
+	if _, ok := h.object(testObject(served)); !ok {
+		t.Error("served guild not saved")
+	}
+	if got, ok := h.object(testObject(notServed)); ok {
+		t.Errorf("guild the instance isn't in was saved: %s", got)
+	}
+}
+
+// An S3 call that never returns must not hold a guild's save lock, a save
+// loop, shutdown or startup forever.
+func TestGuildStateStoreS3CallsTimeOut(t *testing.T) {
+	store, h := newTestStore(t)
+	old := storeS3Timeout
+	storeS3Timeout = 50 * time.Millisecond
+	t.Cleanup(func() { storeS3Timeout = old })
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) }) // before the server closes, which waits for handlers
+	h.setHook(func(*http.Request) bool { <-release; return true })
+
+	store.set(testGuild, &testState{Value: "x"})
+	const other snowflake.ID = 456
+	done := make(chan error, 1)
+	go func() {
+		_ = store.persist(testGuild)
+		store.load([]snowflake.ID{other})
+		done <- store.persist(testGuild) // waits for the first persist's lock
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("persist succeeded without an answer from S3")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("store still blocked on S3 calls that never return")
+	}
+	if st := store.get(other); st != nil {
+		t.Errorf("timed-out load installed state %q", value(st))
 	}
 }
 

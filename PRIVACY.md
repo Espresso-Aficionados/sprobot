@@ -78,6 +78,12 @@ only to the bot infrastructure. Time-bounded records (such as temporary-role
 assignments) are removed automatically when they expire. Profile pages served by sprobot-web are public URLs by design — do not
 put anything in a profile you do not want visible outside Discord.
 
+If sprobot finds stored data it cannot read back (for example top-poster counts or
+temporary-role assignments saved in a format it no longer understands), it keeps a
+copy in the same private bucket for up to 30 days so the maintainers can recover it,
+then deletes it automatically. Records in that copy are kept for those 30 days even if
+they would otherwise have expired sooner.
+
 ## Data removal
 
 Delete your profile at any time with `/delete<template>`. For removal of any other
