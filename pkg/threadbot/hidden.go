@@ -20,6 +20,8 @@ import (
 // and /threads, including the "...and N more" count. They stay hidden until a
 // mod unhides them or the thread is deleted.
 
+var errHiddenNotLoaded = errors.New("hidden thread list not loaded")
+
 type hiddenThreadsFile struct {
 	ThreadIDs []snowflake.ID `json:"thread_ids"`
 }
@@ -58,61 +60,93 @@ func (b *Bot) hiddenSet(guildID snowflake.ID) map[snowflake.ID]struct{} {
 }
 
 // setHidden hides or unhides a thread and persists the change. It reports
-// whether anything changed.
+// whether anything changed. If the save fails the change is rolled back, so a
+// retry saves again instead of finding nothing to do. hiddenSaveMu orders the
+// saves, so an older snapshot can't land in S3 after a newer one.
 func (b *Bot) setHidden(guildID, threadID snowflake.ID, hidden bool) (bool, error) {
+	b.hiddenSaveMu.Lock()
+	defer b.hiddenSaveMu.Unlock()
+
 	b.mu.Lock()
+	// Saving before the stored list is loaded would overwrite it.
+	if !b.hiddenLoaded.Load() || b.hiddenLoadFailed[guildID] {
+		b.mu.Unlock()
+		return false, errHiddenNotLoaded
+	}
 	set := b.hidden[guildID]
 	_, was := set[threadID]
 	if was == hidden {
 		b.mu.Unlock()
 		return false, nil
 	}
-	if hidden {
-		if set == nil {
-			set = make(map[snowflake.ID]struct{})
-			b.hidden[guildID] = set
-		}
-		set[threadID] = struct{}{}
-	} else {
-		delete(set, threadID)
+	if set == nil {
+		set = make(map[snowflake.ID]struct{})
+		b.hidden[guildID] = set
 	}
+	apply := func(hide bool) {
+		if hide {
+			set[threadID] = struct{}{}
+		} else {
+			delete(set, threadID)
+		}
+	}
+	apply(hidden)
 	data, err := encodeHiddenThreads(set)
 	b.mu.Unlock()
-	if err != nil {
-		return true, err
+
+	if err == nil {
+		err = b.S3.SaveHiddenThreads(context.Background(), fmt.Sprintf("%d", guildID), data)
 	}
-	return true, b.S3.SaveHiddenThreads(context.Background(), fmt.Sprintf("%d", guildID), data)
+	if err != nil {
+		b.mu.Lock()
+		apply(was)
+		b.mu.Unlock()
+		return false, err
+	}
+	return true, nil
 }
 
+// loadHiddenThreads loads every guild's hidden list. A guild whose list fails
+// to load (anything but not-found) refuses changes until restart, rather than
+// saving a partial list over the stored one.
 func (b *Bot) loadHiddenThreads() {
+	defer b.hiddenLoaded.Store(true)
 	ctx := context.Background()
 	for _, guildID := range b.GuildIDs() {
 		data, err := b.S3.FetchHiddenThreads(ctx, fmt.Sprintf("%d", guildID))
 		if errors.Is(err, s3client.ErrNotFound) {
 			continue
 		}
-		if err != nil {
-			b.Log.Error("Failed to load hidden threads", "guild_id", guildID, "error", err)
-			continue
-		}
-		set, err := decodeHiddenThreads(data)
-		if err != nil {
-			b.Log.Error("Failed to decode hidden threads", "guild_id", guildID, "error", err)
-			continue
+		var set map[snowflake.ID]struct{}
+		if err == nil {
+			set, err = decodeHiddenThreads(data)
 		}
 		b.mu.Lock()
-		b.hidden[guildID] = set
+		if err != nil {
+			if b.hiddenLoadFailed == nil {
+				b.hiddenLoadFailed = make(map[snowflake.ID]bool)
+			}
+			b.hiddenLoadFailed[guildID] = true
+		} else {
+			b.hidden[guildID] = set
+		}
 		b.mu.Unlock()
+		if err != nil {
+			b.Log.Error("Failed to load hidden threads; hiding disabled for this guild until restart", "guild_id", guildID, "error", err)
+			continue
+		}
 		b.Log.Info("Loaded hidden threads", "guild_id", guildID, "count", len(set))
 	}
 }
 
 func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
-	if changed, err := b.setHidden(e.GuildID, e.ThreadID, false); changed {
-		if err != nil {
-			b.Log.Error("Failed to save hidden threads after thread delete", "guild_id", e.GuildID, "thread_id", e.ThreadID, "error", err)
-			return
-		}
+	changed, err := b.setHidden(e.GuildID, e.ThreadID, false)
+	switch {
+	case errors.Is(err, errHiddenNotLoaded):
+		// A deleted thread left in an unloaded list is harmless: it is never shown.
+	case err != nil:
+		b.Log.Error("Failed to save hidden threads after thread delete", "guild_id", e.GuildID, "thread_id", e.ThreadID, "error", err)
+	case changed:
 		b.Log.Info("Dropped deleted thread from hidden list", "guild_id", e.GuildID, "thread_id", e.ThreadID)
 	}
 }
@@ -127,6 +161,10 @@ func (b *Bot) handleHide(e *events.ApplicationCommandInteractionCreate, hide boo
 	}
 
 	changed, err := b.setHidden(guildID, thread.ID, hide)
+	if errors.Is(err, errHiddenNotLoaded) {
+		botutil.RespondEphemeral(e, "The hidden thread list isn't loaded right now, so it can't be changed. Try again in a minute; if this keeps happening, the bot needs a restart.")
+		return
+	}
 	if err != nil {
 		b.Log.Error("Failed to save hidden threads", "guild_id", guildID, "thread_id", thread.ID, "error", err)
 		botutil.RespondEphemeral(e, "Something went wrong saving that, please try again.")

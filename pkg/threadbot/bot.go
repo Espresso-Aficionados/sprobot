@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/disgoorg/disgo"
@@ -24,6 +25,10 @@ type Bot struct {
 	memberCounts map[snowflake.ID]*memberCountCache                // guild -> cache
 	sessionStart time.Time                                         // when the current gateway session began
 	hidden       map[snowflake.ID]map[snowflake.ID]struct{}        // guild -> threads never promoted
+
+	hiddenSaveMu     sync.Mutex            // orders hidden-list saves
+	hiddenLoaded     atomic.Bool           // loadHiddenThreads has run
+	hiddenLoadFailed map[snowflake.ID]bool // guilds whose hidden list failed to load; changes refused
 }
 
 func New(token string) (*Bot, error) {
