@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -495,24 +496,52 @@ func TestCappedCache_EvictionCompaction(t *testing.T) {
 	}
 }
 
-// TestCappedCache_OrderBoundedBelowCap: removals never reach evict, so they
-// must compact order themselves.
-func TestCappedCache_OrderBoundedBelowCap(t *testing.T) {
-	c := newCappedGroupedCache[discord.Member](1000000)
-	guild := snowflake.ID(1)
-	for i := 1; i <= 10*orderSlack; i++ {
-		c.Put(guild, snowflake.ID(i), discord.Member{})
-		switch i % 3 {
-		case 0:
-			c.Remove(guild, snowflake.ID(i))
-		case 1:
-			c.RemoveIf(func(_ snowflake.ID, _ discord.Member) bool { return false }) // no-op
-		case 2:
-			c.GroupRemoveIf(guild, func(_ snowflake.ID, _ discord.Member) bool { return true })
-		}
-	}
-	if len(c.order) > 2*c.Len()+orderSlack {
-		t.Fatalf("order slice length = %d with %d live entries", len(c.order), c.Len())
+// TestCappedCache_RemovalsCompactOrder: below the cap Put never evicts, so a
+// bulk removal must compact order itself rather than leave it to the next Put.
+func TestCappedCache_RemovalsCompactOrder(t *testing.T) {
+	const n = 10 * orderSlack
+	kept := func(id snowflake.ID) bool { return id%10 == 0 }
+	removeUnkept := func(_ snowflake.ID, m discord.Member) bool { return !kept(m.User.ID) }
+	for name, remove := range map[string]func(c *cappedGroupedCache[discord.Member]){
+		"Remove": func(c *cappedGroupedCache[discord.Member]) {
+			for i := snowflake.ID(1); i <= n; i++ {
+				if !kept(i) {
+					c.Remove(i%2, i)
+				}
+			}
+		},
+		"GroupRemove": func(c *cappedGroupedCache[discord.Member]) {
+			c.GroupRemove(0)
+			c.GroupRemove(1)
+		},
+		"RemoveIf": func(c *cappedGroupedCache[discord.Member]) {
+			c.RemoveIf(removeUnkept)
+		},
+		"GroupRemoveIf": func(c *cappedGroupedCache[discord.Member]) {
+			c.GroupRemoveIf(0, removeUnkept)
+			c.GroupRemoveIf(1, removeUnkept)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newCappedGroupedCache[discord.Member](1000000)
+			for i := snowflake.ID(1); i <= n; i++ {
+				group := i % 2
+				if kept(i) {
+					group = 2 // out of GroupRemove's way
+				}
+				c.Put(group, i, discord.Member{User: discord.User{ID: i}})
+			}
+			remove(c)
+			if c.Len() != n/10 {
+				t.Fatalf("len = %d, want %d", c.Len(), n/10)
+			}
+			if len(c.order) > 2*c.Len()+orderSlack {
+				t.Errorf("order slice length = %d with %d live entries", len(c.order), c.Len())
+			}
+			if got := len(c.snapshot()); got != c.Len() {
+				t.Errorf("snapshot has %d entries, want %d", got, c.Len())
+			}
+		})
 	}
 }
 
@@ -617,6 +646,33 @@ func TestCappedCache_LoadByID(t *testing.T) {
 	}
 	if want := []snowflake.ID{40, 50, 60}; !slices.Equal(got, want) {
 		t.Errorf("after load and put: %v, want %v", got, want)
+	}
+}
+
+// TestLoadCaches_MessagesEvictOldestFirst: the production message cache
+// orders a file saved in map order by ID, so the oldest messages are the
+// first evicted after a restart.
+func TestLoadCaches_MessagesEvictOldestFirst(t *testing.T) {
+	b := newCacheTestBot(t)
+	base := snowflake.New(time.Now().Add(-time.Hour))
+	var msgs []discord.Message
+	for _, i := range []snowflake.ID{3, 1, 5, 2, 4} {
+		msgs = append(msgs, makeMessage(i%2, base+i))
+	}
+	if err := writeCacheFile(b.cacheDir, messageCacheFile, msgs); err != nil {
+		t.Fatal(err)
+	}
+	b.msgCache.maxSize = 3
+
+	b.loadCaches()
+	b.msgCache.Put(0, base+6, makeMessage(0, base+6))
+
+	var got []snowflake.ID
+	for _, m := range b.msgCache.snapshot() {
+		got = append(got, m.ID-base)
+	}
+	if want := []snowflake.ID{4, 5, 6}; !slices.Equal(got, want) {
+		t.Errorf("messages after load and put = %v, want %v", got, want)
 	}
 }
 
@@ -837,29 +893,53 @@ func TestDisabledCachesStoreNothing(t *testing.T) {
 
 // messageReaderView is every field the readers of cached messages use: the
 // event log's onMessageDelete and onMessageUpdate, disgo's
-// RemoveMessagesByGuildID, and the cache keys.
+// RemoveMessagesByGuildID, the cache keys, and the planned M6 readers (link
+// cleaning's reply marker and edit ordering, and linkeval's filters).
 type messageReaderView struct {
 	ID, ChannelID   snowflake.ID
 	HasGuild        bool
 	GuildID         snowflake.ID
+	Type            discord.MessageType
 	Content         string
 	AuthorID        snowflake.ID
 	AuthorUsername  string
 	AuthorBot       bool
+	AuthorSystem    bool
 	AuthorAvatarURL string
+	WebhookID       snowflake.ID // 0: none
+	EditedUnixNano  int64        // 0: not edited
+	ReferenceID     snowflake.ID // 0: no reference
+	ButtonIDs       string       // the buttons' custom IDs, comma separated
 	Found           bool
 }
 
 func readerView(m discord.Message, ok bool) messageReaderView {
 	v := messageReaderView{
-		ID: m.ID, ChannelID: m.ChannelID, Content: m.Content,
-		AuthorID: m.Author.ID, AuthorUsername: m.Author.Username, AuthorBot: m.Author.Bot,
+		ID: m.ID, ChannelID: m.ChannelID, Type: m.Type, Content: m.Content,
+		AuthorID: m.Author.ID, AuthorUsername: m.Author.Username,
+		AuthorBot: m.Author.Bot, AuthorSystem: m.Author.System,
 		AuthorAvatarURL: m.Author.EffectiveAvatarURL(),
 		Found:           ok,
 	}
 	if m.GuildID != nil {
 		v.HasGuild, v.GuildID = true, *m.GuildID
 	}
+	if m.WebhookID != nil {
+		v.WebhookID = *m.WebhookID
+	}
+	if m.EditedTimestamp != nil {
+		v.EditedUnixNano = m.EditedTimestamp.UnixNano()
+	}
+	if m.MessageReference != nil && m.MessageReference.MessageID != nil {
+		v.ReferenceID = *m.MessageReference.MessageID
+	}
+	var buttonIDs []string
+	for c := range m.AllComponents() {
+		if button, ok := c.(discord.ButtonComponent); ok {
+			buttonIDs = append(buttonIDs, button.CustomID)
+		}
+	}
+	v.ButtonIDs = strings.Join(buttonIDs, ",")
 	return v
 }
 
@@ -868,6 +948,8 @@ func fullMessages() []discord.Message {
 	avatar := "a_0123456789abcdef"
 	nick := "nick"
 	id := snowflake.New(time.Now().Add(-time.Hour))
+	webhookID, channelID := snowflake.ID(7), snowflake.ID(2)
+	edited := time.Now().Add(-time.Minute).UTC()
 	return []discord.Message{
 		{
 			ID: id, ChannelID: 2, GuildID: &guildID, Content: "with avatar",
@@ -878,11 +960,24 @@ func fullMessages() []discord.Message {
 		},
 		{
 			ID: id + 1, ChannelID: 2, GuildID: &guildID, Content: "legacy discriminator, default avatar",
-			Author: discord.User{ID: 4, Username: "old", Discriminator: "1234"},
+			Author: discord.User{ID: 4, Username: "old", Discriminator: "1234", System: true},
 		},
 		{
-			ID: id + 2, ChannelID: 5, Content: "no guild, bot author",
-			Author: discord.User{ID: 6, Username: "bot", Discriminator: "0", Bot: true},
+			ID: id + 2, ChannelID: 5, Content: "no guild, webhook author",
+			Author:    discord.User{ID: 6, Username: "hook", Discriminator: "0", Bot: true},
+			WebhookID: &webhookID,
+		},
+		{
+			// A link-cleaning reply as M6 plans it: the bot's own edited
+			// reply, marked by its lc:rm: button.
+			ID: id + 3, ChannelID: channelID, GuildID: &guildID, Type: discord.MessageTypeReply, Content: "cleaned link",
+			Author:           discord.User{ID: 8, Username: "sprobot", Discriminator: "0", Bot: true},
+			EditedTimestamp:  &edited,
+			MessageReference: &discord.MessageReference{MessageID: &id, ChannelID: &channelID, GuildID: &guildID},
+			Components: []discord.LayoutComponent{discord.NewActionRow(
+				discord.NewSecondaryButton("Remove", "lc:rm:3"),
+				discord.NewLinkButton("Report issue", "https://discord.com/channels/1/2"),
+			)},
 		},
 	}
 }
@@ -954,11 +1049,12 @@ func TestMessageCache_RemoveMessagesByGuildID(t *testing.T) {
 
 // --- Fixes for disgo's cache handling ---
 
-// gatewayTestClient returns a disgo client over b's caches, to feed gateway
-// events through disgo's own handlers.
+// gatewayTestClient returns a disgo client over b's caches, with b's cache
+// listeners, to feed gateway events through disgo's own handlers.
 func gatewayTestClient(b *Bot) *bot.Client {
 	client := &bot.Client{Caches: cache.New(b.cacheConfig()...), Logger: slog.New(slog.DiscardHandler)}
-	client.EventManager = bot.NewEventManager(client)
+	client.EventManager = bot.NewEventManager(client, bot.WithListenerFunc(b.onGuildLeave))
+	client.MemberChunkingManager = bot.NewMemberChunkingManager(client, client.Logger, nil)
 	return client
 }
 
@@ -1029,40 +1125,66 @@ func TestLoadCaches_DropsMembersOutsideGuilds(t *testing.T) {
 }
 
 // TestGuildOutage_KeepsMessagesAndMembers runs disgo's GUILD_DELETE and
-// GUILD_CREATE handlers through an outage, then a real departure.
+// GUILD_CREATE handlers through an outage, then a real departure: with the
+// guild back directly, back after a READY (disgo leaves it flagged
+// unavailable), and not back at all.
 func TestGuildOutage_KeepsMessagesAndMembers(t *testing.T) {
-	b := newCacheTestBot(t)
-	client := gatewayTestClient(b)
 	guildID, channelID, userID := botutil.AllowedGuildIDs[0], snowflake.ID(2), snowflake.ID(3)
-	msgID := snowflake.New(time.Now())
-	msg := makeMessage(channelID, msgID)
-	msg.GuildID = &guildID
-	b.msgCache.Put(channelID, msgID, msg)
-	b.memberCache.Put(guildID, userID, discord.Member{GuildID: guildID, User: discord.User{ID: userID}})
-	check := func(when string, want bool) {
-		t.Helper()
-		if _, ok := b.msgCache.Get(channelID, msgID); ok != want {
-			t.Errorf("%s: message cached = %v, want %v", when, ok, want)
-		}
-		if _, ok := b.memberCache.Get(guildID, userID); ok != want {
-			t.Errorf("%s: member cached = %v, want %v", when, ok, want)
-		}
-	}
-
-	handleGatewayEvent(client, gateway.EventTypeGuildDelete, gateway.EventGuildDelete{
-		UnavailableGuild: discord.UnavailableGuild{ID: guildID, Unavailable: true},
-	})
-	check("guild unavailable", true)
-
-	handleGatewayEvent(client, gateway.EventTypeGuildCreate, gateway.EventGuildCreate{
+	guildCreate := gateway.EventGuildCreate{
 		GatewayGuild: discord.GatewayGuild{RestGuild: discord.RestGuild{Guild: discord.Guild{ID: guildID}}},
-	})
-	check("guild back", true)
+	}
+	for name, recoverGuild := range map[string]func(client *bot.Client){
+		"GUILD_CREATE": func(client *bot.Client) {
+			handleGatewayEvent(client, gateway.EventTypeGuildCreate, guildCreate)
+		},
+		"READY, GUILD_CREATE": func(client *bot.Client) {
+			handleGatewayEvent(client, gateway.EventTypeReady, gateway.EventReady{
+				Guilds: []discord.UnavailableGuild{{ID: guildID, Unavailable: true}},
+			})
+			handleGatewayEvent(client, gateway.EventTypeGuildCreate, guildCreate)
+		},
+		"none": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newCacheTestBot(t)
+			client := gatewayTestClient(b)
+			msgID := snowflake.New(time.Now())
+			msg := makeMessage(channelID, msgID)
+			msg.GuildID = &guildID
+			b.msgCache.Put(channelID, msgID, msg)
+			b.memberCache.Put(guildID, userID, discord.Member{GuildID: guildID, User: discord.User{ID: userID}})
+			check := func(when string, want bool) {
+				t.Helper()
+				if _, ok := b.msgCache.Get(channelID, msgID); ok != want {
+					t.Errorf("%s: message cached = %v, want %v", when, ok, want)
+				}
+				if _, ok := b.memberCache.Get(guildID, userID); ok != want {
+					t.Errorf("%s: member cached = %v, want %v", when, ok, want)
+				}
+			}
 
-	handleGatewayEvent(client, gateway.EventTypeGuildDelete, gateway.EventGuildDelete{
-		UnavailableGuild: discord.UnavailableGuild{ID: guildID},
-	})
-	check("left guild", false)
+			handleGatewayEvent(client, gateway.EventTypeGuildDelete, gateway.EventGuildDelete{
+				UnavailableGuild: discord.UnavailableGuild{ID: guildID, Unavailable: true},
+			})
+			check("guild unavailable", true)
+
+			if recoverGuild != nil {
+				recoverGuild(client)
+				check("guild back", true)
+				if client.Caches.IsGuildUnavailable(guildID) {
+					t.Error("guild still flagged unavailable once back")
+				}
+			}
+
+			handleGatewayEvent(client, gateway.EventTypeGuildDelete, gateway.EventGuildDelete{
+				UnavailableGuild: discord.UnavailableGuild{ID: guildID},
+			})
+			check("left guild", false)
+			if client.Caches.IsGuildUnavailable(guildID) {
+				t.Error("guild still flagged unavailable after the bot left it")
+			}
+		})
+	}
 }
 
 // --- Persistence ---
@@ -1281,6 +1403,67 @@ func TestWriteCacheFile_FailureKeepsOldFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "c.json.tmp")); !os.IsNotExist(err) {
 		t.Errorf("temp file left behind: %v", err)
+	}
+}
+
+// TestSaveCaches_FailedMessageSaveRemovesFile: a message cache file that
+// can't be rewritten is deleted, so it can't age past messageRetention while
+// saves keep failing. The other caches keep their old files.
+func TestSaveCaches_FailedMessageSaveRemovesFile(t *testing.T) {
+	b := newCacheTestBot(t)
+	expired, fresh := retentionTestMessages()
+	if err := writeCacheFile(b.cacheDir, messageCacheFile, slices.Concat(expired, fresh)); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range fresh {
+		b.msgCache.Put(m.ChannelID, m.ID, m)
+	}
+	// A directory where the temp files go makes every write fail.
+	for _, file := range []string{messageCacheFile, roleCacheFile} {
+		if err := os.Mkdir(filepath.Join(b.cacheDir, file+".tmp"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeCacheFile(b.cacheDir, roleCacheFile, []discord.Role{{ID: 4}}); err == nil {
+		t.Fatal("writing with a directory in the temp file's place succeeded")
+	}
+	if err := os.WriteFile(filepath.Join(b.cacheDir, roleCacheFile), []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	b.saveCaches()
+
+	if _, err := os.Stat(filepath.Join(b.cacheDir, messageCacheFile)); !os.IsNotExist(err) {
+		t.Errorf("message cache file still there after a failed save: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(b.cacheDir, roleCacheFile)); err != nil {
+		t.Errorf("role cache file removed after a failed save: %v", err)
+	}
+}
+
+// TestRemoveRetiredCacheFiles removes the files of disabled caches and temp
+// files a killed save left, and nothing else.
+func TestRemoveRetiredCacheFiles(t *testing.T) {
+	b := newCacheTestBot(t)
+	files := slices.Concat(retiredCacheFiles, []string{messageCacheFile + ".tmp", roleCacheFile + ".tmp", messageCacheFile, roleCacheFile})
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(b.cacheDir, name), []byte("[]"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	b.removeRetiredCacheFiles()
+
+	var left []string
+	entries, err := os.ReadDir(b.cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		left = append(left, e.Name())
+	}
+	if want := []string{messageCacheFile, roleCacheFile}; !slices.Equal(left, want) {
+		t.Errorf("cache dir holds %v, want %v", left, want)
 	}
 }
 

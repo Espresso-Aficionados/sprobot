@@ -11,11 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -58,8 +60,21 @@ var disabledCacheFlags = map[cache.Flags]string{
 // They are deleted on startup so the data does not linger on disk.
 var retiredCacheFiles = []string{"presencecache.json", "threadmembercache.json"}
 
+// removeRetiredCacheFiles also deletes the temp files of saves that were
+// killed partway: they hold cache data, and only the next successful save of
+// that cache, which waits for the gateway, would replace them.
 func (b *Bot) removeRetiredCacheFiles() {
-	for _, name := range retiredCacheFiles {
+	names := slices.Clone(retiredCacheFiles)
+	entries, err := os.ReadDir(b.cacheDir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		b.Log.Error("Failed to list the cache dir", "error", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			names = append(names, e.Name())
+		}
+	}
+	for _, name := range names {
 		err := os.Remove(filepath.Join(b.cacheDir, name))
 		switch {
 		case err == nil:
@@ -99,7 +114,7 @@ func (b *Bot) initCaches() {
 
 // cacheConfig points disgo at the caches made by initCaches.
 func (b *Bot) cacheConfig() []cache.ConfigOpt {
-	guilds := cache.NewGuildCache(b.guildCache, cache.NewSet[snowflake.ID](), cache.NewSet[snowflake.ID]())
+	guilds := readyGuildCache{cache.NewGuildCache(b.guildCache, cache.NewSet[snowflake.ID](), cache.NewSet[snowflake.ID]())}
 	return []cache.ConfigOpt{
 		cache.WithCaches(enabledCacheFlags),
 		cache.WithGuildCache(guilds),
@@ -133,12 +148,42 @@ func (b *Bot) isKnownGuild(id snowflake.ID) bool {
 	return ok
 }
 
-// Aliases to embed disgo's caches under: a field named MessageCache or
-// MemberCache would hide the interface method of that name.
+// Aliases to embed disgo's caches under: a field named GuildCache,
+// MessageCache or MemberCache would hide the interface method of that name.
 type (
+	disgoGuildCache   = cache.GuildCache
 	disgoMessageCache = cache.MessageCache
 	disgoMemberCache  = cache.MemberCache
 )
+
+// readyGuildCache clears a guild's unavailable flag when it becomes ready.
+// disgo clears it only on a GUILD_CREATE for a guild that is not unready, so
+// a guild that was unavailable at a READY stays flagged once it is back, and
+// outageSafeMessageCache and guildMemberCache would keep its messages and
+// members after the bot leaves it.
+type readyGuildCache struct {
+	disgoGuildCache
+}
+
+func (c readyGuildCache) SetGuildUnready(guildID snowflake.ID, unready bool) {
+	c.disgoGuildCache.SetGuildUnready(guildID, unready)
+	if !unready {
+		c.SetGuildUnavailable(guildID, false)
+	}
+}
+
+// onGuildLeave removes the messages and members of a guild the bot left while
+// it was flagged unavailable: outageSafeMessageCache and guildMemberCache kept
+// them when disgo tried.
+func (b *Bot) onGuildLeave(e *events.GuildLeave) {
+	caches := e.Client().Caches
+	if !caches.IsGuildUnavailable(e.GuildID) {
+		return
+	}
+	caches.SetGuildUnavailable(e.GuildID, false)
+	caches.RemoveMessagesByGuildID(e.GuildID)
+	caches.RemoveMembersByGuildID(e.GuildID)
+}
 
 // outageSafeMessageCache keeps a guild's messages while it is unavailable.
 // On GUILD_DELETE disgo removes them even when the guild is only down in an
@@ -231,47 +276,69 @@ func (c *cappedCache[T]) All() iter.Seq[T] {
 	return c.GroupAll(0)
 }
 
-// cachedMessage is what the message cache keeps of a message: what the event
-// log reads from a deleted or edited message (content and author), and the
-// IDs disgo files and clears it by. A discord.Message is several times the
-// size, and holds the author twice. The JSON names match discord.Message's,
-// so older files load as they are, their other fields skipped, and older
-// versions can load these.
+// cachedMessage is what the message cache keeps of a message. A
+// discord.Message is several times the size, and holds the author twice. It
+// keeps the fields every reader of cached messages uses:
+//   - the event log, on a deleted or edited message: content and author;
+//   - disgo: the IDs it files and clears messages by;
+//   - link cleaning (M6 P3, planned): the reference, edit time and
+//     components, which mark the bot's link-cleaning replies;
+//   - linkeval (M6 P4, planned), which reads the file: the type, webhook ID
+//     and the author's bot and system flags.
+//
+// The JSON names match discord.Message's, so older files load as they are,
+// their other fields skipped, and older versions can load these.
 type cachedMessage struct {
-	ID        snowflake.ID `json:"id"`
-	ChannelID snowflake.ID `json:"channel_id"`
-	GuildID   snowflake.ID `json:"guild_id,omitempty"` // 0 outside a guild
-	Content   string       `json:"content"`
-	Author    cachedAuthor `json:"author"`
+	ID               snowflake.ID              `json:"id"`
+	ChannelID        snowflake.ID              `json:"channel_id"`
+	GuildID          snowflake.ID              `json:"guild_id,omitempty"` // 0 outside a guild
+	Type             discord.MessageType       `json:"type,omitempty"`
+	Content          string                    `json:"content"`
+	Author           cachedAuthor              `json:"author"`
+	WebhookID        *snowflake.ID             `json:"webhook_id,omitempty"`
+	EditedTimestamp  *time.Time                `json:"edited_timestamp,omitempty"`
+	MessageReference *discord.MessageReference `json:"message_reference,omitempty"`
+	// Components stays JSON: only bot messages have any, and disgo's
+	// component types decode only through its unmarshaler.
+	Components json.RawMessage `json:"components,omitempty"`
 }
 
-// cachedAuthor is the part of a message's author the event log uses: the ID,
-// name and bot flag, and what User.EffectiveAvatarURL needs.
+// cachedAuthor is the part of a message's author the readers use: the ID,
+// name, bot and system flags, and what User.EffectiveAvatarURL needs.
 type cachedAuthor struct {
 	ID            snowflake.ID `json:"id"`
 	Username      string       `json:"username"`
 	Discriminator string       `json:"discriminator"`
 	Avatar        string       `json:"avatar,omitempty"` // "" for the default avatar
 	Bot           bool         `json:"bot"`
+	System        bool         `json:"system,omitempty"`
 }
 
 func newCachedMessage(m discord.Message) cachedMessage {
 	c := cachedMessage{
 		ID:        m.ID,
 		ChannelID: m.ChannelID,
+		Type:      m.Type,
 		Content:   m.Content,
 		Author: cachedAuthor{
 			ID:            m.Author.ID,
 			Username:      m.Author.Username,
 			Discriminator: m.Author.Discriminator,
 			Bot:           m.Author.Bot,
+			System:        m.Author.System,
 		},
+		WebhookID:        m.WebhookID,
+		EditedTimestamp:  m.EditedTimestamp,
+		MessageReference: m.MessageReference,
 	}
 	if m.GuildID != nil {
 		c.GuildID = *m.GuildID
 	}
 	if m.Author.Avatar != nil {
 		c.Author.Avatar = *m.Author.Avatar
+	}
+	if len(m.Components) > 0 {
+		c.Components, _ = json.Marshal(m.Components) // they were decoded from JSON
 	}
 	return c
 }
@@ -281,19 +348,34 @@ func (c cachedMessage) message() discord.Message {
 	m := discord.Message{
 		ID:        c.ID,
 		ChannelID: c.ChannelID,
+		Type:      c.Type,
 		Content:   c.Content,
 		Author: discord.User{
 			ID:            c.Author.ID,
 			Username:      c.Author.Username,
 			Discriminator: c.Author.Discriminator,
 			Bot:           c.Author.Bot,
+			System:        c.Author.System,
 		},
+		WebhookID:        c.WebhookID,
+		EditedTimestamp:  c.EditedTimestamp,
+		MessageReference: c.MessageReference,
 	}
 	if c.GuildID != 0 {
 		m.GuildID = &c.GuildID
 	}
 	if c.Author.Avatar != "" {
 		m.Author.Avatar = &c.Author.Avatar
+	}
+	if len(c.Components) > 0 {
+		var components []discord.UnmarshalComponent
+		if json.Unmarshal(c.Components, &components) == nil {
+			for _, u := range components {
+				if lc, ok := u.Component.(discord.LayoutComponent); ok {
+					m.Components = append(m.Components, lc)
+				}
+			}
+		}
 	}
 	return m
 }
@@ -626,7 +708,7 @@ func (b *Bot) loadCaches() {
 	// than at the first save, which waits for the gateway.
 	if expired > 0 {
 		b.Log.Info("Dropped expired messages from the cache file", "removed", expired)
-		saveCache(b, messageCacheFile, b.msgCache.snapshot())
+		b.saveMessageCache()
 	}
 	// Guilds before members: members filed under anything else (see
 	// guildMemberCache) are dropped.
@@ -696,7 +778,7 @@ func loadCache[D, T any](b *Bot, file string, c *cappedGroupedCache[T], entry fu
 // held at a time.
 func (b *Bot) saveCaches() {
 	b.pruneMessageCache()
-	saveCache(b, messageCacheFile, b.msgCache.snapshot())
+	b.saveMessageCache()
 	saveCache(b, memberCacheFile, b.memberCache.snapshot())
 	saveCache(b, guildCacheFile, b.guildCache.snapshot())
 	saveCache(b, channelCacheFile, b.channelCache.snapshot())
@@ -709,9 +791,27 @@ func (b *Bot) saveCaches() {
 	saveCache(b, soundboardSoundCacheFile, b.soundboardSoundCache.snapshot())
 }
 
-func saveCache[T any](b *Bot, file string, items []T) {
+func saveCache[T any](b *Bot, file string, items []T) bool {
 	if err := writeCacheFile(b.cacheDir, file, items); err != nil {
 		b.Log.Error("Failed to save cache file", "file", file, "error", err)
+		return false
+	}
+	return true
+}
+
+// saveMessageCache writes the message cache, or deletes the file if that
+// fails: a failed write leaves the old file in place, and while writes keep
+// failing (a full disk, say) it would age past messageRetention.
+func (b *Bot) saveMessageCache() {
+	if saveCache(b, messageCacheFile, b.msgCache.snapshot()) {
+		return
+	}
+	err := os.Remove(filepath.Join(b.cacheDir, messageCacheFile))
+	switch {
+	case err == nil:
+		b.Log.Warn("Removed the message cache file after a failed save", "file", messageCacheFile)
+	case !errors.Is(err, fs.ErrNotExist):
+		b.Log.Error("Failed to remove the message cache file after a failed save", "file", messageCacheFile, "error", err)
 	}
 }
 
