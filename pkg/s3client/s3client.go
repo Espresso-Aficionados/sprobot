@@ -870,6 +870,14 @@ func (c *Client) SaveThreadMemberCounts(ctx context.Context, guildID string, dat
 	return c.SaveGuildJSON(ctx, "threadmembercounts", guildID, data)
 }
 
+func (c *Client) FetchHiddenThreads(ctx context.Context, guildID string) ([]byte, error) {
+	return c.FetchGuildJSON(ctx, "threadhidden", guildID)
+}
+
+func (c *Client) SaveHiddenThreads(ctx context.Context, guildID string, data []byte) error {
+	return c.SaveGuildJSON(ctx, "threadhidden", guildID, data)
+}
+
 func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (string, error) {
 	return c.saveRemoteFile(ctx, guildID, fileURL, "sticky_files")
 }

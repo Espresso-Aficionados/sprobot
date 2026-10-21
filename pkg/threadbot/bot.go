@@ -23,6 +23,7 @@ type Bot struct {
 	reminders    map[snowflake.ID]map[snowflake.ID]*threadReminder // guild -> channel -> reminder
 	memberCounts map[snowflake.ID]*memberCountCache                // guild -> cache
 	sessionStart time.Time                                         // when the current gateway session began
+	hidden       map[snowflake.ID]map[snowflake.ID]struct{}        // guild -> threads never promoted
 }
 
 func New(token string) (*Bot, error) {
@@ -36,6 +37,7 @@ func New(token string) (*Bot, error) {
 		stop:         make(chan struct{}),
 		reminders:    make(map[snowflake.ID]map[snowflake.ID]*threadReminder),
 		memberCounts: make(map[snowflake.ID]*memberCountCache),
+		hidden:       make(map[snowflake.ID]map[snowflake.ID]struct{}),
 	}
 
 	client, err := disgo.New(token,
@@ -59,6 +61,7 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onSessionReady),
 		bot.WithEventListenerFunc(b.onThreadMemberAdd),
 		bot.WithEventListenerFunc(b.onThreadMemberRemove),
+		bot.WithEventListenerFunc(b.onThreadDelete),
 	)
 	if err != nil {
 		return nil, err
@@ -82,6 +85,7 @@ func (b *Bot) Run() error {
 
 	b.loadReminders()
 	b.loadMemberCounts()
+	b.loadHiddenThreads()
 	if err := b.registerAllCommands(); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
 	}

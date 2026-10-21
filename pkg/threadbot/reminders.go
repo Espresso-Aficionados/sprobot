@@ -286,9 +286,10 @@ func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
 		MemberCount  int
 		CreatedAt    time.Time
 	}
+	hidden := b.hiddenSet(guildID)
 	var threads []threadInfo
 	for _, t := range result.Threads {
-		if t.ThreadMetadata.Archived {
+		if _, ok := hidden[t.ID()]; ok || t.ThreadMetadata.Archived {
 			continue
 		}
 		parentID := t.ParentID()
@@ -387,9 +388,10 @@ func (b *Bot) buildAllThreadsEmbed(guildID snowflake.ID) *discord.Embed {
 		MemberCount  int
 		CreatedAt    time.Time
 	}
+	hidden := b.hiddenSet(guildID)
 	var threads []threadInfo
 	for _, t := range result.Threads {
-		if t.ThreadMetadata.Archived {
+		if _, ok := hidden[t.ID()]; ok || t.ThreadMetadata.Archived {
 			continue
 		}
 		parentID := t.ParentID()
