@@ -103,9 +103,9 @@ func TestMemberCountsNeverSavedOverFailedLoad(t *testing.T) {
 	b.loadMemberCounts()
 
 	// Unloaded: member_count is shown, nothing is fetched or saved.
-	e := b.buildThreadEmbed(devGuild, 500)
-	if e == nil || !strings.Contains(e.Description, "50 members") {
-		t.Fatalf("embed while unloaded = %+v, want member_count shown", e)
+	e, err := b.buildThreadsEmbed(devGuild, 500)
+	if e == nil || err != nil || !strings.Contains(e.Description, "50 members") {
+		t.Fatalf("embed while unloaded = %+v, %v; want member_count shown", e, err)
 	}
 	b.saveMemberCounts()
 	if api.fetchCount("101") != 0 {
@@ -118,8 +118,8 @@ func TestMemberCountsNeverSavedOverFailedLoad(t *testing.T) {
 	// Once S3 is back, the stored count loads on next use, fresh, so it is
 	// shown without a fetch.
 	fs.failGet.Store(false)
-	if e := b.buildThreadEmbed(devGuild, 500); e == nil || !strings.Contains(e.Description, "130 members") {
-		t.Errorf("embed after recovery = %+v, want the stored count", e)
+	if e, err := b.buildThreadsEmbed(devGuild, 500); e == nil || err != nil || !strings.Contains(e.Description, "130 members") {
+		t.Errorf("embed after recovery = %+v, %v; want the stored count", e, err)
 	}
 	if api.fetchCount("101") != 0 {
 		t.Error("fresh stored count re-fetched")

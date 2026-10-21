@@ -330,66 +330,44 @@ func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
 }
 
 func (b *Bot) handleThreads(e *events.ApplicationCommandInteractionCreate) {
-	guildID := *e.GuildID()
-	channelID := e.Channel().ID()
-
-	b.Log.Info("Listing threads", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
-
-	// Defer since fetching threads + member counts may exceed the 3s deadline.
-	if err := e.DeferCreateMessage(true); err != nil {
-		b.Log.Error("Failed to defer threads response", "error", err)
-		return
-	}
-
-	embed := b.buildThreadEmbed(guildID, channelID)
-	if embed == nil {
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-			Content: "No active threads in this channel.",
-			Flags:   discord.MessageFlagEphemeral,
-		})
-		return
-	}
-
-	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-		Embeds: []discord.Embed{*embed},
-		Flags:  discord.MessageFlagEphemeral,
-	})
+	b.Log.Info("Listing threads", "user_id", e.User().ID, "guild_id", *e.GuildID(), "channel_id", e.Channel().ID())
+	b.respondThreads(e, e.Channel().ID(), true)
 }
 
 func (b *Bot) handleFetchAll(e *events.ApplicationCommandInteractionCreate) {
-	guildID := *e.GuildID()
-	data := e.Data.(discord.SlashCommandInteractionData)
+	public, _ := e.Data.(discord.SlashCommandInteractionData).OptBool(optPublic)
+	b.Log.Info("Fetching all threads", "user_id", e.User().ID, "guild_id", *e.GuildID(), "public", public)
+	b.respondThreads(e, 0, !public)
+}
 
-	public, _ := data.OptBool(optPublic)
-	ephemeral := !public
-
-	b.Log.Info("Fetching all threads", "user_id", e.User().ID, "guild_id", guildID, "public", public)
-
+// respondThreads answers a command with the thread list for channelID, or
+// for the whole server when channelID is 0.
+func (b *Bot) respondThreads(e *events.ApplicationCommandInteractionCreate, channelID snowflake.ID, ephemeral bool) {
 	// Defer since fetching threads + member counts may exceed the 3s deadline.
 	if err := e.DeferCreateMessage(ephemeral); err != nil {
-		b.Log.Error("Failed to defer fetchall response", "error", err)
+		b.Log.Error("Failed to defer thread list response", "error", err)
 		return
 	}
 
-	embed := b.buildAllThreadsEmbed(guildID)
-	if embed == nil {
-		msg := discord.MessageCreate{
-			Content: "No active threads in this server.",
-		}
-		if ephemeral {
-			msg.Flags = discord.MessageFlagEphemeral
-		}
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
-		return
-	}
-
-	msg := discord.MessageCreate{
-		Embeds: []discord.Embed{*embed},
+	var msg discord.MessageCreate
+	embed, err := b.buildThreadsEmbed(*e.GuildID(), channelID)
+	switch {
+	case err != nil:
+		b.Log.Error("Failed to build thread list", "guild_id", *e.GuildID(), "channel_id", channelID, "error", err)
+		msg.Content = "Couldn't fetch the active threads from Discord. Please try again in a minute."
+	case embed != nil:
+		msg.Embeds = []discord.Embed{*embed}
+	case channelID == 0:
+		msg.Content = "No active threads in this server."
+	default:
+		msg.Content = "No active threads in this channel."
 	}
 	if ephemeral {
 		msg.Flags = discord.MessageFlagEphemeral
 	}
-	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
+	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg); err != nil {
+		b.Log.Error("Failed to send thread list", "error", err)
+	}
 }
 
 func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {

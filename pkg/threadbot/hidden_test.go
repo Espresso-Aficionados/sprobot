@@ -58,12 +58,12 @@ func TestHiddenThreadsExcludedPersistedAndPruned(t *testing.T) {
 		t.Error("hiding an already hidden thread reported a change")
 	}
 
-	d := b.buildAllThreadsEmbed(guildID).Description
-	if !strings.Contains(d, "thread-201") || strings.Contains(d, "thread-202") {
-		t.Errorf("hidden thread shown, or visible thread missing:\n%s", d)
+	all, err := b.buildThreadsEmbed(guildID, 0)
+	if err != nil || !strings.Contains(all.Description, "thread-201") || strings.Contains(all.Description, "thread-202") {
+		t.Errorf("hidden thread shown, or visible thread missing: %+v, %v", all, err)
 	}
-	if e := b.buildThreadEmbed(guildID, 500); e == nil || strings.Contains(e.Description, "thread-202") {
-		t.Errorf("hidden thread shown in channel reminder: %+v", e)
+	if e, err := b.buildThreadsEmbed(guildID, 500); e == nil || err != nil || strings.Contains(e.Description, "thread-202") {
+		t.Errorf("hidden thread shown in channel reminder: %+v, %v", e, err)
 	}
 
 	// A restart reloads the hidden list from S3.

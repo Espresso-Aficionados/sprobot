@@ -1,11 +1,12 @@
 package threadbot
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -307,133 +308,27 @@ func (b *Bot) stopAllReminderGoroutines() {
 	wg.Wait()
 }
 
-// buildThreadEmbed fetches active threads for the given guild/channel and
-// returns an embed showing the top 10 by message count. Returns nil if there
-// are no active threads.
-func (b *Bot) buildThreadEmbed(guildID, channelID snowflake.ID) *discord.Embed {
-	result, err := b.Client.Rest.GetActiveGuildThreads(guildID)
-	if err != nil {
-		b.Log.Error("Failed to fetch active threads", "guild_id", guildID, "error", err)
-		return nil
-	}
-
-	type threadInfo struct {
-		Name         string
-		ID           snowflake.ID
-		MessageCount int
-		MemberCount  int
-		CreatedAt    time.Time
-	}
-	hidden := b.hiddenSet(guildID)
-	var threads []threadInfo
-	for _, t := range result.Threads {
-		if _, ok := hidden[t.ID()]; ok || t.ThreadMetadata.Archived {
-			continue
-		}
-		parentID := t.ParentID()
-		if parentID == nil || *parentID != channelID {
-			continue
-		}
-		createdAt := t.ThreadMetadata.CreateTimestamp
-		if createdAt.IsZero() {
-			createdAt = t.ID().Time()
-		}
-		threads = append(threads, threadInfo{
-			Name:         t.Name(),
-			ID:           t.ID(),
-			MessageCount: t.MessageCount,
-			MemberCount:  t.MemberCount,
-			CreatedAt:    createdAt,
-		})
-	}
-
-	if len(threads) == 0 {
-		return nil
-	}
-
-	sort.Slice(threads, func(i, j int) bool {
-		return threads[i].MessageCount > threads[j].MessageCount
-	})
-
-	total := len(threads)
-	if len(threads) > 10 {
-		threads = threads[:10]
-	}
-
-	// Only shown threads at the member_count cap need an exact count.
-	var capped []snowflake.ID
-	for _, t := range threads {
-		if t.MemberCount >= memberCountCap {
-			capped = append(capped, t.ID)
-		}
-	}
-	b.refreshMemberCounts(guildID, capped)
-
-	var cachedCount int
-	b.mu.Lock()
-	for i, t := range threads {
-		if n, ok := b.memberCounts[guildID].exactCount(t.ID, t.MemberCount); ok {
-			threads[i].MemberCount = n
-			cachedCount++
-		}
-	}
-	b.mu.Unlock()
-
-	now := time.Now()
-	const maxDescLen = 3900
-	var desc strings.Builder
-	for _, t := range threads {
-		age := botutil.FormatAge(now.Sub(t.CreatedAt))
-		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.MessageCount, t.MemberCount, age)
-		if desc.Len()+len(line) > maxDescLen {
-			break
-		}
-		desc.WriteString(line)
-	}
-	b.Log.Info("Built thread embed", "guild_id", guildID, "channel_id", channelID, "threads", total, "cached_counts", cachedCount)
-	if total > 10 {
-		desc.WriteString(fmt.Sprintf("...and %d more threads\n", total-10))
-	}
-
-	color := 0x5865F2 // Discord blurple
-	embed := discord.Embed{
-		Title:       "Active Threads",
-		Description: desc.String(),
-		Color:       color,
-		Footer: &discord.EmbedFooter{
-			Text: fmt.Sprintf("%d active thread(s)", total),
-		},
-		Timestamp: &now,
-	}
-	return &embed
+// threadInfo is a thread as a thread list shows it.
+type threadInfo struct {
+	Name         string
+	ID           snowflake.ID
+	ParentID     snowflake.ID
+	MessageCount int
+	MemberCount  int
+	CreatedAt    time.Time
 }
 
-// buildAllThreadsEmbed fetches all active threads across the entire guild and
-// returns an embed showing the top 25 by message count. Returns nil if there
-// are no active threads.
-func (b *Bot) buildAllThreadsEmbed(guildID snowflake.ID) *discord.Embed {
-	result, err := b.Client.Rest.GetActiveGuildThreads(guildID)
-	if err != nil {
-		b.Log.Error("Failed to fetch active threads", "guild_id", guildID, "error", err)
-		return nil
-	}
-
-	type threadInfo struct {
-		Name         string
-		ID           snowflake.ID
-		ParentID     snowflake.ID
-		MessageCount int
-		MemberCount  int
-		CreatedAt    time.Time
-	}
-	hidden := b.hiddenSet(guildID)
+// listedThreads returns the threads a list shows, busiest first: open threads
+// that aren't hidden, under channelID, or anywhere in the server when
+// channelID is 0.
+func listedThreads(all []discord.GuildThread, channelID snowflake.ID, hidden map[snowflake.ID]struct{}) []threadInfo {
 	var threads []threadInfo
-	for _, t := range result.Threads {
+	for _, t := range all {
 		if _, ok := hidden[t.ID()]; ok || t.ThreadMetadata.Archived {
 			continue
 		}
 		parentID := t.ParentID()
-		if parentID == nil {
+		if parentID == nil || (channelID != 0 && *parentID != channelID) {
 			continue
 		}
 		createdAt := t.ThreadMetadata.CreateTimestamp
@@ -449,20 +344,30 @@ func (b *Bot) buildAllThreadsEmbed(guildID snowflake.ID) *discord.Embed {
 			CreatedAt:    createdAt,
 		})
 	}
-
-	if len(threads) == 0 {
-		return nil
-	}
-
-	sort.Slice(threads, func(i, j int) bool {
-		return threads[i].MessageCount > threads[j].MessageCount
+	slices.SortStableFunc(threads, func(a, b threadInfo) int {
+		return cmp.Compare(b.MessageCount, a.MessageCount)
 	})
+	return threads
+}
 
-	total := len(threads)
-	const maxShown = 25
-	if len(threads) > maxShown {
-		threads = threads[:maxShown]
+// buildThreadsEmbed fetches the guild's active threads and returns an embed
+// of the busiest: up to 10 under channelID, or with channelID 0, up to 25
+// across the server. The embed is nil if there are none to show.
+func (b *Bot) buildThreadsEmbed(guildID, channelID snowflake.ID) (*discord.Embed, error) {
+	result, err := b.Client.Rest.GetActiveGuildThreads(guildID)
+	if err != nil {
+		return nil, fmt.Errorf("fetching active threads: %w", err)
 	}
+	threads := listedThreads(result.Threads, channelID, b.hiddenSet(guildID))
+	if len(threads) == 0 {
+		return nil, nil
+	}
+	total := len(threads)
+	maxShown := 10
+	if channelID == 0 {
+		maxShown = 25
+	}
+	threads = threads[:min(total, maxShown)]
 
 	// Only shown threads at the member_count cap need an exact count.
 	var capped []snowflake.ID
@@ -483,77 +388,62 @@ func (b *Bot) buildAllThreadsEmbed(guildID snowflake.ID) *discord.Embed {
 	}
 	b.mu.Unlock()
 
-	now := time.Now()
+	b.Log.Info("Built thread embed", "guild_id", guildID, "channel_id", channelID, "threads", total, "cached_counts", cachedCount)
+	embed := threadsEmbed(guildID, channelID, threads, total, time.Now())
+	return &embed, nil
+}
+
+// threadsEmbed formats a thread list: threads are the ones to show out of
+// total listed, and channelID 0 marks a server-wide list.
+func threadsEmbed(guildID, channelID snowflake.ID, threads []threadInfo, total int, now time.Time) discord.Embed {
 	const maxDescLen = 3900
 	var desc strings.Builder
+	var shown int
 	for _, t := range threads {
-		age := botutil.FormatAge(now.Sub(t.CreatedAt))
-		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d) in <#%d> — %d msgs, %d members, %s old\n", t.Name, guildID, t.ID, t.ParentID, t.MessageCount, t.MemberCount, age)
+		var parent string
+		if channelID == 0 {
+			parent = fmt.Sprintf(" in <#%d>", t.ParentID)
+		}
+		line := fmt.Sprintf("- [%s](https://discord.com/channels/%d/%d)%s — %d msgs, %d members, %s old\n",
+			t.Name, guildID, t.ID, parent, t.MessageCount, t.MemberCount, botutil.FormatAge(now.Sub(t.CreatedAt)))
 		if desc.Len()+len(line) > maxDescLen {
 			break
 		}
 		desc.WriteString(line)
+		shown++
 	}
-	b.Log.Info("Built all-threads embed", "guild_id", guildID, "threads", total, "cached_counts", cachedCount)
-	if total > maxShown {
-		desc.WriteString(fmt.Sprintf("...and %d more threads\n", total-maxShown))
+	if more := total - shown; more > 0 {
+		fmt.Fprintf(&desc, "...and %d more threads\n", more)
 	}
 
-	color := 0x5865F2 // Discord blurple
-	embed := discord.Embed{
-		Title:       "All Active Threads",
-		Description: desc.String(),
-		Color:       color,
-		Footer: &discord.EmbedFooter{
-			Text: fmt.Sprintf("%d active thread(s) server-wide", total),
-		},
-		Timestamp: &now,
+	title, footer := "Active Threads", fmt.Sprintf("%d active thread(s)", total)
+	if channelID == 0 {
+		title, footer = "All Active Threads", fmt.Sprintf("%d active thread(s) server-wide", total)
 	}
-	return &embed
+	return discord.Embed{
+		Title:       title,
+		Description: desc.String(),
+		Color:       0x5865F2, // Discord blurple
+		Footer:      &discord.EmbedFooter{Text: footer},
+		Timestamp:   &now,
+	}
 }
 
 func (b *Bot) repostReminder(r *threadReminder) bool {
-	embed := b.buildThreadEmbed(r.GuildID, r.ChannelID)
+	embed, err := b.buildThreadsEmbed(r.GuildID, r.ChannelID)
+	if err != nil {
+		b.Log.Error("Failed to build thread reminder", "guild_id", r.GuildID, "channel_id", r.ChannelID, "error", err)
+		return false
+	}
 	if embed == nil {
 		return false
 	}
 
-	// Skip repost if the reminder is still within the last N messages (buffer).
-	if r.LastMessageID != 0 && r.Buffer > 0 {
-		msgs, err := b.Client.Rest.GetMessages(r.ChannelID, 0, 0, 0, r.Buffer)
-		if err == nil {
-			for _, m := range msgs {
-				if m.ID == r.LastMessageID {
-					// Still visible — update the embed in place.
-					_, err := b.Client.Rest.UpdateMessage(r.ChannelID, r.LastMessageID, discord.MessageUpdate{
-						Embeds: &[]discord.Embed{*embed},
-					})
-					if err == nil {
-						now := time.Now()
-						b.mu.Lock()
-						r.LastPostTime = now
-						b.mu.Unlock()
-						b.saveRemindersForGuild(r.GuildID)
-						return true
-					}
-					break
-				}
-			}
-		}
-	}
-
-	// If only bot messages were posted after our reminder, edit in place instead
-	// of delete+repost. This prevents repost loops when multiple bots are active.
-	if r.LastMessageID != 0 && botutil.OnlyBotsAfter(b.Client.Rest, r.ChannelID, r.LastMessageID, b.Log) {
-		_, err := b.Client.Rest.UpdateMessage(r.ChannelID, r.LastMessageID, discord.MessageUpdate{
-			Embeds: &[]discord.Embed{*embed},
-		})
-		if err == nil {
-			now := time.Now()
-			b.mu.Lock()
-			r.LastPostTime = now
-			b.mu.Unlock()
-			b.saveRemindersForGuild(r.GuildID)
+	// Update the reminder in place while it is still among the channel's last
+	// Buffer messages, or when only bots have posted since: reposting then
+	// would start a repost loop between bots.
+	if r.LastMessageID != 0 && (b.reminderInBuffer(r) || botutil.OnlyBotsAfter(b.Client.Rest, r.ChannelID, r.LastMessageID, b.Log)) {
+		if b.editReminder(r, *embed) {
 			return true
 		}
 		// Edit failed; fall through to delete+repost
@@ -574,10 +464,37 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 		return false
 	}
 
-	now := time.Now()
 	b.mu.Lock()
 	r.LastMessageID = sent.ID
-	r.LastPostTime = now
+	r.LastPostTime = time.Now()
+	b.mu.Unlock()
+	b.saveRemindersForGuild(r.GuildID)
+	return true
+}
+
+// reminderInBuffer reports whether r's message is among the channel's last
+// r.Buffer messages.
+func (b *Bot) reminderInBuffer(r *threadReminder) bool {
+	if r.Buffer <= 0 {
+		return false
+	}
+	msgs, err := b.Client.Rest.GetMessages(r.ChannelID, 0, 0, 0, r.Buffer)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(msgs, func(m discord.Message) bool { return m.ID == r.LastMessageID })
+}
+
+// editReminder replaces the embed on r's message and records the post time.
+// It reports whether the edit succeeded.
+func (b *Bot) editReminder(r *threadReminder, embed discord.Embed) bool {
+	if _, err := b.Client.Rest.UpdateMessage(r.ChannelID, r.LastMessageID, discord.MessageUpdate{
+		Embeds: &[]discord.Embed{embed},
+	}); err != nil {
+		return false
+	}
+	b.mu.Lock()
+	r.LastPostTime = time.Now()
 	b.mu.Unlock()
 	b.saveRemindersForGuild(r.GuildID)
 	return true
@@ -643,27 +560,31 @@ func (b *Bot) saveMemberCounts() {
 	}
 	b.mu.Unlock()
 
-	ctx := context.Background()
 	for _, guildID := range guildIDs {
-		b.mu.Lock()
-		cache, ok := b.memberCounts[guildID]
-		if !ok {
-			b.mu.Unlock()
-			continue
-		}
-		data, err := json.Marshal(cache)
+		b.saveMemberCountsForGuild(guildID)
+	}
+}
+
+// saveMemberCountsForGuild persists a guild's member counts. A guild whose
+// counts haven't loaded has nothing to save.
+func (b *Bot) saveMemberCountsForGuild(guildID snowflake.ID) {
+	b.mu.Lock()
+	cache, ok := b.memberCounts[guildID]
+	if !ok {
 		b.mu.Unlock()
+		return
+	}
+	data, err := json.Marshal(cache)
+	b.mu.Unlock()
+	if err != nil {
+		b.Log.Error("Failed to marshal thread member counts", "guild_id", guildID, "error", err)
+		return
+	}
 
-		if err != nil {
-			b.Log.Error("Failed to marshal thread member counts", "guild_id", guildID, "error", err)
-			continue
-		}
-
-		if err := b.S3.SaveThreadMemberCounts(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
-			b.Log.Error("Failed to save thread member counts", "guild_id", guildID, "error", err)
-		} else {
-			b.Log.Info("Saved thread member counts", "guild_id", guildID)
-		}
+	if err := b.S3.SaveThreadMemberCounts(context.Background(), fmt.Sprintf("%d", guildID), data); err != nil {
+		b.Log.Error("Failed to save thread member counts", "guild_id", guildID, "error", err)
+	} else {
+		b.Log.Info("Saved thread member counts", "guild_id", guildID)
 	}
 }
 
@@ -717,18 +638,7 @@ func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID
 	cache.prune(time.Now())
 	b.mu.Unlock()
 	b.Log.Info("Finished refreshing thread member counts", "guild_id", guildID, "fetched", fetched, "failed", len(toFetch)-fetched)
-
-	ctx := context.Background()
-	b.mu.Lock()
-	data, err := json.Marshal(b.memberCounts[guildID])
-	b.mu.Unlock()
-	if err != nil {
-		b.Log.Error("Failed to marshal thread member counts", "guild_id", guildID, "error", err)
-		return
-	}
-	if err := b.S3.SaveThreadMemberCounts(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
-		b.Log.Error("Failed to save thread member counts", "guild_id", guildID, "error", err)
-	}
+	b.saveMemberCountsForGuild(guildID)
 }
 
 func (b *Bot) countThreadMembers(threadID snowflake.ID) int {

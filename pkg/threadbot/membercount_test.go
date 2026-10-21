@@ -11,19 +11,28 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/testutil"
 )
 
-// fakeThreadAPI serves the two Discord endpoints the thread embeds use:
-// active guild threads, and List Thread Members.
+// fakeThreadAPI serves the Discord endpoints the thread lists use: active
+// guild threads, List Thread Members, and interaction follow-ups.
 type fakeThreadAPI struct {
-	mu      sync.Mutex
-	threads []map[string]any
-	members map[string]int // thread ID -> exact member count; -1 fails with 403
-	fetches map[string]int // thread ID -> List Thread Members calls
+	mu         sync.Mutex
+	threads    []map[string]any
+	members    map[string]int          // thread ID -> exact member count; -1 fails with 403
+	fetches    map[string]int          // thread ID -> List Thread Members calls
+	failActive bool                    // Get Active Guild Threads answers 500
+	followups  []discord.MessageCreate // interaction follow-ups sent
+}
+
+func (f *fakeThreadAPI) sentFollowups() []discord.MessageCreate {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]discord.MessageCreate(nil), f.followups...)
 }
 
 func (f *fakeThreadAPI) addThread(id string, memberCount, exact int) {
@@ -35,6 +44,17 @@ func (f *fakeThreadAPI) addThread(id string, memberCount, exact int) {
 		"thread_metadata": map[string]any{"archived": false},
 	})
 	f.members[id] = exact
+}
+
+// setField overrides a field of an added thread, as Discord would return it.
+func (f *fakeThreadAPI) setField(id, key string, value any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, t := range f.threads {
+		if t["id"] == id {
+			t[key] = value
+		}
+	}
 }
 
 func (f *fakeThreadAPI) fetchCount(id string) int {
@@ -50,7 +70,21 @@ func (f *fakeThreadAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/threads/active"):
+		if f.failActive {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"message":"Internal Server Error","code":0}`))
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"threads": f.threads, "members": []any{}})
+	case r.Method == http.MethodPost && parts[0] == "webhooks":
+		var m discord.MessageCreate
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		f.followups = append(f.followups, m)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "888", "channel_id": "500", "content": m.Content,
+			"author":    map[string]any{"id": "1", "username": "threadbot", "bot": true},
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
 	case len(parts) >= 3 && parts[len(parts)-1] == "thread-members":
 		id := parts[len(parts)-2]
 		f.fetches[id]++
@@ -70,7 +104,7 @@ func (f *fakeThreadAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// TestThreadEmbedFetchesNewAndUncachedThreads drives buildAllThreadsEmbed
+// TestThreadEmbedFetchesNewAndUncachedThreads drives buildThreadsEmbed
 // against a fake API: threads at the member_count cap with no usable cached
 // count are fetched on first display, without waiting for any refresh window.
 func TestThreadEmbedFetchesNewAndUncachedThreads(t *testing.T) {
@@ -90,9 +124,9 @@ func TestThreadEmbedFetchesNewAndUncachedThreads(t *testing.T) {
 
 	desc := func() string {
 		t.Helper()
-		e := b.buildAllThreadsEmbed(guildID)
-		if e == nil {
-			t.Fatal("embed is nil")
+		e, err := b.buildThreadsEmbed(guildID, 0)
+		if e == nil || err != nil {
+			t.Fatalf("embed = %v, %v", e, err)
 		}
 		return e.Description
 	}
