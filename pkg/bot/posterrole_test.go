@@ -381,8 +381,11 @@ func newPosterTestBot(t *testing.T, threshold int) (*Bot, *roleAPI, *testutil.Fa
 		Fetched:  make(map[string]bool),
 	}
 	// Messages are posted in channel 500 and searches find them in channel 5.
-	st.parentCache.Store(snowflake.ID(500), channelParents{})
-	st.parentCache.Store(snowflake.ID(5), channelParents{})
+	// Both are cached with no parent, so resolving their parents makes no
+	// REST call.
+	for _, id := range []snowflake.ID{500, 5} {
+		b.Client.Caches.AddChannel(testChannel(t, fmt.Sprintf(`{"id":"%d","type":0,"guild_id":"%d","name":"chat"}`, id, roleTestGuild)))
+	}
 	b.posterRole.set(roleTestGuild, st)
 	return b, api, fakeS3, st
 }
