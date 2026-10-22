@@ -3,6 +3,7 @@ package bot
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -655,5 +656,31 @@ func TestTimePtrNotNil(t *testing.T) {
 	}
 	if !p.Equal(now) {
 		t.Errorf("timePtr returned %v, want %v", *p, now)
+	}
+}
+
+// TestMessageDeleteLinksWhereItWas: a deletion's entry links where the
+// message was, cached or not.
+func TestMessageDeleteLinksWhereItWas(t *testing.T) {
+	b, stub := newEventLogBot(t)
+	cached := discord.Message{ID: 40, ChannelID: 20, Content: "gone", Author: discord.User{ID: 31, Username: "bob"}}
+	for _, msg := range []discord.Message{cached, {}} {
+		stub.reset()
+		b.onMessageDelete(&events.GuildMessageDelete{GenericGuildMessage: &events.GenericGuildMessage{
+			GuildID: 10, ChannelID: 20, MessageID: 40, Message: msg,
+		}})
+		posts := stub.bodies("POST /channels/15/messages")
+		if len(posts) != 1 {
+			t.Fatalf("made %d event log posts, want 1", len(posts))
+		}
+		var post discord.MessageCreate
+		if err := json.Unmarshal([]byte(posts[0]), &post); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.ContainsFunc(post.Embeds[0].Fields, func(f discord.EmbedField) bool {
+			return f.Name == "Link" && f.Value == "[Jump to where it was](https://discord.com/channels/10/20/40)"
+		}) {
+			t.Errorf("entry for %q has no link to where it was: %+v", msg.Content, post.Embeds[0].Fields)
+		}
 	}
 }
