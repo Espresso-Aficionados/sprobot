@@ -22,14 +22,14 @@ import (
 
 const editUserID = "9"
 
-type response struct {
+type editResponse struct {
 	kind discord.InteractionResponseType
 	data discord.InteractionResponseData
 }
 
-func respondTo(responses chan<- response) events.InteractionResponderFunc {
+func respondTo(responses chan<- editResponse) events.InteractionResponderFunc {
 	return func(kind discord.InteractionResponseType, data discord.InteractionResponseData, _ ...rest.RequestOpt) error {
-		responses <- response{kind, data}
+		responses <- editResponse{kind, data}
 		return nil
 	}
 }
@@ -47,7 +47,7 @@ func newEditBot(t *testing.T) (*Bot, *hookedS3) {
 	return b, h
 }
 
-func editCommand(t *testing.T, responses chan<- response) *events.ApplicationCommandInteractionCreate {
+func editCommand(t *testing.T, responses chan<- editResponse) *events.ApplicationCommandInteractionCreate {
 	t.Helper()
 	var i discord.ApplicationCommandInteraction
 	if err := json.Unmarshal(interactionJSON(discord.InteractionTypeApplicationCommand, `{"id":"3","name":"editprofile","type":1}`), &i); err != nil {
@@ -62,7 +62,7 @@ func TestEditShowsNoFormWhenProfileUnreadable(t *testing.T) {
 	h.put(profileObject(tmpl, editUserID), `{"Machine":"saved"}`)
 	h.setHook(failGets(profileObject(tmpl, editUserID)))
 
-	responses := make(chan response, 2)
+	responses := make(chan editResponse, 2)
 	b.handleEdit(editCommand(t, responses), tmpl)
 
 	r := <-responses
@@ -74,7 +74,7 @@ func TestEditShowsNoFormWhenProfileUnreadable(t *testing.T) {
 
 func TestEditShowsFormForNewProfile(t *testing.T) {
 	b, _ := newEditBot(t)
-	responses := make(chan response, 2)
+	responses := make(chan editResponse, 2)
 	b.handleEdit(editCommand(t, responses), sprobot.ProfileTemplate)
 
 	if r := <-responses; r.kind != discord.InteractionResponseTypeModal {
@@ -122,7 +122,7 @@ func TestEditSubmitKeepsProfileWhenUnreadable(t *testing.T) {
 	if err := json.Unmarshal(interactionJSON(discord.InteractionTypeModalSubmit, `{"custom_id":"edit_profile","components":[]}`), &i); err != nil {
 		t.Fatalf("decoding interaction: %v", err)
 	}
-	responses := make(chan response, 2)
+	responses := make(chan editResponse, 2)
 	b.handleEditModalSubmit(&events.ModalSubmitInteractionCreate{ModalSubmitInteraction: i, Respond: respondTo(responses)}, tmpl)
 
 	if got, _ := h.object(path); got != saved {

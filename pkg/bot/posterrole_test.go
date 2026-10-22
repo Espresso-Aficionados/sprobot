@@ -2,9 +2,18 @@ package bot
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/testutil"
 )
 
 func TestPosterRoleSettingsJSONRoundTrip(t *testing.T) {
@@ -79,7 +88,7 @@ func TestIsSkippedEmpty(t *testing.T) {
 	}
 }
 
-func TestPosterRoleProgressMath(t *testing.T) {
+func TestThresholdProgress(t *testing.T) {
 	tests := []struct {
 		name          string
 		count         int
@@ -92,18 +101,11 @@ func TestPosterRoleProgressMath(t *testing.T) {
 		{"at threshold", 100, 100, 100, 0},
 		{"over threshold", 110, 100, 110, 0},
 		{"low count", 30, 100, 30, 70},
+		{"no threshold", 30, 0, 0, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pct := 0
-			if tt.threshold > 0 {
-				pct = tt.count * 100 / tt.threshold
-			}
-			remaining := tt.threshold - tt.count
-			if remaining < 0 {
-				remaining = 0
-			}
-
+			pct, remaining := thresholdProgress(tt.count, tt.threshold)
 			if pct != tt.wantPct {
 				t.Errorf("pct = %d, want %d", pct, tt.wantPct)
 			}
@@ -363,4 +365,390 @@ func TestTopChannels(t *testing.T) {
 			t.Errorf("top[1].ChannelID = %d, want 300", top[1].ChannelID)
 		}
 	})
+}
+
+const posterTestRole snowflake.ID = 300
+
+// newPosterTestBot returns a test bot whose poster role needs threshold posts.
+// The role is a plain one in the role cache.
+func newPosterTestBot(t *testing.T, threshold int) (*Bot, *roleAPI, *testutil.FakeS3, *posterRoleState) {
+	t.Helper()
+	b, api, fakeS3 := newRoleTestBot(t)
+	addTestRole(b, discord.Role{ID: posterTestRole, Position: 5, Permissions: discord.PermissionSendMessages})
+	st := &posterRoleState{
+		Settings: posterRoleSettings{RoleID: posterTestRole, Threshold: threshold},
+		Counts:   make(map[string]int),
+		Fetched:  make(map[string]bool),
+	}
+	// Messages are posted in channel 500 and searches find them in channel 5.
+	st.parentCache.Store(snowflake.ID(500), channelParents{})
+	st.parentCache.Store(snowflake.ID(5), channelParents{})
+	b.posterRole.set(roleTestGuild, st)
+	return b, api, fakeS3, st
+}
+
+func searchCall(call string) bool { return strings.HasSuffix(call, "/messages/search") }
+
+// searchHits answers a search with total results, all in channel 5.
+func searchHits(total int) (int, string) {
+	return http.StatusOK, fmt.Sprintf(`{"total_results":%d,"messages":[[{"channel_id":"5"}]]}`, total)
+}
+
+func posterCount(st *posterRoleState, userID snowflake.ID) (int, bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	n, ok := st.Counts[userID.String()]
+	return n, ok
+}
+
+func TestCountMessageClaimsOneSearchPerUser(t *testing.T) {
+	st := &posterRoleState{Counts: map[string]int{}, Fetched: map[string]bool{}}
+	now := time.Now()
+	s := st.countMessage(20, now)
+	if s == nil {
+		t.Fatal("first message from an untracked user didn't start a search")
+	}
+	if st.countMessage(20, now) != nil || st.countMessage(20, now) != nil {
+		t.Error("a second search started while one was in flight")
+	}
+	if st.countMessage(21, now) == nil {
+		t.Error("another user's search was held off")
+	}
+
+	// The two messages counted during the search are kept on top of it.
+	if !st.finishSearch(20, s, 10) {
+		t.Fatal("search result dropped")
+	}
+	if got := st.Counts["20"]; got != 12 {
+		t.Errorf("count = %d, want 10 searched + 2 counted meanwhile", got)
+	}
+	if st.countMessage(20, now) != nil {
+		t.Error("searched again after the history was fetched")
+	}
+	if got := st.Counts["20"]; got != 13 {
+		t.Errorf("count = %d, want 13", got)
+	}
+}
+
+func TestFinishSearchDropsResultAfterClearOrBan(t *testing.T) {
+	now := time.Now()
+
+	st := &posterRoleState{Counts: map[string]int{}, Fetched: map[string]bool{}}
+	old := st.countMessage(20, now)
+	st.clearTracking(20)
+	// A message after the clear starts a fresh search.
+	fresh := st.countMessage(20, now)
+	if fresh == nil {
+		t.Fatal("no search after tracking was cleared")
+	}
+	if st.finishSearch(20, old, 500) {
+		t.Error("a search from before the clear was recorded")
+	}
+	if st.Counts["20"] != 1 || st.Fetched["20"] {
+		t.Errorf("stale search changed tracking: count %d, fetched %v", st.Counts["20"], st.Fetched["20"])
+	}
+	if !st.finishSearch(20, fresh, 7) || st.Counts["20"] != 7 {
+		t.Errorf("fresh search not recorded: count %d", st.Counts["20"])
+	}
+
+	st = &posterRoleState{Counts: map[string]int{}, Fetched: map[string]bool{}}
+	s := st.countMessage(30, now)
+	st.Settings.BlacklistedUsers = []snowflake.ID{30}
+	if st.finishSearch(30, s, 500) || st.Fetched["30"] {
+		t.Error("search recorded for a user banned while it ran")
+	}
+}
+
+func TestFailSearchHoldsOffTheNextOne(t *testing.T) {
+	st := &posterRoleState{Counts: map[string]int{}, Fetched: map[string]bool{}}
+	now := time.Now()
+	st.failSearch(20, st.countMessage(20, now), now)
+	if st.countMessage(20, now.Add(time.Minute)) != nil {
+		t.Error("searched again right after a failure")
+	}
+	if st.countMessage(20, now.Add(posterSearchRetry)) == nil {
+		t.Error("no search once the retry wait ran out")
+	}
+}
+
+func TestGrantDue(t *testing.T) {
+	now := time.Now()
+	st := &posterRoleState{
+		Settings: posterRoleSettings{RoleID: posterTestRole, Threshold: 10},
+		Counts:   map[string]int{"20": 10, "21": 9, "22": 50, "23": 50},
+		Fetched:  map[string]bool{"20": true, "21": true, "23": true},
+	}
+	st.Settings.BlacklistedUsers = []snowflake.ID{23}
+	for _, tt := range []struct {
+		user snowflake.ID
+		want bool
+	}{
+		{20, true},  // at the threshold
+		{21, false}, // below it
+		{22, false}, // history not fetched yet
+		{23, false}, // banned
+	} {
+		if _, _, due := st.grantDue(tt.user, now); due != tt.want {
+			t.Errorf("user %d: due = %v, want %v", tt.user, due, tt.want)
+		}
+	}
+	st.grantRetry.fail(20, now, roleGrantRetry)
+	if _, _, due := st.grantDue(20, now); due {
+		t.Error("due while a failed grant is holding off")
+	}
+}
+
+// Two quick messages from an untracked user used to run two searches and add
+// both results.
+func TestCheckPosterRoleRunsOneSearchPerUser(t *testing.T) {
+	b, api, _, st := newPosterTestBot(t, 100)
+	release := make(chan struct{})
+	var searches atomic.Int32
+	api.setRespond(func(call string) (int, string) {
+		if searchCall(call) {
+			if searches.Add(1) == 1 {
+				<-release
+			}
+			return searchHits(10)
+		}
+		return http.StatusNoContent, ""
+	})
+
+	done := make(chan struct{})
+	go func() {
+		b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+		close(done)
+	}()
+	waitFor(t, "the first search", func() bool { return searches.Load() == 1 })
+	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	close(release)
+	<-done
+
+	if n := searches.Load(); n != 1 {
+		t.Errorf("%d searches, want 1", n)
+	}
+	if n, _ := posterCount(st, 20); n != 12 {
+		t.Errorf("count = %d, want 10 searched + 2 counted meanwhile", n)
+	}
+}
+
+// marketBan is /config market ban <user>.
+func marketBan(userID snowflake.ID) string {
+	return fmt.Sprintf(`[{"name":"market","type":2,"options":[{"name":"ban","type":1,"options":[{"name":"user","type":6,"value":"%d"},{"name":"reason","type":3,"value":"scam"}]}]}]`, userID)
+}
+
+func banEvent(t *testing.T, userID snowflake.ID) (*events.ApplicationCommandInteractionCreate, <-chan discord.MessageCreate) {
+	resolved := discord.ResolvedData{Users: map[snowflake.ID]discord.User{userID: {ID: userID, Username: "seller"}}}
+	return roleCommand(t, roleTestOwner, nil, marketBan(userID), resolved)
+}
+
+// A market ban that lands while the history search runs must keep the user
+// from getting the role when the search comes back over the threshold.
+func TestCheckPosterRoleDropsSearchAfterBan(t *testing.T) {
+	b, api, _, st := newPosterTestBot(t, 100)
+	release := make(chan struct{})
+	var searches atomic.Int32
+	api.setRespond(func(call string) (int, string) {
+		if searchCall(call) {
+			searches.Add(1)
+			<-release
+			return searchHits(500)
+		}
+		return http.StatusNoContent, ""
+	})
+
+	done := make(chan struct{})
+	go func() {
+		b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+		close(done)
+	}()
+	waitFor(t, "the search", func() bool { return searches.Load() == 1 })
+	e, responses := banEvent(t, 20)
+	b.handleMarketConfig(e)
+	response(t, responses)
+	close(release)
+	<-done
+
+	if n := api.count(roleCall("PUT", 20, posterTestRole)); n != 0 {
+		t.Errorf("poster role granted %d times to a user banned during the search", n)
+	}
+	if n, ok := posterCount(st, 20); ok {
+		t.Errorf("tracking rewritten after the ban: count %d", n)
+	}
+}
+
+// A ban that lands while AddMemberRole is in flight gets the role revoked.
+func TestPosterRoleRevokedWhenBanLandsDuringGrant(t *testing.T) {
+	b, api, _, st := newPosterTestBot(t, 100)
+	st.Counts["20"] = 150
+	st.Fetched["20"] = true
+	api.setRespond(func(call string) (int, string) {
+		if call == roleCall("PUT", 20, posterTestRole) {
+			st.mu.Lock()
+			st.Settings.BlacklistedUsers = append(st.Settings.BlacklistedUsers, 20)
+			st.mu.Unlock()
+		}
+		return http.StatusNoContent, ""
+	})
+
+	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+
+	if n := api.count(roleCall("PUT", 20, posterTestRole)); n != 1 {
+		t.Fatalf("%d grants, want 1", n)
+	}
+	if n := api.count(roleCall("DELETE", 20, posterTestRole)); n != 1 {
+		t.Errorf("%d revokes after a ban landed during the grant, want 1", n)
+	}
+}
+
+func TestPosterRoleGrantBacksOffAfterFailure(t *testing.T) {
+	b, api, _, st := newPosterTestBot(t, 100)
+	st.Counts["20"] = 150
+	st.Fetched["20"] = true
+	api.setRespond(func(string) (int, string) {
+		return restError(http.StatusForbidden, 50013, "Missing Permissions")
+	})
+
+	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	if n := api.count(roleCall("PUT", 20, posterTestRole)); n != 1 {
+		t.Errorf("%d grant attempts, want 1", n)
+	}
+}
+
+func TestPosterRoleSearchBacksOffWhileIndexing(t *testing.T) {
+	b, api, _, st := newPosterTestBot(t, 100)
+	api.setRespond(func(call string) (int, string) {
+		if searchCall(call) {
+			return http.StatusAccepted, `{"retry_after":5}`
+		}
+		return http.StatusNoContent, ""
+	})
+
+	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	if n := api.countSuffix("/messages/search"); n != 1 {
+		t.Errorf("%d searches while the index builds, want 1", n)
+	}
+	if n, _ := posterCount(st, 20); n != 2 {
+		t.Errorf("count = %d, want both messages counted", n)
+	}
+}
+
+// The poster role is checked again at grant time, in case it was edited into
+// a moderator role after it was configured.
+func TestPosterRoleRefusesUngrantableRole(t *testing.T) {
+	b, api, _, st := newPosterTestBot(t, 100)
+	addTestRole(b, discord.Role{ID: posterTestRole, Position: 5, Permissions: discord.PermissionManageRoles})
+	st.Counts["20"] = 150
+	st.Fetched["20"] = true
+
+	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	if n := api.count(roleCall("PUT", 20, posterTestRole)); n != 0 {
+		t.Errorf("moderator role granted %d times", n)
+	}
+}
+
+// A failed save used to leave the ban in memory, so the retry answered
+// "already banned" without removing the role or posting to the mod log.
+func TestMarketBanRollsBackWhenSaveFails(t *testing.T) {
+	b, api, fakeS3, st := newPosterTestBot(t, 100)
+	key := fmt.Sprintf("/test-bucket/posterroles/%d.json", roleTestGuild)
+	fakeS3.Mu.Lock()
+	fakeS3.Fail[key] = http.StatusForbidden
+	fakeS3.Mu.Unlock()
+
+	e, responses := banEvent(t, 20)
+	b.handleMarketConfig(e)
+	if got := response(t, responses).Content; got != "Failed to save ban." {
+		t.Errorf("response = %q", got)
+	}
+	if st.Settings.isUserBlacklisted(20) {
+		t.Error("ban kept in memory after the save failed")
+	}
+
+	fakeS3.Mu.Lock()
+	delete(fakeS3.Fail, key)
+	fakeS3.Mu.Unlock()
+	e, responses = banEvent(t, 20)
+	b.handleMarketConfig(e)
+	if got := response(t, responses).Content; !strings.Contains(got, "has been banned") {
+		t.Errorf("retry response = %q", got)
+	}
+	if !st.Settings.isUserBlacklisted(20) {
+		t.Error("retry didn't ban")
+	}
+	if n := api.count(roleCall("DELETE", 20, posterTestRole)); n != 1 {
+		t.Errorf("%d role removals, want 1", n)
+	}
+}
+
+func TestMarketBanOfBannedUserStillClearsTrackingAndRole(t *testing.T) {
+	b, api, _, st := newPosterTestBot(t, 100)
+	st.Settings.BlacklistedUsers = []snowflake.ID{20}
+	st.Counts["20"] = 5
+
+	e, responses := banEvent(t, 20)
+	b.handleMarketConfig(e)
+	if got := response(t, responses).Content; !strings.Contains(got, "already banned") {
+		t.Errorf("response = %q", got)
+	}
+	if _, ok := posterCount(st, 20); ok {
+		t.Error("tracking kept for an already banned user")
+	}
+	if n := api.count(roleCall("DELETE", 20, posterTestRole)); n != 1 {
+		t.Errorf("%d role removals, want 1", n)
+	}
+}
+
+func TestMarketConfigRejectsUngrantableRole(t *testing.T) {
+	b, _, _, st := newPosterTestBot(t, 100)
+	target := discord.Role{ID: 301, GuildID: roleTestGuild, Position: 5, Permissions: discord.PermissionMentionEveryone}
+	opts := `[{"name":"market","type":2,"options":[{"name":"config","type":1,"options":[{"name":"role","type":8,"value":"301"},{"name":"threshold","type":4,"value":5}]}]}]`
+	e, responses := roleCommand(t, roleTestOwner, nil, opts, resolvedRole(target))
+	b.handleMarketConfig(e)
+	if got := response(t, responses).Content; !strings.Contains(got, "moderator permissions") {
+		t.Errorf("response = %q", got)
+	}
+	if st.Settings.RoleID != posterTestRole || st.Settings.Threshold != 100 {
+		t.Errorf("settings changed to %+v", st.Settings)
+	}
+}
+
+func TestMarketProgressEmbed(t *testing.T) {
+	fieldValue := func(e discord.Embed, name string) (string, bool) {
+		for _, f := range e.Fields {
+			if f.Name == name {
+				return f.Value, true
+			}
+		}
+		return "", false
+	}
+
+	// A failed search must not read as zero posts.
+	failed := marketProgress{Username: "seller", Threshold: 100, MemberKnown: true}.embed()
+	if v, _ := fieldValue(failed, "Total Posts"); !strings.Contains(v, "Couldn't fetch post history") {
+		t.Errorf("Total Posts = %q after a failed search", v)
+	}
+	if v, ok := fieldValue(failed, "Progress"); ok {
+		t.Errorf("Progress shown after a failed search: %q", v)
+	}
+
+	ok := marketProgress{Username: "seller", Threshold: 100, Searched: true, Count: 30,
+		Top: []channelCount{{ChannelID: 5, Count: 3}}}.embed()
+	if v, _ := fieldValue(ok, "Total Posts"); v != "30" {
+		t.Errorf("Total Posts = %q, want 30", v)
+	}
+	if v, _ := fieldValue(ok, "Progress"); v != "30 / 100 (30%) — 70 more needed" {
+		t.Errorf("Progress = %q", v)
+	}
+	if v, _ := fieldValue(ok, "Recent Activity (last 25 posts)"); v != "<#5>: 3" {
+		t.Errorf("Recent Activity = %q", v)
+	}
+
+	has := marketProgress{Username: "seller", Threshold: 100, Searched: true, Count: 300, MemberKnown: true, HasRole: true}.embed()
+	if v, ok := fieldValue(has, "Progress"); ok {
+		t.Errorf("Progress shown for a user with the role: %q", v)
+	}
 }

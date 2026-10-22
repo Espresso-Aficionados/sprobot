@@ -1,9 +1,15 @@
 package bot
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 )
 
@@ -45,28 +51,54 @@ func TestFormatDurationDays(t *testing.T) {
 
 // --- tempRoleDurations ---
 
-func TestTempRoleDurationsCompleteness(t *testing.T) {
-	expected := map[string]time.Duration{
-		"1h":  time.Hour,
-		"6h":  6 * time.Hour,
-		"12h": 12 * time.Hour,
-		"1d":  24 * time.Hour,
-		"3d":  3 * 24 * time.Hour,
-		"7d":  7 * 24 * time.Hour,
-		"14d": 14 * 24 * time.Hour,
-		"30d": 30 * 24 * time.Hour,
+// Every duration /config temprole add offers must be one the handler accepts,
+// and be labelled with the duration it sets.
+func TestTempRoleDurationChoicesAreAccepted(t *testing.T) {
+	b, api, _ := newRoleTestBot(t)
+	b.TestGuildIDsOverride = []snowflake.ID{roleTestGuild}
+	api.setRespond(func(string) (int, string) { return http.StatusOK, "[]" })
+	if err := b.registerAllCommands(); err != nil {
+		t.Fatal(err)
 	}
-	if len(tempRoleDurations) != len(expected) {
-		t.Fatalf("tempRoleDurations has %d entries, want %d", len(tempRoleDurations), len(expected))
+
+	type option struct {
+		Name    string   `json:"name"`
+		Options []option `json:"options"`
+		Choices []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"choices"`
 	}
-	for key, want := range expected {
-		got, ok := tempRoleDurations[key]
+	find := func(opts []option, name string) option {
+		t.Helper()
+		for _, o := range opts {
+			if o.Name == name {
+				return o
+			}
+		}
+		t.Fatalf("option %q not registered", name)
+		return option{}
+	}
+	var commands []option
+	api.mu.Lock()
+	body := api.bodies[fmt.Sprintf("PUT /applications/0/guilds/%d/commands", roleTestGuild)]
+	api.mu.Unlock()
+	if err := json.Unmarshal(body, &commands); err != nil {
+		t.Fatalf("decoding registered commands: %v", err)
+	}
+	add := find(find(find(commands, "config").Options, "temprole").Options, "add")
+	choices := find(add.Options, "duration").Choices
+	if len(choices) == 0 {
+		t.Fatal("no duration choices")
+	}
+	for _, c := range choices {
+		d, ok := tempRoleDurations[c.Value]
 		if !ok {
-			t.Errorf("missing key %q", key)
+			t.Errorf("choice %q (%s) is rejected as an invalid duration", c.Name, c.Value)
 			continue
 		}
-		if got != want {
-			t.Errorf("tempRoleDurations[%q] = %v, want %v", key, got, want)
+		if got := formatDuration(d); got != c.Name {
+			t.Errorf("choice %q sets %s", c.Name, got)
 		}
 	}
 }
@@ -147,278 +179,426 @@ func TestConfiguredRoleIDsEmpty(t *testing.T) {
 	}
 }
 
-// --- partitionExpired (extracted logic from processTempRoleExpiries) ---
+// --- tempRoleState ---
 
-func TestPartitionEntries(t *testing.T) {
+func timerUsers(entries []tempRoleEntry) []snowflake.ID {
+	var ids []snowflake.ID
+	for _, e := range entries {
+		ids = append(ids, e.UserID)
+	}
+	return ids
+}
+
+func TestTempRoleStateExpired(t *testing.T) {
 	now := time.Now()
-	entries := []tempRoleEntry{
-		{UserID: 1, RoleID: 10, ExpiryAt: now.Add(-time.Hour)},   // expired
-		{UserID: 2, RoleID: 20, ExpiryAt: now.Add(time.Hour)},    // remaining
-		{UserID: 3, RoleID: 30, ExpiryAt: now.Add(-time.Minute)}, // expired
-		{UserID: 4, RoleID: 40, ExpiryAt: now.Add(time.Minute)},  // remaining
-	}
+	st := &tempRoleState{Entries: []tempRoleEntry{
+		{UserID: 1, RoleID: 10, ExpiryAt: now.Add(-time.Hour)},
+		{UserID: 2, RoleID: 20, ExpiryAt: now.Add(time.Hour)},
+		{UserID: 3, RoleID: 30, ExpiryAt: now.Add(-time.Minute)},
+		{UserID: 4, RoleID: 40, ExpiryAt: now.Add(time.Minute)},
+	}}
 
-	var remaining, expired []tempRoleEntry
-	for _, entry := range entries {
-		if now.After(entry.ExpiryAt) {
-			expired = append(expired, entry)
-		} else {
-			remaining = append(remaining, entry)
-		}
+	if got := timerUsers(st.expired(now)); !slices.Equal(got, []snowflake.ID{1, 3}) {
+		t.Errorf("expired users = %v, want [1 3]", got)
 	}
-
-	if len(expired) != 2 {
-		t.Errorf("expired count = %d, want 2", len(expired))
+	if len(st.Entries) != 4 {
+		t.Errorf("expired removed entries from the state: %d left", len(st.Entries))
 	}
-	if len(remaining) != 2 {
-		t.Errorf("remaining count = %d, want 2", len(remaining))
-	}
-	if expired[0].UserID != 1 || expired[1].UserID != 3 {
-		t.Errorf("wrong expired entries: %+v", expired)
-	}
-	if remaining[0].UserID != 2 || remaining[1].UserID != 4 {
-		t.Errorf("wrong remaining entries: %+v", remaining)
+	if got := st.expired(now.Add(-2 * time.Hour)); len(got) != 0 {
+		t.Errorf("nothing has expired yet, got %v", timerUsers(got))
 	}
 }
 
-func TestPartitionEntriesAllExpired(t *testing.T) {
+func TestTempRoleStateTrackAndSet(t *testing.T) {
 	now := time.Now()
-	entries := []tempRoleEntry{
-		{UserID: 1, ExpiryAt: now.Add(-time.Hour)},
-		{UserID: 2, ExpiryAt: now.Add(-time.Minute)},
+	pending := tempRoleEntry{UserID: 10, RoleID: 100, ExpiryAt: now.Add(-time.Minute)} // expired, removal pending
+	st := &tempRoleState{Entries: []tempRoleEntry{
+		pending,
+		{UserID: 20, RoleID: 200, ExpiryAt: now.Add(time.Hour)},
+	}}
+
+	// A message from user 10 must not replace the timer whose role is being
+	// removed.
+	if st.track(tempRoleEntry{UserID: 10, RoleID: 100, ExpiryAt: now.Add(time.Hour)}, now) {
+		t.Error("track replaced an existing timer")
+	}
+	if !st.Entries[0].is(pending) {
+		t.Error("existing timer changed")
 	}
 
-	var remaining, expired []tempRoleEntry
-	for _, entry := range entries {
-		if now.After(entry.ExpiryAt) {
-			expired = append(expired, entry)
-		} else {
-			remaining = append(remaining, entry)
-		}
+	// /temprole resets it.
+	fresh := tempRoleEntry{UserID: 10, RoleID: 100, ExpiryAt: now.Add(2 * time.Hour)}
+	if replaced := st.set(fresh); len(replaced) != 1 || !replaced[0].is(pending) {
+		t.Errorf("set replaced %+v, want the pending timer", replaced)
+	}
+	if got := timerUsers(st.Entries); !slices.Equal(got, []snowflake.ID{20, 10}) {
+		t.Fatalf("users = %v, want [20 10]", got)
+	}
+	if !st.Entries[1].is(fresh) {
+		t.Errorf("reset timer = %+v, want %+v", st.Entries[1], fresh)
 	}
 
-	if len(expired) != 2 {
-		t.Errorf("expired count = %d, want 2", len(expired))
-	}
-	if len(remaining) != 0 {
-		t.Errorf("remaining count = %d, want 0", len(remaining))
+	if !st.track(tempRoleEntry{UserID: 10, RoleID: 300, ExpiryAt: fresh.ExpiryAt}, now) {
+		t.Error("a second role for the same user wasn't added")
 	}
 }
 
-func TestPartitionEntriesNoneExpired(t *testing.T) {
+// A failed /temprole grant puts back the timer it replaced rather than leave a
+// user who still holds the role with no timer at all.
+func TestTempRoleStateUndo(t *testing.T) {
 	now := time.Now()
-	entries := []tempRoleEntry{
-		{UserID: 1, ExpiryAt: now.Add(time.Hour)},
-		{UserID: 2, ExpiryAt: now.Add(time.Minute)},
+	old := tempRoleEntry{UserID: 10, RoleID: 100, ExpiryAt: now.Add(-time.Minute)}
+	st := &tempRoleState{Entries: []tempRoleEntry{old}}
+
+	fresh := tempRoleEntry{UserID: 10, RoleID: 100, ExpiryAt: now.Add(time.Hour)}
+	st.undo(fresh, st.set(fresh))
+	if len(st.Entries) != 1 || !st.Entries[0].is(old) {
+		t.Errorf("entries = %+v, want the old timer back", st.Entries)
 	}
 
-	var expired []tempRoleEntry
-	for _, entry := range entries {
-		if now.After(entry.ExpiryAt) {
-			expired = append(expired, entry)
-		}
+	// Without an earlier timer the failed one just goes.
+	other := tempRoleEntry{UserID: 20, RoleID: 100, ExpiryAt: now.Add(time.Hour)}
+	st.undo(other, st.set(other))
+	if got := timerUsers(st.Entries); !slices.Equal(got, []snowflake.ID{10}) {
+		t.Errorf("users = %v, want [10]", got)
 	}
 
-	if len(expired) != 0 {
-		t.Errorf("expired count = %d, want 0", len(expired))
+	// A timer another /temprole set meanwhile is left alone.
+	replaced := st.set(fresh)
+	newer := tempRoleEntry{UserID: 10, RoleID: 100, ExpiryAt: now.Add(2 * time.Hour)}
+	st.set(newer)
+	st.undo(fresh, replaced)
+	if len(st.Entries) != 1 || !st.Entries[0].is(newer) {
+		t.Errorf("entries = %+v, want only the newer timer", st.Entries)
 	}
 }
 
-// --- tempRoleState timer management (ensureTempRoleTimer logic) ---
+func TestTempRoleStateClearRole(t *testing.T) {
+	st := &tempRoleState{Entries: []tempRoleEntry{
+		{UserID: 1, RoleID: 100},
+		{UserID: 2, RoleID: 200},
+		{UserID: 3, RoleID: 100},
+	}}
+	if n := st.clearRole(100); n != 2 {
+		t.Errorf("cleared %d, want 2", n)
+	}
+	if got := timerUsers(st.Entries); !slices.Equal(got, []snowflake.ID{2}) {
+		t.Errorf("users left = %v, want [2]", got)
+	}
+	if n := st.clearRole(999); n != 0 {
+		t.Errorf("cleared %d for an unknown role", n)
+	}
+}
 
-func TestTempRoleStateAddTimer(t *testing.T) {
-	st := &tempRoleState{}
-	expiry := time.Now().Add(time.Hour)
-	st.Entries = append(st.Entries, tempRoleEntry{
-		GuildID: 1, UserID: 10, RoleID: 100, ExpiryAt: expiry,
+// finish matches on expiry too: a timer /temprole reset while the old one's
+// removal was in flight survives, and is handed back to be granted again.
+func TestTempRoleStateFinishKeepsResetTimer(t *testing.T) {
+	now := time.Now()
+	old := tempRoleEntry{UserID: 1, RoleID: 100, ExpiryAt: now.Add(-time.Minute)}
+	st := &tempRoleState{Entries: []tempRoleEntry{old, {UserID: 2, RoleID: 100, ExpiryAt: now.Add(-time.Minute)}}}
+	done := st.expired(now)
+	reset := tempRoleEntry{UserID: 1, RoleID: 100, ExpiryAt: now.Add(time.Hour)}
+	st.set(reset)
+
+	for _, d := range done {
+		got, extended := st.finish(d, now)
+		if want := d.UserID == 1; extended != want || (extended && !got.is(reset)) {
+			t.Errorf("finish(user %d) = %+v, %v", d.UserID, got, extended)
+		}
+	}
+	if len(st.Entries) != 1 || !st.Entries[0].is(reset) {
+		t.Errorf("entries = %+v, want only user 1's reset timer", st.Entries)
+	}
+}
+
+// A message sent before the expiry loop took the role away still lists it.
+// Handled late, it must not start a new timer; a later one may.
+func TestTempRoleStateTrackAfterRemoval(t *testing.T) {
+	removedAt := time.Now()
+	st := &tempRoleState{Entries: []tempRoleEntry{{UserID: 1, RoleID: 100, ExpiryAt: removedAt.Add(-time.Minute)}}}
+	st.finish(st.Entries[0], removedAt)
+
+	timer := tempRoleEntry{UserID: 1, RoleID: 100, ExpiryAt: removedAt.Add(time.Hour)}
+	if st.track(timer, removedAt.Add(-time.Second)) {
+		t.Error("a message sent before the removal started a timer")
+	}
+	if !st.track(tempRoleEntry{UserID: 2, RoleID: 100, ExpiryAt: timer.ExpiryAt}, removedAt.Add(-time.Second)) {
+		t.Error("another user's timer was refused")
+	}
+	if !st.track(timer, removedAt.Add(time.Second)) {
+		t.Error("the role granted again after the removal wasn't tracked")
+	}
+
+	// Removals are forgotten once no handler can still be running.
+	st.finish(tempRoleEntry{UserID: 3, RoleID: 100}, removedAt.Add(tempRoleRemovedTTL+time.Second))
+	if _, ok := st.removed[tempRoleKey{1, 100}]; ok {
+		t.Error("an old removal was kept")
+	}
+}
+
+// --- addedRoleIDs ---
+
+func TestAddedRoleIDs(t *testing.T) {
+	tests := []struct {
+		name        string
+		before, now []snowflake.ID
+		want        []snowflake.ID
+	}{
+		{"two added", []snowflake.ID{100, 200, 300}, []snowflake.ID{100, 200, 300, 400, 500}, []snowflake.ID{400, 500}},
+		{"no change", []snowflake.ID{100, 200}, []snowflake.ID{100, 200}, nil},
+		{"one removed", []snowflake.ID{100, 200, 300}, []snowflake.ID{100, 300}, nil},
+		{"removed and added", []snowflake.ID{100}, []snowflake.ID{200}, []snowflake.ID{200}},
+		{"no old roles", nil, []snowflake.ID{100}, []snowflake.ID{100}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := addedRoleIDs(tt.before, tt.now); !slices.Equal(got, tt.want) {
+				t.Errorf("addedRoleIDs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// --- expiry and grants against a fake Discord API ---
+
+const tempTestRole snowflake.ID = 400
+
+// newTempRoleTestBot returns a test bot with tempTestRole configured as a
+// one-hour temp role.
+func newTempRoleTestBot(t *testing.T) (*Bot, *roleAPI) {
+	t.Helper()
+	b, api, _ := newRoleTestBot(t)
+	addTestRole(b, discord.Role{ID: tempTestRole, Position: 5, Permissions: discord.PermissionSendMessages})
+	b.tempRoleConfig.set(roleTestGuild, &tempRoleConfigState{Roles: []tempRoleConfigEntry{{RoleID: tempTestRole, Duration: time.Hour}}})
+	b.tempRoles.set(roleTestGuild, &tempRoleState{})
+	return b, api
+}
+
+// An expired entry used to be dropped before RemoveMemberRole, so a failed
+// removal left the role on a user forever. It now stays until the removal
+// succeeds or Discord says the member or role is gone.
+func TestProcessTempRoleExpiriesRetriesFailedRemovals(t *testing.T) {
+	b, api := newTempRoleTestBot(t)
+	st := b.tempRoles.get(roleTestGuild)
+	past := time.Now().Add(-time.Minute)
+	for _, u := range []snowflake.ID{1, 2, 3, 4} {
+		st.Entries = append(st.Entries, tempRoleEntry{GuildID: roleTestGuild, UserID: u, RoleID: tempTestRole, ExpiryAt: past})
+	}
+	st.Entries = append(st.Entries, tempRoleEntry{GuildID: roleTestGuild, UserID: 5, RoleID: tempTestRole, ExpiryAt: time.Now().Add(time.Hour)})
+
+	api.setRespond(func(call string) (int, string) {
+		switch call {
+		case roleCall("DELETE", 2, tempTestRole):
+			return restError(http.StatusNotFound, 10007, "Unknown Member")
+		case roleCall("DELETE", 3, tempTestRole):
+			return restError(http.StatusNotFound, 10011, "Unknown Role")
+		case roleCall("DELETE", 4, tempTestRole):
+			return restError(http.StatusForbidden, 50013, "Missing Permissions")
+		}
+		return http.StatusNoContent, ""
 	})
+	b.processTempRoleExpiries()
 
-	if len(st.Entries) != 1 {
-		t.Fatalf("entries = %d, want 1", len(st.Entries))
+	if got := timerUsers(st.Entries); !slices.Equal(got, []snowflake.ID{4, 5}) {
+		t.Fatalf("users left = %v, want the failed removal (4) and the live timer (5)", got)
 	}
-	if st.Entries[0].UserID != 10 || st.Entries[0].RoleID != 100 {
-		t.Errorf("unexpected entry: %+v", st.Entries[0])
+	for _, u := range []snowflake.ID{1, 2, 3, 4} {
+		if n := api.count(roleCall("DELETE", u, tempTestRole)); n != 1 {
+			t.Errorf("user %d: %d removals, want 1", u, n)
+		}
+	}
+
+	// A message from user 4 meanwhile doesn't start a new timer.
+	if _, created := b.ensureTempRoleTimer(roleTestGuild, 4, tempTestRole, time.Now()); created {
+		t.Error("a message re-created the timer of a role being removed")
+	}
+
+	// The next tick retries, and the removal now succeeds.
+	api.setRespond(nil)
+	b.processTempRoleExpiries()
+	if got := timerUsers(st.Entries); !slices.Equal(got, []snowflake.ID{5}) {
+		t.Errorf("users left = %v, want [5]", got)
+	}
+	if n := api.count(roleCall("DELETE", 4, tempTestRole)); n != 2 {
+		t.Errorf("user 4: %d removals, want 2", n)
 	}
 }
 
-func TestTempRoleStateSkipExisting(t *testing.T) {
-	st := &tempRoleState{
-		Entries: []tempRoleEntry{
-			{GuildID: 1, UserID: 10, RoleID: 100, ExpiryAt: time.Now().Add(time.Hour)},
-		},
+// If /temprole extends a role while the expiry loop is removing it, the
+// extension wins: the loop skips a timer replaced before its removal and
+// grants the role again if the replacement lands during it.
+func TestProcessTempRoleExpiriesYieldsToExtension(t *testing.T) {
+	b, api := newTempRoleTestBot(t)
+	st := b.tempRoles.get(roleTestGuild)
+	past := time.Now().Add(-time.Minute)
+	st.Entries = []tempRoleEntry{
+		{GuildID: roleTestGuild, UserID: 20, RoleID: tempTestRole, ExpiryAt: past},
+		{GuildID: roleTestGuild, UserID: 21, RoleID: tempTestRole, ExpiryAt: past},
 	}
-
-	// Simulate the "skip if exists" logic from ensureTempRoleTimer(resetTimer=false)
-	exists := false
-	for _, entry := range st.Entries {
-		if entry.UserID == 10 && entry.RoleID == 100 {
-			exists = true
-			break
+	ext20 := tempRoleEntry{GuildID: roleTestGuild, UserID: 20, RoleID: tempTestRole, ExpiryAt: time.Now().Add(time.Hour)}
+	ext21 := tempRoleEntry{GuildID: roleTestGuild, UserID: 21, RoleID: tempTestRole, ExpiryAt: time.Now().Add(time.Hour)}
+	api.setRespond(func(call string) (int, string) {
+		if call == roleCall("DELETE", 20, tempTestRole) {
+			// Both extensions land while user 20's removal is in flight.
+			st.set(ext20)
+			st.set(ext21)
 		}
-	}
-	if !exists {
-		t.Error("expected existing timer to be found")
-	}
-}
-
-func TestTempRoleStateResetTimer(t *testing.T) {
-	originalExpiry := time.Now().Add(time.Hour)
-	st := &tempRoleState{
-		Entries: []tempRoleEntry{
-			{GuildID: 1, UserID: 10, RoleID: 100, ExpiryAt: originalExpiry},
-			{GuildID: 1, UserID: 20, RoleID: 200, ExpiryAt: originalExpiry},
-		},
-	}
-
-	// Simulate the reset logic from ensureTempRoleTimer(resetTimer=true)
-	filtered := st.Entries[:0]
-	for _, entry := range st.Entries {
-		if !(entry.UserID == 10 && entry.RoleID == 100) {
-			filtered = append(filtered, entry)
-		}
-	}
-	newExpiry := time.Now().Add(2 * time.Hour)
-	st.Entries = append(filtered, tempRoleEntry{
-		GuildID: 1, UserID: 10, RoleID: 100, ExpiryAt: newExpiry,
+		return http.StatusNoContent, ""
 	})
+	b.processTempRoleExpiries()
 
-	if len(st.Entries) != 2 {
-		t.Fatalf("entries = %d, want 2", len(st.Entries))
+	if n := api.count(roleCall("PUT", 20, tempTestRole)); n != 1 {
+		t.Errorf("user 20: %d re-grants, want 1", n)
 	}
-	// The other entry should be preserved
-	if st.Entries[0].UserID != 20 {
-		t.Errorf("first entry should be user 20, got %d", st.Entries[0].UserID)
+	if n := api.count(roleCall("DELETE", 21, tempTestRole)) + api.count(roleCall("PUT", 21, tempTestRole)); n != 0 {
+		t.Errorf("user 21: %d calls, want none", n)
 	}
-	// The reset entry should have the new expiry
-	if st.Entries[1].UserID != 10 {
-		t.Errorf("second entry should be user 10, got %d", st.Entries[1].UserID)
-	}
-	if !st.Entries[1].ExpiryAt.Equal(newExpiry) {
-		t.Errorf("expiry = %v, want %v", st.Entries[1].ExpiryAt, newExpiry)
+	if len(st.Entries) != 2 || !st.has(ext20) || !st.has(ext21) {
+		t.Errorf("entries = %+v, want both extensions", st.Entries)
 	}
 }
 
-// --- clearTimersForRole (logic from handleTempRoleConfigRemove) ---
+// A failed /temprole on a user whose expired role is still being removed
+// keeps that removal pending.
+func TestTempRoleFailedGrantKeepsPendingRemoval(t *testing.T) {
+	b, api := newTempRoleTestBot(t)
+	st := b.tempRoles.get(roleTestGuild)
+	pending := tempRoleEntry{GuildID: roleTestGuild, UserID: 20, RoleID: tempTestRole, ExpiryAt: time.Now().Add(-time.Minute)}
+	st.Entries = []tempRoleEntry{pending}
 
-func TestClearTimersForRole(t *testing.T) {
-	st := &tempRoleState{
-		Entries: []tempRoleEntry{
-			{UserID: 1, RoleID: 100},
-			{UserID: 2, RoleID: 200},
-			{UserID: 3, RoleID: 100},
-			{UserID: 4, RoleID: 300},
-		},
+	api.setRespond(func(string) (int, string) { return restError(http.StatusForbidden, 50013, "Missing Permissions") })
+	b.processTempRoleExpiries()
+	resolved := discord.ResolvedData{Users: map[snowflake.ID]discord.User{20: {ID: 20, Username: "member"}}}
+	e, responses := roleCommand(t, roleTestOwner, nil, tempRoleCommand(20, tempTestRole), resolved)
+	b.handleTempRole(e)
+	if got := response(t, responses).Content; got != "Failed to add role." {
+		t.Errorf("response = %q", got)
+	}
+	if len(st.Entries) != 1 || !st.Entries[0].is(pending) {
+		t.Fatalf("entries = %+v, want the pending removal", st.Entries)
 	}
 
-	var roleID snowflake.ID = 100
-	filtered := make([]tempRoleEntry, 0, len(st.Entries))
-	cleared := 0
-	for _, entry := range st.Entries {
-		if entry.RoleID == roleID {
-			cleared++
-			continue
-		}
-		filtered = append(filtered, entry)
+	api.setRespond(nil)
+	b.processTempRoleExpiries()
+	if len(st.Entries) != 0 {
+		t.Errorf("entries = %+v after the removal succeeded", st.Entries)
 	}
-	st.Entries = filtered
-
-	if cleared != 2 {
-		t.Errorf("cleared = %d, want 2", cleared)
-	}
-	if len(st.Entries) != 2 {
-		t.Fatalf("remaining = %d, want 2", len(st.Entries))
-	}
-	for _, entry := range st.Entries {
-		if entry.RoleID == 100 {
-			t.Error("role 100 should have been cleared")
-		}
+	if n := api.count(roleCall("DELETE", 20, tempTestRole)); n != 2 {
+		t.Errorf("%d removals, want 2", n)
 	}
 }
 
-func TestClearTimersForRoleNoneMatch(t *testing.T) {
-	st := &tempRoleState{
-		Entries: []tempRoleEntry{
-			{UserID: 1, RoleID: 200},
-			{UserID: 2, RoleID: 300},
-		},
+// A message sent just before the role expired, handled after it was removed,
+// doesn't start a new timer for a role the user no longer has.
+func TestStaleMessageDoesNotRestartTimer(t *testing.T) {
+	b, _ := newTempRoleTestBot(t)
+	st := b.tempRoles.get(roleTestGuild)
+	st.Entries = []tempRoleEntry{{GuildID: roleTestGuild, UserID: 20, RoleID: tempTestRole, ExpiryAt: time.Now().Add(-time.Minute)}}
+	msg := discord.Message{
+		Author:    discord.User{ID: 20},
+		Member:    &discord.Member{RoleIDs: []snowflake.ID{tempTestRole}},
+		CreatedAt: time.Now(),
 	}
+	b.processTempRoleExpiries()
 
-	var roleID snowflake.ID = 100
-	cleared := 0
-	for _, entry := range st.Entries {
-		if entry.RoleID == roleID {
-			cleared++
-		}
-	}
-
-	if cleared != 0 {
-		t.Errorf("cleared = %d, want 0", cleared)
+	b.checkTempRolesOnMessage(roleTestGuild, msg)
+	if len(st.Entries) != 0 {
+		t.Errorf("entries = %+v, want none", st.Entries)
 	}
 }
 
-// --- newRolesAdded (set-diff logic from checkTempRolesOnMemberUpdate) ---
-
-func TestNewRolesDetection(t *testing.T) {
-	oldRoleIDs := []snowflake.ID{100, 200, 300}
-	newRoleIDs := []snowflake.ID{100, 200, 300, 400, 500}
-
-	oldSet := make(map[snowflake.ID]struct{}, len(oldRoleIDs))
-	for _, id := range oldRoleIDs {
-		oldSet[id] = struct{}{}
+// Detection tracks a configured temp role whatever its permissions, and when
+// the role cache misses: the bot isn't granting it, and refusing a timer would
+// only make the role permanent.
+func TestEnsureTempRoleTimerTracksDetectedRoles(t *testing.T) {
+	b, _ := newTempRoleTestBot(t)
+	addTestRole(b, discord.Role{ID: tempTestRole, Position: 5, Permissions: discord.PermissionManageThreads})
+	if _, created := b.ensureTempRoleTimer(roleTestGuild, 1, tempTestRole, time.Now()); !created {
+		t.Error("no timer for a role with moderator permissions")
 	}
 
-	var added []snowflake.ID
-	for _, id := range newRoleIDs {
-		if _, wasOld := oldSet[id]; !wasOld {
-			added = append(added, id)
-		}
+	b.Client.Caches.RemoveRole(roleTestGuild, tempTestRole)
+	if _, created := b.ensureTempRoleTimer(roleTestGuild, 2, tempTestRole, time.Now()); !created {
+		t.Error("no timer for a role missing from the cache")
 	}
-
-	if len(added) != 2 {
-		t.Fatalf("added = %d, want 2", len(added))
-	}
-	if added[0] != 400 || added[1] != 500 {
-		t.Errorf("added = %v, want [400, 500]", added)
+	if got := timerUsers(b.tempRoles.get(roleTestGuild).Entries); !slices.Equal(got, []snowflake.ID{1, 2}) {
+		t.Errorf("users = %v, want [1 2]", got)
 	}
 }
 
-func TestNewRolesDetectionNoChange(t *testing.T) {
-	roleIDs := []snowflake.ID{100, 200}
+// tempRoleCommand is /temprole <user> <role>.
+func tempRoleCommand(userID, roleID snowflake.ID) string {
+	return fmt.Sprintf(`[{"name":"user","type":6,"value":"%d"},{"name":"role","type":3,"value":"%d"}]`, userID, roleID)
+}
 
-	oldSet := make(map[snowflake.ID]struct{}, len(roleIDs))
-	for _, id := range roleIDs {
-		oldSet[id] = struct{}{}
+func TestTempRoleRefusesRoleEditedIntoModeratorRole(t *testing.T) {
+	b, api := newTempRoleTestBot(t)
+	addTestRole(b, discord.Role{ID: tempTestRole, Position: 5, Permissions: discord.PermissionKickMembers})
+	resolved := discord.ResolvedData{Users: map[snowflake.ID]discord.User{20: {ID: 20, Username: "member"}}}
+	e, responses := roleCommand(t, roleTestOwner, nil, tempRoleCommand(20, tempTestRole), resolved)
+	b.handleTempRole(e)
+	if got := response(t, responses).Content; !strings.Contains(got, "moderator permissions") {
+		t.Errorf("response = %q", got)
 	}
-
-	var added []snowflake.ID
-	for _, id := range roleIDs {
-		if _, wasOld := oldSet[id]; !wasOld {
-			added = append(added, id)
-		}
-	}
-
-	if len(added) != 0 {
-		t.Errorf("added = %d, want 0", len(added))
+	if n := api.count(roleCall("PUT", 20, tempTestRole)); n != 0 {
+		t.Errorf("role granted %d times", n)
 	}
 }
 
-func TestNewRolesDetectionRoleRemoved(t *testing.T) {
-	oldRoleIDs := []snowflake.ID{100, 200, 300}
-	newRoleIDs := []snowflake.ID{100, 300} // 200 removed
-
-	oldSet := make(map[snowflake.ID]struct{}, len(oldRoleIDs))
-	for _, id := range oldRoleIDs {
-		oldSet[id] = struct{}{}
+// /temprole posts publicly; it must not ping everyone who has the role.
+func TestTempRoleAnnouncementPingsOnlyTheUser(t *testing.T) {
+	b, api := newTempRoleTestBot(t)
+	resolved := discord.ResolvedData{Users: map[snowflake.ID]discord.User{20: {ID: 20, Username: "member"}}}
+	e, responses := roleCommand(t, roleTestOwner, nil, tempRoleCommand(20, tempTestRole), resolved)
+	b.handleTempRole(e)
+	if n := api.count(roleCall("PUT", 20, tempTestRole)); n != 1 {
+		t.Fatalf("%d grants, want 1", n)
 	}
-
-	var added []snowflake.ID
-	for _, id := range newRoleIDs {
-		if _, wasOld := oldSet[id]; !wasOld {
-			added = append(added, id)
-		}
+	msg := response(t, responses)
+	if !strings.Contains(msg.Content, fmt.Sprintf("<@&%d>", tempTestRole)) {
+		t.Errorf("content = %q, want the role named", msg.Content)
 	}
+	am := msg.AllowedMentions
+	if am == nil {
+		t.Fatal("no allowed mentions: the role would be pinged")
+	}
+	if len(am.Parse) != 0 || len(am.Roles) != 0 || !slices.Equal(am.Users, []snowflake.ID{20}) {
+		t.Errorf("allowed mentions = %+v, want only user 20", *am)
+	}
+}
 
-	if len(added) != 0 {
-		t.Errorf("added = %d, want 0 (removals shouldn't appear as adds)", len(added))
+func TestTempRoleConfigAddRejectsModeratorRole(t *testing.T) {
+	b, _ := newTempRoleTestBot(t)
+	// Ban Members used to pass: only Manage Messages was refused.
+	target := discord.Role{ID: 401, GuildID: roleTestGuild, Position: 5, Permissions: discord.PermissionBanMembers}
+	opts := `[{"name":"temprole","type":2,"options":[{"name":"add","type":1,"options":[{"name":"role","type":8,"value":"401"},{"name":"duration","type":3,"value":"1d"}]}]}]`
+	e, responses := roleCommand(t, roleTestOwner, nil, opts, resolvedRole(target))
+	b.handleTempRoleConfig(e)
+	if got := response(t, responses).Content; !strings.Contains(got, "moderator permissions") {
+		t.Errorf("response = %q", got)
+	}
+	if _, ok := b.tempRoleConfig.get(roleTestGuild).find(401); ok {
+		t.Error("moderator role configured as a temp role")
+	}
+}
+
+// While a guild's saved timers failed to load, a timer must not be started in
+// state the expiry loop never visits: the role would never be removed.
+func TestEnsureTempRoleTimerRefusedWhenTimersNotLoaded(t *testing.T) {
+	b, _, _ := newRoleTestBot(t)
+	addTestRole(b, discord.Role{ID: tempTestRole, Position: 5, Permissions: discord.PermissionSendMessages})
+	b.tempRoleConfig.set(roleTestGuild, &tempRoleConfigState{Roles: []tempRoleConfigEntry{{RoleID: tempTestRole, Duration: time.Hour}}})
+	b.tempRoles.mu.Lock()
+	b.tempRoles.failed[roleTestGuild] = true
+	b.tempRoles.mu.Unlock()
+
+	if st := b.tempRoleStateFor(roleTestGuild); st != nil {
+		t.Fatalf("tempRoleStateFor = %+v, want nil while the load has failed", st)
+	}
+	if _, ok := b.ensureTempRoleTimer(roleTestGuild, 1, tempTestRole, time.Now()); ok {
+		t.Error("timer started although the guild's timers failed to load")
+	}
+	if b.tempRoles.get(roleTestGuild) != nil {
+		t.Error("a detached timer state was installed for a guild whose load failed")
 	}
 }
