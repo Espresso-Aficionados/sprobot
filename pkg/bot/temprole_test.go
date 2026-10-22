@@ -581,3 +581,24 @@ func TestTempRoleConfigAddRejectsModeratorRole(t *testing.T) {
 		t.Error("moderator role configured as a temp role")
 	}
 }
+
+// While a guild's saved timers failed to load, a timer must not be started in
+// state the expiry loop never visits: the role would never be removed.
+func TestEnsureTempRoleTimerRefusedWhenTimersNotLoaded(t *testing.T) {
+	b, _, _ := newRoleTestBot(t)
+	addTestRole(b, discord.Role{ID: tempTestRole, Position: 5, Permissions: discord.PermissionSendMessages})
+	b.tempRoleConfig.set(roleTestGuild, &tempRoleConfigState{Roles: []tempRoleConfigEntry{{RoleID: tempTestRole, Duration: time.Hour}}})
+	b.tempRoles.mu.Lock()
+	b.tempRoles.failed[roleTestGuild] = true
+	b.tempRoles.mu.Unlock()
+
+	if st := b.tempRoleStateFor(roleTestGuild); st != nil {
+		t.Fatalf("tempRoleStateFor = %+v, want nil while the load has failed", st)
+	}
+	if _, ok := b.ensureTempRoleTimer(roleTestGuild, 1, tempTestRole, time.Now()); ok {
+		t.Error("timer started although the guild's timers failed to load")
+	}
+	if b.tempRoles.get(roleTestGuild) != nil {
+		t.Error("a detached timer state was installed for a guild whose load failed")
+	}
+}

@@ -308,14 +308,11 @@ func (b *Bot) regrantTempRole(guildID snowflake.ID, entry tempRoleEntry) {
 
 // --- Automatic tracking ---
 
-// tempRoleStateFor returns guildID's timers, creating them if needed.
+// tempRoleStateFor returns guildID's timers, creating them if needed. It
+// returns nil while the guild's saved timers failed to load: a timer kept
+// anywhere else would never be visited by the expiry loop.
 func (b *Bot) tempRoleStateFor(guildID snowflake.ID) *tempRoleState {
-	st := b.tempRoles.get(guildID)
-	if st == nil {
-		st = &tempRoleState{}
-		b.tempRoles.set(guildID, st)
-	}
-	return st
+	return b.tempRoles.getOrCreate(guildID)
 }
 
 // ensureTempRoleTimer starts a timer for a configured temp role that userID
@@ -336,8 +333,13 @@ func (b *Bot) ensureTempRoleTimer(guildID snowflake.ID, userID snowflake.ID, rol
 		return time.Time{}, false
 	}
 
+	st := b.tempRoleStateFor(guildID)
+	if st == nil {
+		b.Log.Error("Temp role timers not loaded; not tracking role", "guild_id", guildID, "user_id", userID, "role_id", roleID)
+		return time.Time{}, false
+	}
 	expiry := time.Now().Add(cfgEntry.Duration)
-	if !b.tempRoleStateFor(guildID).track(tempRoleEntry{GuildID: guildID, UserID: userID, RoleID: roleID, ExpiryAt: expiry}, seen) {
+	if !st.track(tempRoleEntry{GuildID: guildID, UserID: userID, RoleID: roleID, ExpiryAt: expiry}, seen) {
 		return time.Time{}, false
 	}
 
@@ -463,6 +465,12 @@ func (b *Bot) handleTempRole(e *events.ApplicationCommandInteractionCreate) {
 	// Record the expiry BEFORE adding the role so the GuildMemberUpdate
 	// event handler sees the existing timer and skips its mod-log post.
 	st := b.tempRoleStateFor(*guildID)
+	if st == nil {
+		// The saved timers failed to load: a role granted now would never
+		// expire.
+		botutil.RespondEphemeral(e, "Temp roles are temporarily unavailable, so no role was given. Please try again in a few minutes.")
+		return
+	}
 	entry := tempRoleEntry{GuildID: *guildID, UserID: targetUser.ID, RoleID: roleID, ExpiryAt: time.Now().Add(cfgEntry.Duration)}
 	replaced := st.set(entry)
 	expiry := entry.ExpiryAt

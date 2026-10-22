@@ -101,10 +101,10 @@ func (b *Bot) handleAutoRoleConfig(e *events.ApplicationCommandInteractionCreate
 		return
 	}
 
-	st := b.autoRole.get(*guildID)
+	st := b.autoRole.getOrCreate(*guildID)
 	if st == nil {
-		st = &autoRoleState{}
-		b.autoRole.set(*guildID, st)
+		botutil.RespondEphemeral(e, "The autorole config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
+		return
 	}
 
 	subCmd := data.SubCommandName
