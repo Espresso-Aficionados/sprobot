@@ -32,7 +32,7 @@ type fakeThreadAPI struct {
 	pages         map[string]int // thread ID -> List Thread Members calls
 	withoutMember int            // List Thread Members calls without with_member=true
 
-	channelErrs map[string]int // channel ID -> JSON error code Get Channel fails with; others exist
+	channelErrs map[string]int // channel ID -> JSON error code Get Channel fails with (0: a 500); others exist
 }
 
 func newFakeThreadAPI() *fakeThreadAPI {
@@ -89,8 +89,11 @@ func (f *fakeThreadAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && len(parts) == 2 && parts[0] == "channels":
 		if code, ok := f.channelErrs[parts[1]]; ok {
 			status := http.StatusForbidden // 50001 Missing Access
-			if code == int(rest.JSONErrorCodeUnknownChannel) {
+			switch code {
+			case int(rest.JSONErrorCodeUnknownChannel):
 				status = http.StatusNotFound
+			case 0:
+				status = http.StatusInternalServerError
 			}
 			w.WriteHeader(status)
 			_ = json.NewEncoder(w).Encode(map[string]any{"message": "error", "code": code})

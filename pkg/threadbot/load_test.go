@@ -243,13 +243,13 @@ func running(b *Bot, guildID snowflake.ID) map[snowflake.ID]bool {
 	return out
 }
 
-// seedReminders stores enabled reminders for channels 500, 600 and 700 of
-// the dev guild and one for the prod guild.
+// seedReminders stores enabled reminders for channels 500, 600, 700 and 900
+// of the dev guild and one for the prod guild.
 func seedReminders(fake *testutil.FakeS3) {
 	r := func(guildID, channelID snowflake.ID) *threadReminder {
 		return &threadReminder{ChannelID: channelID, GuildID: guildID, Enabled: true, MinIdleMins: 30, MaxIdleMins: 720, MsgThreshold: 500, TimeThresholdMins: 720, Buffer: 5}
 	}
-	dev, _ := json.Marshal(map[string]*threadReminder{"500": r(devGuild, 500), "600": r(devGuild, 600), "700": r(devGuild, 700)})
+	dev, _ := json.Marshal(map[string]*threadReminder{"500": r(devGuild, 500), "600": r(devGuild, 600), "700": r(devGuild, 700), "900": r(devGuild, 900)})
 	prod, _ := json.Marshal(map[string]*threadReminder{"800": r(prodGuild, 800)})
 	fake.Mu.Lock()
 	defer fake.Mu.Unlock()
@@ -260,11 +260,13 @@ func seedReminders(fake *testutil.FakeS3) {
 // Reminders load for every allowed guild before the gateway opens, but loops
 // start only once the gateway says the bot is in the guild. Discord never
 // replays a channel delete, so then a reminder whose channel was deleted
-// meanwhile is dropped; one whose channel the bot can't see is kept.
+// meanwhile is dropped and the drop saved; one whose channel the bot can't
+// see, or that Get Channel fails on, is kept.
 func TestGuildReadyStartsLoopsAndDropsDeletedChannels(t *testing.T) {
 	api := newFakeThreadAPI()
 	api.channelErrs["600"] = int(rest.JSONErrorCodeUnknownChannel)
 	api.channelErrs["700"] = 50001 // Missing Access
+	api.channelErrs["900"] = 0     // 500 Internal Server Error
 	b := newThreadListBot(t, api)
 	fake := testutil.NewFakeS3()
 	srv := httptest.NewServer(fake)
@@ -274,13 +276,13 @@ func TestGuildReadyStartsLoopsAndDropsDeletedChannels(t *testing.T) {
 	defer b.stopAllReminderGoroutines()
 
 	b.loadReminders()
-	if got := running(b, devGuild); len(got) != 3 || got[500] || got[600] || got[700] {
-		t.Fatalf("after load: running = %v, want three loaded and none running", got)
+	if got := running(b, devGuild); len(got) != 4 || got[500] || got[600] || got[700] || got[900] {
+		t.Fatalf("after load: running = %v, want four loaded and none running", got)
 	}
 
 	b.onGuildReady(guildReady(devGuild))
-	if got := running(b, devGuild); len(got) != 2 || !got[500] || !got[700] {
-		t.Errorf("after GuildReady: running = %v, want 500 and 700 running and 600 dropped", got)
+	if got := running(b, devGuild); len(got) != 3 || !got[500] || !got[700] || !got[900] {
+		t.Errorf("after GuildReady: running = %v, want 500, 700 and 900 running and 600 dropped", got)
 	}
 	// No GuildReady for prod: this bot isn't in it.
 	if got := running(b, prodGuild); len(got) != 1 || got[800] {
@@ -289,8 +291,9 @@ func TestGuildReadyStartsLoopsAndDropsDeletedChannels(t *testing.T) {
 
 	restarted := newTestBot(t, b.S3)
 	restarted.loadReminders()
-	if got := running(restarted, devGuild); len(got) != 2 {
-		t.Errorf("stored reminders after restart = %v, want 500 and 700", got)
+	got := running(restarted, devGuild)
+	if _, ok := got[600]; ok || len(got) != 3 {
+		t.Errorf("stored reminders after restart = %v, want 500, 700 and 900", got)
 	}
 }
 
@@ -313,8 +316,8 @@ func TestLateLoadStartsReadyGuild(t *testing.T) {
 	fs.failGet.Store(false)
 	b.loadReminders()
 
-	if got := running(b, devGuild); len(got) != 2 || !got[500] || !got[700] {
-		t.Errorf("running = %v, want 500 and 700 running and 600 dropped", got)
+	if got := running(b, devGuild); len(got) != 3 || !got[500] || !got[700] || !got[900] {
+		t.Errorf("running = %v, want 500, 700 and 900 running and 600 dropped", got)
 	}
 }
 
