@@ -1,8 +1,11 @@
 package bot
 
 import (
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 
@@ -166,87 +169,78 @@ func TestAggregateCountsSingleUserMultipleDays(t *testing.T) {
 	}
 }
 
-func TestGuildPostCountsConcurrent(t *testing.T) {
-	gc := &guildPostCounts{
-		Counts:    make(map[string]map[string]int),
-		Usernames: make(map[string]string),
-	}
+func TestRecordCountsAndKeepsLatestUsername(t *testing.T) {
+	// Usernames is nil, as in data saved before usernames were stored.
+	gc := &guildPostCounts{Counts: make(map[string]map[string]int)}
 
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			gc.mu.Lock()
-			if gc.Counts["2026-02-16"] == nil {
-				gc.Counts["2026-02-16"] = make(map[string]int)
-			}
-			gc.Counts["2026-02-16"]["user1"]++
-			gc.Usernames["user1"] = "testuser"
-			gc.mu.Unlock()
-		}()
-	}
-	wg.Wait()
+	gc.record("2026-02-16", "1", "alice")
+	gc.record("2026-02-16", "1", "alice_new")
+	gc.record("2026-02-17", "1", "alice_new")
+	gc.record("2026-02-17", "2", "bob")
 
-	if gc.Counts["2026-02-16"]["user1"] != 100 {
-		t.Errorf("concurrent count = %d, want 100", gc.Counts["2026-02-16"]["user1"])
+	if got := gc.Counts["2026-02-16"]["1"]; got != 2 {
+		t.Errorf("day 1 count = %d, want 2", got)
 	}
-	if gc.Usernames["user1"] != "testuser" {
-		t.Errorf("username = %q, want %q", gc.Usernames["user1"], "testuser")
+	if got := aggregateCounts(gc.Counts); got["1"] != 3 || got["2"] != 1 {
+		t.Errorf("totals = %v, want 1:3 2:1", got)
+	}
+	if gc.Usernames["1"] != "alice_new" || gc.Usernames["2"] != "bob" {
+		t.Errorf("usernames = %v, want the latest name per user", gc.Usernames)
 	}
 }
 
-func TestUsernameRecording(t *testing.T) {
+func TestPruneDropsUsernamesWithoutCounts(t *testing.T) {
 	gc := &guildPostCounts{
-		Counts:    make(map[string]map[string]int),
-		Usernames: make(map[string]string),
+		Counts: map[string]map[string]int{
+			"2026-02-01": {"1": 5, "2": 1},
+			"2026-02-10": {"2": 3},
+		},
+		Usernames: map[string]string{"1": "alice", "2": "bob", "3": "carol"},
 	}
 
-	// Simulate recording a username
-	gc.Usernames["123"] = "alice"
-	if gc.Usernames["123"] != "alice" {
-		t.Errorf("username = %q, want %q", gc.Usernames["123"], "alice")
-	}
+	gc.prune("2026-02-09")
 
-	// Simulate username update (user changed their name)
-	gc.Usernames["123"] = "alice_new"
-	if gc.Usernames["123"] != "alice_new" {
-		t.Errorf("username = %q, want %q", gc.Usernames["123"], "alice_new")
+	if _, ok := gc.Counts["2026-02-01"]; ok {
+		t.Error("the day before the cutoff should be pruned")
+	}
+	// 1 only posted on the pruned day, and 3 has no counts at all.
+	if len(gc.Usernames) != 1 || gc.Usernames["2"] != "bob" {
+		t.Errorf("usernames = %v, want only 2:bob", gc.Usernames)
 	}
 }
 
-func TestUsernameNilInitGuard(t *testing.T) {
-	gc := &guildPostCounts{
-		Counts: make(map[string]map[string]int),
-		// Usernames intentionally nil — simulates loading old data without usernames
-	}
+// What saveTopPosters writes to S3 holds only the last 7 days and the
+// usernames those days still count.
+func TestSaveTopPostersPrunesWhatItStores(t *testing.T) {
+	b, fake := newProfileNamesBot(t)
+	b.topPosters = newGuildStateStore[guildPostCounts](b.S3, b.Log, "topposters", nil,
+		func(gc *guildPostCounts) *sync.Mutex { return &gc.mu })
+	today := time.Now().UTC().Format("2006-01-02")
+	b.topPosters.set(1, &guildPostCounts{
+		Counts: map[string]map[string]int{
+			"2026-01-01": {"1": 5},
+			today:        {"2": 3},
+		},
+		Usernames: map[string]string{"1": "alice", "2": "bob"},
+	})
 
-	// This mirrors the nil check in onMessage
-	if gc.Usernames == nil {
-		gc.Usernames = make(map[string]string)
-	}
-	gc.Usernames["456"] = "bob"
+	b.saveTopPosters()
 
-	if gc.Usernames["456"] != "bob" {
-		t.Errorf("username = %q, want %q", gc.Usernames["456"], "bob")
+	fake.Mu.Lock()
+	body, ok := fake.Objects["/test-bucket/topposters/1.json"]
+	fake.Mu.Unlock()
+	if !ok {
+		t.Fatal("topposters/1.json was not saved")
 	}
-}
-
-func TestUsernameLookupFallback(t *testing.T) {
-	usernames := map[string]string{
-		"100": "alice",
-		"200": "bob",
+	var saved guildPostCounts
+	if err := json.Unmarshal(body, &saved); err != nil {
+		t.Fatal(err)
 	}
-
-	// User in the map
-	if name, ok := usernames["100"]; !ok || name != "alice" {
-		t.Errorf("expected alice, got %q", name)
+	if _, ok := saved.Counts["2026-01-01"]; ok || saved.Counts[today]["2"] != 3 {
+		t.Errorf("saved counts = %v, want only today's", saved.Counts)
 	}
-
-	// User not in the map — should fall back gracefully
-	name := usernames["999"]
-	if name != "" {
-		t.Errorf("expected empty string for missing user, got %q", name)
+	if len(saved.Usernames) != 1 || saved.Usernames["2"] != "bob" {
+		t.Errorf("saved usernames = %v, want only 2:bob", saved.Usernames)
 	}
 }
 
@@ -328,5 +322,41 @@ func TestTemplateCommandsRoaster(t *testing.T) {
 		if !names[name] {
 			t.Errorf("missing command %q", name)
 		}
+	}
+}
+
+// /config topposters creates a guild's state on first use, but not while its
+// load has failed: a save of fresh state would replace the stored filters.
+func TestTopPostersConfigNeedsLoadedState(t *testing.T) {
+	b, _ := newStubBot(t)
+	b.topPostersConfig = newGuildStateStore(b.S3, b.Log, "toppostersconfig",
+		func() *topPostersConfigState { return &topPostersConfigState{} },
+		func(st *topPostersConfigState) *sync.Mutex { return &st.mu })
+	const filterAdd = `{"id":"100","name":"config","type":1,"options":[{"name":"topposters","type":2,"options":[` +
+		`{"name":"filter-add","type":1,"options":[{"name":"user","type":6,"value":"55"}]}]}],` +
+		`"resolved":{"users":{"55":{"id":"55","username":"bob"}}}}`
+
+	b.topPostersConfig.mu.Lock()
+	b.topPostersConfig.failed[10] = true
+	b.topPostersConfig.mu.Unlock()
+	e, replies := commandEvent(t, b.Client, filterAdd)
+	b.handleTopPostersConfigCmd(e)
+	if _, resp := replies.only(t); !isEphemeral(resp) || !strings.Contains(contentOf(resp), "can't be changed right now") {
+		t.Errorf("reply while the load has failed = %q, want an ephemeral refusal", contentOf(resp))
+	}
+	if st := b.topPostersConfig.get(10); st != nil {
+		t.Errorf("state %+v installed for a guild whose load failed", st)
+	}
+
+	b.topPostersConfig.mu.Lock()
+	delete(b.topPostersConfig.failed, 10)
+	b.topPostersConfig.mu.Unlock()
+	e, replies = commandEvent(t, b.Client, filterAdd)
+	b.handleTopPostersConfigCmd(e)
+	if _, resp := replies.only(t); !strings.HasPrefix(contentOf(resp), "Added to filter") {
+		t.Errorf("reply on a guild with no state = %q, want the filter added", contentOf(resp))
+	}
+	if st := b.topPostersConfig.get(10); st == nil || !st.isUserFiltered(55) {
+		t.Errorf("state after filter-add on a guild with none = %+v, want user 55 filtered", st)
 	}
 }

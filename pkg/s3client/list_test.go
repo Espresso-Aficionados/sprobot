@@ -4,36 +4,40 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"testing"
+	"time"
 
 	"github.com/sadbox/sprobot/pkg/testutil"
 )
 
-func TestListKeysPages(t *testing.T) {
+func TestListObjectsFollowsPages(t *testing.T) {
 	fake := testutil.NewFakeS3()
-	fake.ListPageSize = 2
+	fake.PageSize = 2
 	server := httptest.NewServer(fake)
 	defer server.Close()
 	c := testutil.NewTestS3Client(t, server)
 
-	want := []string{
-		"profiles/1/Coffee Setup/10.json",
-		"profiles/1/Coffee Setup/11.json",
-		"profiles/1/Roasting Setup/10.json",
-		"profiles/1/Roasting Setup/12.json",
-		"profiles/1/Roasting Setup/13.json",
+	modified := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	fake.Mu.Lock()
+	for _, key := range []string{"images/1/a.png", "images/1/b.png", "images/2/c.png", "images/2/d.png", "images/3/e e.png"} {
+		fake.Objects["/test-bucket/"+key] = []byte(key)
+		fake.Modified["/test-bucket/"+key] = modified
 	}
-	for _, key := range append(slices.Clone(want), "profiles/2/Coffee Setup/10.json", "images/1/x.png") {
-		fake.Objects["/test-bucket/"+key] = []byte("{}")
-	}
+	fake.Objects["/test-bucket/profiles/1/x.json"] = []byte("{}")
+	fake.Mu.Unlock()
 
-	got, err := c.ListKeys(context.Background(), "profiles/1/")
+	got, err := c.ListObjects(context.Background(), "images/")
 	if err != nil {
-		t.Fatalf("ListKeys: %v", err)
+		t.Fatalf("ListObjects: %v", err)
 	}
-	if !slices.Equal(got, want) {
-		t.Errorf("keys = %v, want %v", got, want)
+	want := []string{"images/1/a.png", "images/1/b.png", "images/2/c.png", "images/2/d.png", "images/3/e e.png"}
+	if len(got) != len(want) {
+		t.Fatalf("ListObjects returned %d objects, want %d: %+v", len(got), len(want), got)
+	}
+	for i, o := range got {
+		if o.Key != want[i] || o.Size != int64(len(want[i])) || !o.LastModified.Equal(modified) {
+			t.Errorf("object %d = %+v, want key %q, size %d, modified %s", i, o, want[i], len(want[i]), modified)
+		}
 	}
 
 	fake.Mu.Lock()
@@ -43,25 +47,28 @@ func TestListKeysPages(t *testing.T) {
 	}
 }
 
-func TestListKeysEmpty(t *testing.T) {
+func TestListObjectsEmpty(t *testing.T) {
 	server := httptest.NewServer(testutil.NewFakeS3())
 	defer server.Close()
 	c := testutil.NewTestS3Client(t, server)
 
-	got, err := c.ListKeys(context.Background(), "profiles/1/")
+	got, err := c.ListObjects(context.Background(), "profiles/1/")
 	if err != nil || len(got) != 0 {
-		t.Errorf("ListKeys = %v, %v; want no keys and no error", got, err)
+		t.Errorf("ListObjects = %v, %v; want no objects and no error", got, err)
 	}
 }
 
-func TestListKeysError(t *testing.T) {
+func TestListObjectsError(t *testing.T) {
 	fake := testutil.NewFakeS3()
-	fake.Fail["/test-bucket"] = http.StatusForbidden
 	server := httptest.NewServer(fake)
 	defer server.Close()
 	c := testutil.NewTestS3Client(t, server)
 
-	if _, err := c.ListKeys(context.Background(), "profiles/1/"); err == nil {
-		t.Error("ListKeys of a forbidden bucket returned no error")
+	fake.Mu.Lock()
+	fake.Fail["/test-bucket"] = http.StatusForbidden
+	fake.Mu.Unlock()
+
+	if _, err := c.ListObjects(context.Background(), "images/"); err == nil {
+		t.Error("ListObjects with a failing listing = nil, want error")
 	}
 }

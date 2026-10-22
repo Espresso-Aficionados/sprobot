@@ -131,23 +131,46 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	userID := fmt.Sprintf("%d", e.Message.Author.ID)
 
 	gc.mu.Lock()
-	defer gc.mu.Unlock()
+	gc.record(today, userID, e.Message.Author.Username)
+	gc.mu.Unlock()
+}
 
-	if gc.Counts[today] == nil {
-		gc.Counts[today] = make(map[string]int)
+// record counts one message by userID on day and keeps their username.
+// Callers hold gc.mu.
+func (gc *guildPostCounts) record(day, userID, username string) {
+	if gc.Counts[day] == nil {
+		gc.Counts[day] = make(map[string]int)
 	}
-	gc.Counts[today][userID]++
+	gc.Counts[day][userID]++
 	if gc.Usernames == nil {
 		gc.Usernames = make(map[string]string)
 	}
-	gc.Usernames[userID] = e.Message.Author.Username
+	gc.Usernames[userID] = username
+}
+
+// prune drops the days before cutoff, then the usernames of users with no
+// count left, so a username is kept no longer than the counts it labels.
+// Callers hold gc.mu.
+func (gc *guildPostCounts) prune(cutoff string) {
+	pruneOldDays(gc.Counts, cutoff)
+	counted := make(map[string]bool)
+	for _, users := range gc.Counts {
+		for userID := range users {
+			counted[userID] = true
+		}
+	}
+	for userID := range gc.Usernames {
+		if !counted[userID] {
+			delete(gc.Usernames, userID)
+		}
+	}
 }
 
 func (b *Bot) saveTopPosters() {
 	cutoff := time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02")
 	b.topPosters.each(func(_ snowflake.ID, gc *guildPostCounts) {
 		gc.mu.Lock()
-		pruneOldDays(gc.Counts, cutoff)
+		gc.prune(cutoff)
 		gc.mu.Unlock()
 	})
 	b.topPosters.save()
@@ -321,10 +344,10 @@ func (b *Bot) handleTopPostersConfigCmd(e *events.ApplicationCommandInteractionC
 		return
 	}
 
-	st := b.topPostersConfig.get(*guildID)
+	st := b.topPostersConfig.getOrCreate(*guildID)
 	if st == nil {
-		st = &topPostersConfigState{}
-		b.topPostersConfig.set(*guildID, st)
+		botutil.RespondEphemeral(e, "The top posters config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
+		return
 	}
 
 	subCmd := data.SubCommandName

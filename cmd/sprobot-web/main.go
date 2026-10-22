@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -98,14 +97,6 @@ func main() {
 		log.Fatalf("Failed to create S3 client: %v", err)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", handleIndex)
-	mux.HandleFunc("GET /"+sprobot.AvatarWebPath, handleAvatar)
-	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}", handleProfile(s3))
-	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}/{file}", handleProfileImage(s3))
-	mux.HandleFunc("GET /files/{kind}/{guildID}/{name}", handleFile(s3))
-	mux.HandleFunc("GET /files/{kind}/{guildID}/{name}/view", handleFileView(s3))
-
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -113,7 +104,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:         ":" + port,
-		Handler:      securityHeaders(accessLog(mux)),
+		Handler:      securityHeaders(accessLog(newMux(s3))),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -121,7 +112,7 @@ func main() {
 
 	go func() {
 		log.Printf("Listening on :%s", port)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("Server error: %v", err)
 		}
 	}()
@@ -138,6 +129,17 @@ func main() {
 	}
 }
 
+func newMux(s3 *s3client.Client) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", handleIndex)
+	mux.HandleFunc("GET /"+sprobot.AvatarWebPath, handleAvatar)
+	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}", handleProfile(s3))
+	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}/{file}", handleProfileImage(s3))
+	mux.HandleFunc("GET /files/{kind}/{guildID}/{name}", handleFile(s3))
+	mux.HandleFunc("GET /files/{kind}/{guildID}/{name}/view", handleFileView(s3))
+	return mux
+}
+
 // --- Public handlers ---
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -148,21 +150,42 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	renderPage(w, "index.html", nil)
 }
 
+// profileRoute validates a profile route's path values, which go into an S3
+// key: both IDs must be Discord IDs and the template one the bots store
+// profiles under. Path values are unescaped, so "..%2F" would otherwise
+// arrive as "../".
+func profileRoute(r *http.Request) (guildID string, tmpl sprobot.Template, userID string, ok bool) {
+	guildID = r.PathValue("guildID")
+	userID = strings.TrimSuffix(r.PathValue("userID"), ".json")
+	if !sprobot.ValidID(guildID) || !sprobot.ValidID(userID) {
+		return "", sprobot.Template{}, "", false
+	}
+	name := r.PathValue("templateName")
+	for _, tmpls := range sprobot.AllTemplates() {
+		for _, tmpl := range tmpls {
+			if tmpl.Name == name {
+				return guildID, tmpl, userID, true
+			}
+		}
+	}
+	return "", sprobot.Template{}, "", false
+}
+
 func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		guildID := r.PathValue("guildID")
-		templateName := r.PathValue("templateName")
-		userIDRaw := r.PathValue("userID")
-
-		userID := strings.TrimSuffix(userIDRaw, ".json")
-
-		profile, err := s3.FetchProfileSimple(r.Context(), guildID, templateName, userID)
-		if err != nil {
+		guildID, tmpl, userID, ok := profileRoute(r)
+		if !ok {
 			render404(w)
 			return
 		}
 
-		renderPage(w, "profile.html", buildProfileData(r.Context(), s3, guildID, userID, lookupTemplate(templateName, profile), profile))
+		profile, err := s3.FetchProfileSimple(r.Context(), guildID, tmpl.Name, userID)
+		if err != nil {
+			renderS3Error(w, "Profile fetch error", err)
+			return
+		}
+
+		renderPage(w, "profile.html", buildProfileData(r.Context(), s3, guildID, userID, tmpl, profile))
 	}
 }
 
@@ -201,11 +224,8 @@ func buildProfileData(ctx context.Context, s3 *s3client.Client, guildID, userID 
 // nothing.
 func handleProfileImage(s3 *s3client.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		guildID := r.PathValue("guildID")
-		templateName := r.PathValue("templateName")
-		userID := r.PathValue("userID")
-
-		if !strings.HasPrefix(r.PathValue("file"), "image") {
+		guildID, tmpl, userID, ok := profileRoute(r)
+		if !ok || !strings.HasPrefix(r.PathValue("file"), "image") {
 			render404(w)
 			return
 		}
@@ -213,17 +233,17 @@ func handleProfileImage(s3 *s3client.Client) http.HandlerFunc {
 		// The response depends on the User-Agent; keep shared caches from mixing them up.
 		w.Header().Set("Vary", "User-Agent")
 		if !isDiscordFetcher(r.UserAgent()) {
-			http.Redirect(w, r, "/"+sprobot.ProfileWebPath(guildID, templateName, userID), http.StatusFound)
+			http.Redirect(w, r, "/"+sprobot.ProfileWebPath(guildID, tmpl.Name, userID), http.StatusFound)
 			return
 		}
 
-		profile, err := s3.FetchProfileSimple(r.Context(), guildID, templateName, userID)
+		profile, err := s3.FetchProfileSimple(r.Context(), guildID, tmpl.Name, userID)
 		if err != nil {
-			render404(w)
+			renderS3Error(w, "Profile fetch error", err)
 			return
 		}
 		// The URL carries an image version, so a new upload gets a new URL.
-		serveImageToDiscord(w, r, s3, profile[lookupTemplate(templateName, profile).Image.Name])
+		serveImageToDiscord(w, r, s3, profile[tmpl.Image.Name])
 	}
 }
 
@@ -239,10 +259,7 @@ func serveImageToDiscord(w http.ResponseWriter, r *http.Request, s3 *s3client.Cl
 
 	body, size, err := s3.OpenImage(r.Context(), urlOrKey)
 	if err != nil {
-		if !errors.Is(err, s3client.ErrNotFound) {
-			log.Printf("Image fetch error: %v", err)
-		}
-		render404(w)
+		renderS3Error(w, "Image fetch error", err)
 		return
 	}
 	defer body.Close()
@@ -273,7 +290,7 @@ func handleFile(s3 *s3client.Client) http.HandlerFunc {
 		}
 
 		w.Header().Set("Vary", "User-Agent")
-		embeddable := kind != "mod" && strings.HasPrefix(sprobot.InlineContentType(name), "image/")
+		embeddable := kind != sprobot.FileKindMod && strings.HasPrefix(sprobot.InlineContentType(name), "image/")
 		if !embeddable || !isDiscordFetcher(r.UserAgent()) {
 			http.Redirect(w, r, "/"+sprobot.FileWebPath(kind, guildID, name)+"/view", http.StatusFound)
 			return
@@ -296,10 +313,7 @@ func handleFileView(s3 *s3client.Client) http.HandlerFunc {
 
 		size, err := s3.StatFile(r.Context(), key)
 		if err != nil {
-			if !errors.Is(err, s3client.ErrNotFound) {
-				log.Printf("File stat error: %v", err)
-			}
-			render404(w)
+			renderS3Error(w, "File stat error", err)
 			return
 		}
 
@@ -342,32 +356,6 @@ func handleAvatar(w http.ResponseWriter, r *http.Request) {
 func isDiscordFetcher(userAgent string) bool {
 	ua := strings.ToLower(userAgent)
 	return strings.Contains(ua, "discordbot") || strings.Contains(ua, "discordapp")
-}
-
-// lookupTemplate finds a hardcoded template by name. Profiles stored under a
-// template that no longer exists fall back to rendering every stored field in
-// key order.
-func lookupTemplate(name string, profile map[string]string) sprobot.Template {
-	for _, tmpls := range sprobot.AllTemplates() {
-		for _, tmpl := range tmpls {
-			if tmpl.Name == name {
-				return tmpl
-			}
-		}
-	}
-
-	tmpl := sprobot.Template{Name: name, Image: sprobot.Field{Name: sprobot.ImageField}}
-	keys := make([]string, 0, len(profile))
-	for k := range profile {
-		if k != tmpl.Image.Name && !strings.HasPrefix(k, "_") {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		tmpl.Fields = append(tmpl.Fields, sprobot.Field{Name: k})
-	}
-	return tmpl
 }
 
 // previewDescription renders fields as Discord markdown (bold field names, a
@@ -499,6 +487,17 @@ func render404(w http.ResponseWriter) {
 	renderPage(w, "404.html", nil)
 }
 
+// renderS3Error answers a failed S3 read: 404 if the object doesn't exist,
+// otherwise a logged 502, since the fault is upstream and may pass.
+func renderS3Error(w http.ResponseWriter, what string, err error) {
+	if errors.Is(err, s3client.ErrNotFound) {
+		render404(w)
+		return
+	}
+	log.Printf("%s: %v", what, err)
+	http.Error(w, "Bad Gateway", http.StatusBadGateway)
+}
+
 // --- Middleware ---
 
 type statusRecorder struct {
@@ -534,8 +533,9 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// sanitizeLog replaces newlines and carriage returns to prevent log injection.
+var logSanitizer = strings.NewReplacer("\n", "", "\r", "")
+
+// sanitizeLog removes newlines and carriage returns to prevent log injection.
 func sanitizeLog(s string) string {
-	r := strings.NewReplacer("\n", "", "\r", "")
-	return r.Replace(s)
+	return logSanitizer.Replace(s)
 }

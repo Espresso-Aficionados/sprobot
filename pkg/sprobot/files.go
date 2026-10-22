@@ -7,12 +7,20 @@ import (
 	"strings"
 )
 
-// Saved-file kinds as they appear in web paths, mapped to their bucket
-// prefixes. The web viewer serves nothing outside these prefixes.
+// Saved-file kinds, as they appear in web paths.
+const (
+	FileKindMod      = "mod"
+	FileKindShortcut = "shortcut"
+	FileKindSticky   = "sticky"
+)
+
+// Saved-file kinds mapped to their bucket prefixes. Files are both saved and
+// served through FileKey, so the bots and the web viewer can't disagree on
+// where a kind lives.
 var fileKindPrefixes = map[string]string{
-	"mod":      "mod_files",
-	"shortcut": "shortcut_files",
-	"sticky":   "sticky_files",
+	FileKindMod:      "mod_files",
+	FileKindShortcut: "shortcut_files",
+	FileKindSticky:   "sticky_files",
 }
 
 // FilePrefix returns the bucket prefix for a file kind.
@@ -21,8 +29,13 @@ func FilePrefix(kind string) (string, bool) {
 	return p, ok
 }
 
+// ValidID reports whether s has the form of a Discord ID: 1 to 20 digits.
+func ValidID(s string) bool {
+	return idRE.MatchString(s)
+}
+
 var (
-	guildIDRE = regexp.MustCompile(`^[0-9]{1,20}$`)
+	idRE = regexp.MustCompile(`^[0-9]{1,20}$`)
 	// 30 random characters plus the original extension. Files saved by the
 	// old Python bot have a doubled dot before the extension.
 	fileNameRE = regexp.MustCompile(`^[A-Za-z0-9]{30}(\.{1,2}[A-Za-z0-9]{1,10})?$`)
@@ -40,7 +53,7 @@ func SafeFileExt(ext string) string {
 // FileKey returns the bucket key for a saved file, validating every part.
 func FileKey(kind, guildID, name string) (string, bool) {
 	prefix, ok := fileKindPrefixes[kind]
-	if !ok || !guildIDRE.MatchString(guildID) || !fileNameRE.MatchString(name) {
+	if !ok || !idRE.MatchString(guildID) || !fileNameRE.MatchString(name) {
 		return "", false
 	}
 	return prefix + "/" + guildID + "/" + name, true
@@ -62,15 +75,20 @@ func ParseFileKey(key string) (kind, guildID, name string, ok bool) {
 	return "", "", "", false
 }
 
-// ParseProfileImageKey parses a profile image key,
-// images/{guildID}/{templateName}/{userID}.{ext}.
+// ProfileImageS3Path is the key an uploaded profile image is stored under. ext
+// includes the dot, e.g. ".png".
+func ProfileImageS3Path(guildID, templateName, userID, ext string) string {
+	return "images/" + guildID + "/" + templateName + "/" + userID + ext
+}
+
+// ParseProfileImageKey is the inverse of ProfileImageS3Path.
 func ParseProfileImageKey(key string) (guildID, templateName, userID string, ok bool) {
 	parts := strings.Split(key, "/")
-	if len(parts) != 4 || parts[0] != "images" || !guildIDRE.MatchString(parts[1]) || parts[2] == "" {
+	if len(parts) != 4 || parts[0] != "images" || !idRE.MatchString(parts[1]) || parts[2] == "" {
 		return "", "", "", false
 	}
 	userID = strings.TrimSuffix(parts[3], path.Ext(parts[3]))
-	if !guildIDRE.MatchString(userID) {
+	if !idRE.MatchString(userID) {
 		return "", "", "", false
 	}
 	return parts[1], parts[2], userID, true

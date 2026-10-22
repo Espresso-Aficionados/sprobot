@@ -2,7 +2,7 @@
 
 These terms cover use of the Discord applications operated from this repository for the
 Espresso Aficionados Discord server — **sprobot**, **stickybot**, and **threadbot** —
-and the **sprobot-web** profile page service (together, "the services").
+and the **sprobot-web** web service (together, "the services").
 
 ## Acceptance
 
@@ -14,7 +14,8 @@ terms. If you do not agree, do not use the services.
 - **sprobot** — member profiles, moderation utilities, and community features.
 - **stickybot** — staff-managed sticky messages.
 - **threadbot** — thread activity reminders and listings.
-- **sprobot-web** — public web pages rendering member-submitted profiles.
+- **sprobot-web** — public web pages rendering member-submitted profiles, and viewer
+  pages for files the bots save.
 
 The services are operated for the Espresso Aficionados community and are not offered
 for use in other servers.

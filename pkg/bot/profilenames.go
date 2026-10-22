@@ -112,11 +112,15 @@ func (b *Bot) loadProfileOwners(guildIDs []snowflake.ID) {
 		guildStr := strconv.FormatInt(int64(guildID), 10)
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		keys, err := b.S3.ListKeys(ctx, "profiles/"+guildStr+"/")
+		objects, err := b.S3.ListObjects(ctx, "profiles/"+guildStr+"/")
 		cancel()
 		if err != nil {
 			b.Log.Error("Failed to list profiles; checking authors one by one", "guild_id", guildStr, "error", err)
 			continue
+		}
+		keys := make([]string, len(objects))
+		for i, o := range objects {
+			keys[i] = o.Key
 		}
 		owners := profileOwnersFromKeys(guildStr, keys, templates)
 

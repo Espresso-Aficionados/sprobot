@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -24,19 +25,23 @@ import (
 type FakeS3 struct {
 	Mu      sync.Mutex
 	Objects map[string][]byte
+	// Modified is each object's last-modified time, set by PUT and copy.
+	// Objects added straight to Objects have none and list without one.
+	Modified map[string]time.Time
 	// Fail makes every request for a path fail with the given status code.
 	// 404 answers NoSuchKey. Use a 4xx code: the SDK retries 5xx with backoff.
+	// A bucket listing's path is the bucket, e.g. "/test-bucket".
 	Fail map[string]int
 	// Deleted lists the path of every DELETE request that succeeded, in order.
 	Deleted []string
 	// Requests lists every request as "METHOD path", in order.
 	Requests []string
-	// ListPageSize caps the keys in one list response (default 1000, as S3).
-	ListPageSize int
+	// PageSize caps the keys in one listing page; 0 means S3's 1000.
+	PageSize int
 }
 
 func NewFakeS3() *FakeS3 {
-	return &FakeS3{Objects: make(map[string][]byte), Fail: make(map[string]int)}
+	return &FakeS3{Objects: make(map[string][]byte), Modified: make(map[string]time.Time), Fail: make(map[string]int)}
 }
 
 func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +82,9 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+		if t, ok := f.Modified[key]; ok {
+			w.Header().Set("Last-Modified", t.UTC().Format(http.TimeFormat))
+		}
 		w.WriteHeader(http.StatusOK)
 
 	case http.MethodPut:
@@ -86,11 +94,13 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		data, _ := io.ReadAll(r.Body)
 		f.Objects[key] = data
+		f.touch(key)
 		w.WriteHeader(http.StatusOK)
 
 	case http.MethodDelete:
 		// Like S3, deleting a missing key succeeds.
 		delete(f.Objects, key)
+		delete(f.Modified, key)
 		f.Deleted = append(f.Deleted, key)
 		w.WriteHeader(http.StatusNoContent)
 
@@ -111,9 +121,18 @@ func (f *FakeS3) copyObject(w http.ResponseWriter, key, src string) {
 		return
 	}
 	f.Objects[key] = slices.Clone(data)
+	f.touch(key)
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, xml.Header+`<CopyObjectResult><ETag>"fake"</ETag></CopyObjectResult>`)
+}
+
+// touch sets key's last-modified time to now.
+func (f *FakeS3) touch(key string) {
+	if f.Modified == nil {
+		f.Modified = make(map[string]time.Time)
+	}
+	f.Modified[key] = time.Now()
 }
 
 // list answers ListObjectsV2 for the bucket in the path, in key order, a page
@@ -131,8 +150,8 @@ func (f *FakeS3) list(w http.ResponseWriter, r *http.Request) {
 	slices.Sort(keys)
 
 	pageSize := 1000
-	if f.ListPageSize > 0 {
-		pageSize = f.ListPageSize
+	if f.PageSize > 0 {
+		pageSize = f.PageSize
 	}
 	result := listBucketResult{Prefix: q.Get("prefix"), MaxKeys: pageSize}
 	if len(keys) > pageSize {
@@ -141,7 +160,11 @@ func (f *FakeS3) list(w http.ResponseWriter, r *http.Request) {
 		result.NextContinuationToken = keys[len(keys)-1]
 	}
 	for _, key := range keys {
-		result.Contents = append(result.Contents, listObject{Key: key, Size: len(f.Objects[bucketPath+key])})
+		o := listObject{Key: key, Size: len(f.Objects[bucketPath+key])}
+		if t, ok := f.Modified[bucketPath+key]; ok {
+			o.LastModified = t.UTC().Format(time.RFC3339Nano)
+		}
+		result.Contents = append(result.Contents, o)
 	}
 	result.KeyCount = len(keys)
 
@@ -162,8 +185,9 @@ type listBucketResult struct {
 }
 
 type listObject struct {
-	Key  string `xml:"Key"`
-	Size int    `xml:"Size"`
+	Key          string `xml:"Key"`
+	Size         int    `xml:"Size"`
+	LastModified string `xml:"LastModified,omitempty"`
 }
 
 func writeError(w http.ResponseWriter, status int, code string) {
