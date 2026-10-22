@@ -98,31 +98,6 @@ func (b *Bot) resolveChannelParents(channelID snowflake.ID, _ *sync.Map) []snowf
 	return ids
 }
 
-// rolesCanView reports whether a member holding roles (besides @everyone) can
-// view a channel with the given overwrites, computed as Discord does: guild
-// permissions, then the @everyone overwrite, then the roles' overwrites
-// combined, denies before allows. Member overwrites are ignored, and
-// Administrator sees everything.
-func rolesCanView(guildID snowflake.ID, everyone discord.Role, roles []discord.Role, overwrites discord.PermissionOverwrites) bool {
-	perms := everyone.Permissions
-	for _, r := range roles {
-		perms = perms.Add(r.Permissions)
-	}
-	if perms.Has(discord.PermissionAdministrator) {
-		return true
-	}
-	if ow, ok := overwrites.Role(guildID); ok {
-		perms = perms.Remove(ow.Deny).Add(ow.Allow)
-	}
-	var deny, allow discord.Permissions
-	for _, r := range roles {
-		if ow, ok := overwrites.Role(r.ID); ok && r.ID != guildID {
-			deny, allow = deny.Add(ow.Deny), allow.Add(ow.Allow)
-		}
-	}
-	return perms.Remove(deny).Add(allow).Has(discord.PermissionViewChannel)
-}
-
 // channelNSFW reports whether a channel is age-restricted. Threads report
 // false; their channel decides.
 func channelNSFW(ch discord.GuildChannel) bool {
@@ -137,19 +112,15 @@ func channelNSFW(ch discord.GuildChannel) bool {
 	return false
 }
 
-// starboardAudienceOK reports whether a message in source may be reposted to
-// output: every member who can view output, whatever their roles, must also
-// be able to view source, so the starboard never shows a message to anyone
-// who couldn't already read it (member overwrites aside). A server where one
-// broad "access" role gates both channels passes; a staff channel, or one
-// that a restriction role is denied, does not. An age-restricted source
-// passes only for an age-restricted output. A thread is judged by its channel
-// (sourceParent), whose overwrites it inherits, and a private thread never
-// passes. An output thread must be passed as its channel. roles must include
-// @everyone, whose ID is the guild's. A nil channel or a missing @everyone
-// role means the data isn't available, which is an error so the caller can
-// fail closed.
-func starboardAudienceOK(guildID snowflake.ID, roles []discord.Role, source, sourceParent, output discord.GuildChannel) (bool, error) {
+// starboardEligible reports whether a message in source may be reposted to
+// output. A private thread never is. A message from an age-restricted channel
+// goes only to an age-restricted output, as Discord requires age-restricted
+// content to stay in age-restricted channels. Channel permissions are not
+// compared: the filter list is how a server keeps channels off its starboard.
+// A thread is judged by its channel (sourceParent), whose age restriction it
+// shares. An output thread must be passed as its channel. A nil channel means
+// the data isn't available, which is an error so the caller can fail closed.
+func starboardEligible(source, sourceParent, output discord.GuildChannel) (bool, error) {
 	if source == nil {
 		return false, errors.New("source channel not found")
 	}
@@ -168,52 +139,12 @@ func starboardAudienceOK(guildID snowflake.ID, roles []discord.Role, source, sou
 		}
 		source = sourceParent
 	}
-	everyoneIdx := slices.IndexFunc(roles, func(r discord.Role) bool { return r.ID == guildID })
-	if everyoneIdx < 0 {
-		return false, errors.New("@everyone role not cached")
-	}
-	if channelNSFW(source) && !channelNSFW(output) {
-		return false, nil
-	}
-
-	everyone := roles[everyoneIdx]
-	sourceOverwrites, outputOverwrites := source.PermissionOverwrites(), output.PermissionOverwrites()
-	leaks := func(held ...discord.Role) bool {
-		return rolesCanView(guildID, everyone, held, outputOverwrites) &&
-			!rolesCanView(guildID, everyone, held, sourceOverwrites)
-	}
-	// A member who sees output but not source has at most two roles that
-	// matter: one granting output, and one whose overwrite denies source. So
-	// @everyone alone, each role, and each role paired with each role denied
-	// source cover every combination of roles.
-	var denied []discord.Role
-	for _, r := range roles {
-		if ow, ok := sourceOverwrites.Role(r.ID); ok && r.ID != guildID && ow.Deny.Has(discord.PermissionViewChannel) {
-			denied = append(denied, r)
-		}
-	}
-	if leaks() {
-		return false, nil
-	}
-	for _, r := range roles {
-		if r.ID == guildID {
-			continue
-		}
-		if leaks(r) {
-			return false, nil
-		}
-		for _, d := range denied {
-			if d.ID != r.ID && leaks(r, d) {
-				return false, nil
-			}
-		}
-	}
-	return true, nil
+	return !channelNSFW(source) || channelNSFW(output), nil
 }
 
-// starboardVisible applies starboardAudienceOK to a reaction in channelID. It
-// fails closed, logging why, when a channel or the roles can't be found.
-func (b *Bot) starboardVisible(guildID, channelID, outputID snowflake.ID) bool {
+// checkStarboardChannel applies starboardEligible to a reaction in channelID.
+// It fails closed, logging why, when a channel can't be found.
+func (b *Bot) checkStarboardChannel(guildID, channelID, outputID snowflake.ID) bool {
 	source, _ := b.lookupChannel(channelID)
 	var parent discord.GuildChannel
 	if thread, ok := source.(discord.GuildThread); ok {
@@ -222,14 +153,12 @@ func (b *Bot) starboardVisible(guildID, channelID, outputID snowflake.ID) bool {
 	output, _ := b.lookupChannel(outputID)
 	if thread, ok := output.(discord.GuildThread); ok {
 		// Only configs older than the channel type check have a thread as
-		// output. A thread's audience is at most its channel's, so judging
-		// by the channel is never less strict.
+		// output. A thread is age-restricted if its channel is.
 		output, _ = b.lookupChannel(*thread.ParentID())
 	}
-	roles := slices.Collect(b.Client.Caches.Roles(guildID))
-	ok, err := starboardAudienceOK(guildID, roles, source, parent, output)
+	ok, err := starboardEligible(source, parent, output)
 	if err != nil {
-		b.Log.Warn("Starboard skipped a reaction: channel visibility unknown",
+		b.Log.Warn("Starboard skipped a reaction: channel unknown",
 			"guild_id", guildID, "channel_id", channelID, "error", err)
 	}
 	return ok
@@ -469,7 +398,7 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 	if settings.isBlacklisted(b.resolveChannelParents(e.ChannelID, nil)...) {
 		return
 	}
-	if !b.starboardVisible(e.GuildID, e.ChannelID, settings.OutputChannelID) {
+	if !b.checkStarboardChannel(e.GuildID, e.ChannelID, settings.OutputChannelID) {
 		return
 	}
 

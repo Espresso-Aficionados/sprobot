@@ -243,8 +243,7 @@ func newStarboardTest(t *testing.T) (*Bot, *fakeStarboardAPI, *starboardState, *
 	t.Cleanup(s3srv.Close)
 	s3 := testutil.NewTestS3Client(t, s3srv)
 
-	caches := cache.New(cache.WithCaches(cache.FlagChannels | cache.FlagRoles))
-	caches.AddRole(discord.Role{ID: sbGuild, GuildID: sbGuild, Permissions: discord.PermissionViewChannel})
+	caches := cache.New(cache.WithCaches(cache.FlagChannels))
 	caches.AddChannel(testChannel(t, textChannelJSON(sbSource, sbCategory, "coffee")))
 	caches.AddChannel(testChannel(t, textChannelJSON(sbOutput, 0, "starboard")))
 
@@ -730,14 +729,13 @@ func TestStarboardChannelDeleteRemovesPosts(t *testing.T) {
 	}
 }
 
-// When channel visibility can't be determined, reactions are skipped: nothing
-// is stored or posted.
-func TestStarboardFailsClosedWhenVisibilityUnknown(t *testing.T) {
+// When a channel can't be looked up, reactions are skipped: nothing is stored
+// or posted.
+func TestStarboardFailsClosedWhenChannelUnknown(t *testing.T) {
 	tests := []struct {
 		name   string
 		remove func(b *Bot)
 	}{
-		{"@everyone role not cached", func(b *Bot) { b.Client.Caches.RemoveRole(sbGuild, sbGuild) }},
 		{"source channel not cached or fetchable", func(b *Bot) { b.Client.Caches.RemoveChannel(sbSource) }},
 		{"output channel not cached or fetchable", func(b *Bot) { b.Client.Caches.RemoveChannel(sbOutput) }},
 	}
@@ -752,7 +750,7 @@ func TestStarboardFailsClosedWhenVisibilityUnknown(t *testing.T) {
 				b.onReactionAdd(reactionAdd(msgID, "⭐"))
 			}
 			if _, ok := entryOf(st, msgID); ok {
-				t.Error("stored a reaction whose channel visibility is unknown")
+				t.Error("stored a reaction whose channel is unknown")
 			}
 			if n := len(api.calls().creates); n != 0 {
 				t.Errorf("%d posts, want none", n)
@@ -823,97 +821,44 @@ func TestResolveChannelParents(t *testing.T) {
 	check(501, 501, 702)
 }
 
-func TestStarboardAudienceOK(t *testing.T) {
-	const (
-		access   snowflake.ID = 10
-		staff    snowflake.ID = 20
-		admin    snowflake.ID = 30
-		restrict snowflake.ID = 40
-	)
+func TestStarboardEligible(t *testing.T) {
 	view := discord.PermissionViewChannel
-	everyoneRole := discord.Role{ID: sbGuild, Permissions: view}
-	baseRoles := []discord.Role{everyoneRole, {ID: access}, {ID: staff}}
-
-	// channel builds a text channel (id 1) with the given role overwrites.
-	channel := func(overwrites ...discord.RolePermissionOverwrite) discord.GuildChannel {
-		raw, _ := json.Marshal(overwrites)
-		return testChannel(t, fmt.Sprintf(`{"id":"1","type":0,"guild_id":"%d","name":"c","permission_overwrites":%s}`, sbGuild, raw))
-	}
-	deny := func(id snowflake.ID) discord.RolePermissionOverwrite {
-		return discord.RolePermissionOverwrite{RoleID: id, Deny: view}
-	}
-	allow := func(id snowflake.ID) discord.RolePermissionOverwrite {
-		return discord.RolePermissionOverwrite{RoleID: id, Allow: view}
-	}
+	public := testChannel(t, fmt.Sprintf(`{"id":"1","type":0,"guild_id":"%d","name":"c"}`, sbGuild))
+	ageRestricted := testChannel(t, fmt.Sprintf(`{"id":"1","type":0,"guild_id":"%d","name":"c","nsfw":true}`, sbGuild))
+	ageRestrictedForum := testChannel(t, fmt.Sprintf(`{"id":"1","type":15,"guild_id":"%d","name":"f","nsfw":true}`, sbGuild))
+	// @everyone can't view it and only role 20 can; permissions aren't compared.
+	staffOnly := testChannel(t, fmt.Sprintf(`{"id":"1","type":0,"guild_id":"%d","name":"c","permission_overwrites":[`+
+		`{"id":"%d","type":0,"deny":"%d","allow":"0"},{"id":"20","type":0,"allow":"%d","deny":"0"}]}`, sbGuild, sbGuild, view, view))
 	thread := func(typ discord.ChannelType) discord.GuildChannel {
 		return testChannel(t, fmt.Sprintf(`{"id":"2","type":%d,"guild_id":"%d","name":"t","parent_id":"1","thread_metadata":{}}`, typ, sbGuild))
 	}
-
-	public := channel()
-	accessOnly := channel(deny(sbGuild), allow(access))
-	staffOnly := channel(deny(sbGuild), allow(staff))
-	// @everyone denied, one member allowed: the member overwrite is ignored.
-	memberOnly := testChannel(t, fmt.Sprintf(`{"id":"1","type":0,"guild_id":"%d","name":"c","permission_overwrites":[`+
-		`{"id":"%d","type":0,"deny":"%d","allow":"0"},{"id":"99","type":1,"allow":"%d","deny":"0"}]}`, sbGuild, sbGuild, view, view))
-	ageRestricted := testChannel(t, fmt.Sprintf(`{"id":"1","type":0,"guild_id":"%d","name":"c","nsfw":true}`, sbGuild))
-	// @everyone can't view anything; an access role grants View Channel
-	// guild-wide, and a restriction role grants nothing.
-	gatedRoles := []discord.Role{{ID: sbGuild}, {ID: access, Permissions: view}, {ID: restrict}}
+	publicThread, privateThread := thread(discord.ChannelTypeGuildPublicThread), thread(discord.ChannelTypeGuildPrivateThread)
 
 	tests := []struct {
 		name                   string
-		roles                  []discord.Role
 		source, parent, output discord.GuildChannel
 		want, wantErr          bool
 	}{
-		{name: "public to public", roles: baseRoles, source: public, output: public, want: true},
-		{name: "access role gates both", roles: baseRoles, source: accessOnly, output: accessOnly, want: true},
-		{name: "public source, access-gated output", roles: baseRoles, source: public, output: accessOnly, want: true},
-		{name: "staff-only source, public output", roles: baseRoles, source: staffOnly, output: public},
-		{name: "staff-only source, access-gated output", roles: baseRoles, source: staffOnly, output: accessOnly},
-		{name: "@everyone denied, access allowed, public output", roles: baseRoles, source: accessOnly, output: public},
-		{name: "member overwrite ignored", roles: baseRoles, source: memberOnly, output: public},
-		{
-			name:   "access role grants View Channel guild-wide, source denies it",
-			roles:  []discord.Role{{ID: sbGuild}, {ID: access, Permissions: view}, {ID: staff}},
-			source: channel(deny(access), allow(staff)), output: public,
-		},
-		{
-			name:  "admin role sees through overwrites",
-			roles: append(baseRoles[:3:3], discord.Role{ID: admin, Permissions: discord.PermissionAdministrator}),
-			// Without the Administrator rule the admin role would see the
-			// output (explicit allow) but not the source (@everyone denied).
-			source: accessOnly, output: channel(deny(sbGuild), allow(access), allow(admin)), want: true,
-		},
-		{
-			// Access alone sees both and the restriction role alone sees
-			// neither, but a member with both sees the output and not the source.
-			name:   "source denies a restriction role, access role grants the output",
-			roles:  gatedRoles,
-			source: channel(deny(restrict)), output: public,
-		},
-		{name: "restriction role denied both channels", roles: gatedRoles, source: channel(deny(restrict)), output: channel(deny(restrict)), want: true},
-		{
-			name:   "source denies a restriction role, access-gated output",
-			roles:  append(baseRoles[:3:3], discord.Role{ID: restrict}),
-			source: channel(deny(restrict)), output: accessOnly,
-		},
-		{name: "age-restricted source, unrestricted output", roles: baseRoles, source: ageRestricted, output: public},
-		{name: "age-restricted source and output", roles: baseRoles, source: ageRestricted, output: ageRestricted, want: true},
-		{name: "unrestricted source, age-restricted output", roles: baseRoles, source: public, output: ageRestricted, want: true},
-		{name: "thread in an age-restricted channel", roles: baseRoles, source: thread(discord.ChannelTypeGuildPublicThread), parent: ageRestricted, output: public},
-		{name: "public thread in public channel", roles: baseRoles, source: thread(discord.ChannelTypeGuildPublicThread), parent: public, output: public, want: true},
-		{name: "public thread in staff channel", roles: baseRoles, source: thread(discord.ChannelTypeGuildPublicThread), parent: staffOnly, output: public},
-		{name: "private thread", roles: baseRoles, source: thread(discord.ChannelTypeGuildPrivateThread), parent: public, output: public},
-		{name: "source missing", roles: baseRoles, output: public, wantErr: true},
-		{name: "output missing", roles: baseRoles, source: public, wantErr: true},
-		{name: "thread parent missing", roles: baseRoles, source: thread(discord.ChannelTypeGuildPublicThread), output: public, wantErr: true},
-		{name: "output passed as a thread", roles: baseRoles, source: public, output: thread(discord.ChannelTypeGuildPublicThread), wantErr: true},
-		{name: "roles missing", source: public, output: public, wantErr: true},
+		{name: "public to public", source: public, output: public, want: true},
+		{name: "staff-only source, public output", source: staffOnly, output: public, want: true},
+		{name: "age-restricted source, unrestricted output", source: ageRestricted, output: public},
+		{name: "age-restricted source and output", source: ageRestricted, output: ageRestricted, want: true},
+		{name: "unrestricted source, age-restricted output", source: public, output: ageRestricted, want: true},
+		{name: "thread in an age-restricted channel", source: publicThread, parent: ageRestricted, output: public},
+		{name: "thread in an age-restricted channel, age-restricted output", source: publicThread, parent: ageRestricted, output: ageRestricted, want: true},
+		{name: "post in an age-restricted forum", source: publicThread, parent: ageRestrictedForum, output: public},
+		{name: "public thread in public channel", source: publicThread, parent: public, output: public, want: true},
+		{name: "public thread in staff-only channel", source: publicThread, parent: staffOnly, output: public, want: true},
+		{name: "private thread", source: privateThread, parent: public, output: public},
+		{name: "private thread, parent missing", source: privateThread, output: public},
+		{name: "source missing", output: public, wantErr: true},
+		{name: "output missing", source: public, wantErr: true},
+		{name: "thread parent missing", source: publicThread, output: public, wantErr: true},
+		{name: "output passed as a thread", source: public, output: publicThread, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := starboardAudienceOK(sbGuild, tt.roles, tt.source, tt.parent, tt.output)
+			got, err := starboardEligible(tt.source, tt.parent, tt.output)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -924,23 +869,71 @@ func TestStarboardAudienceOK(t *testing.T) {
 	}
 }
 
-// Reactions in a channel fewer people can see than the starboard are not
-// counted, and nothing is stored for them.
-func TestStarboardSkipsLessVisibleChannel(t *testing.T) {
+// Channel permissions aren't compared: a message in a channel @everyone can't
+// view is posted like any other, and the filter list is what keeps a channel
+// or category off the starboard.
+func TestStarboardPostsFromRestrictedChannelUnlessFiltered(t *testing.T) {
 	b, api, st, _ := newStarboardTest(t)
 	b.Client.Caches.AddChannel(testChannel(t, fmt.Sprintf(
-		`{"id":"%d","type":0,"guild_id":"%d","name":"staff","permission_overwrites":[{"id":"%d","type":0,"deny":"%d","allow":"0"}]}`,
-		sbSource, sbGuild, sbGuild, discord.PermissionViewChannel)))
-	msgID := recentID(time.Hour)
-	api.setSource(msgID, 5)
-	st.Entries[msgID] = starboardEntry{ChannelID: sbSource, Count: 1}
+		`{"id":"%d","type":0,"guild_id":"%d","name":"staff","parent_id":"%d","permission_overwrites":[{"id":"%d","type":0,"deny":"%d","allow":"0"}]}`,
+		sbSource, sbGuild, sbCategory, sbGuild, discord.PermissionViewChannel)))
+	posted, filtered := recentID(time.Hour), recentID(2*time.Hour)
+	api.setSource(posted, 2)
+	api.setSource(filtered, 2)
+	st.Entries[posted] = starboardEntry{ChannelID: sbSource, Count: 1}
 
-	b.onReactionAdd(reactionAdd(msgID, "⭐"))
-	if len(api.calls().creates) != 0 {
-		t.Error("posted a message from a staff-only channel")
+	b.onReactionAdd(reactionAdd(posted, "⭐"))
+	if n := len(api.calls().creates); n != 1 {
+		t.Fatalf("%d posts, want the restricted channel's message posted", n)
 	}
-	if e, _ := entryOf(st, msgID); e.Count != 1 {
-		t.Errorf("count = %d, want the reaction ignored", e.Count)
+
+	st.Settings.Blacklist = []snowflake.ID{sbCategory}
+	for range 3 {
+		b.onReactionAdd(reactionAdd(filtered, "⭐"))
+	}
+	if _, ok := entryOf(st, filtered); ok {
+		t.Error("stored a reaction in a filtered category")
+	}
+	if n := len(api.calls().creates); n != 1 {
+		t.Errorf("%d posts, want none from a filtered category", n)
+	}
+}
+
+// Reactions in a private thread, or in an age-restricted channel while the
+// starboard isn't age-restricted, are not counted, and nothing is stored.
+func TestStarboardSkipsPrivateThreadsAndAgeRestrictedChannels(t *testing.T) {
+	threadJSON := `{"id":"800","type":%d,"guild_id":"%d","name":"t","parent_id":"%d","thread_metadata":{}}`
+	ageRestrictedSource := fmt.Sprintf(`{"id":"%d","type":0,"guild_id":"%d","name":"coffee","nsfw":true}`, sbSource, sbGuild)
+	tests := []struct {
+		name      string
+		channelID snowflake.ID
+		channels  []string
+	}{
+		{"private thread", 800, []string{fmt.Sprintf(threadJSON, discord.ChannelTypeGuildPrivateThread, sbGuild, sbSource)}},
+		{"age-restricted channel", sbSource, []string{ageRestrictedSource}},
+		{"thread in an age-restricted channel", 800, []string{ageRestrictedSource, fmt.Sprintf(threadJSON, discord.ChannelTypeGuildPublicThread, sbGuild, sbSource)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, api, st, _ := newStarboardTest(t)
+			for _, raw := range tt.channels {
+				b.Client.Caches.AddChannel(testChannel(t, raw))
+			}
+			msgID := recentID(time.Hour)
+			api.setSource(msgID, 5)
+
+			for range 3 {
+				e := reactionAdd(msgID, "⭐")
+				e.ChannelID = tt.channelID
+				b.onReactionAdd(e)
+			}
+			if _, ok := entryOf(st, msgID); ok {
+				t.Error("stored a reaction that must be skipped")
+			}
+			if n := len(api.calls().creates); n != 0 {
+				t.Errorf("%d posts, want none", n)
+			}
+		})
 	}
 }
 
