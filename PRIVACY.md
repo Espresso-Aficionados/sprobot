@@ -32,15 +32,21 @@ plus the **sprobot-web** server, which renders profile pages and files saved by 
 - **Server member cache** — Discord's record of server members, such as user ID,
   username, display name, avatar, server nickname, roles, and join date, so the
   moderation log can show nickname changes and who left, and for staff commands such
-  as `/topposters`. It has no time limit: a member's record is removed when they leave
-  the server while the bot is running. Alongside it the bot caches other server
-  details Discord sends it, such as channels, roles, and who is in a voice channel.
+  as `/topposters`. Only members of the servers sprobot is set up to serve are cached.
+  It has no time limit: a member's record is removed when the bot sees them leave the
+  server, so a member who leaves while the bot or the server is offline stays cached.
+  Alongside it the bot caches other server details Discord sends it, such as channels,
+  roles, and who is in a voice channel.
 - **Starboard** — when a message gets enough reactions, sprobot reposts its text, first
-  image, and author to the starboard channel on Discord. Only messages from channels at
-  least as visible as the starboard channel are reposted, and the repost is removed if
-  the original message is deleted. The bot stores the message, channel, and author IDs,
-  the channel name, and the reaction count; entries for messages that were never
-  reposted are dropped after 30 days.
+  image, and author to the starboard channel on Discord. Messages are not reposted from
+  private threads, from channels or categories on the staff's starboard filter list,
+  or from age-restricted channels when the starboard channel isn't age-restricted. The
+  repost is removed if the original message is deleted. The bot stores the message,
+  channel, and author IDs, the channel name, and the reaction count. Reactions are
+  counted for 90 days after a message is sent: older messages aren't reposted, and a
+  repost's count stops updating. Entries for messages that were never reposted are
+  dropped after 30 days; a reposted message's entry is kept until the original is
+  deleted, so the repost can be removed with it.
 - **Temporary roles** — the user ID, role ID, and expiry time of staff-assigned
   temporary roles.
 - **Server configuration** — channel, role, and user IDs set by staff (for example,
@@ -49,9 +55,10 @@ plus the **sprobot-web** server, which renders profile pages and files saved by 
 
 ### stickybot
 
-- **Sticky messages** — when a moderator designates a message as a sticky, its text and
-  attachments are copied to S3 so the sticky can be reposted. Only staff-designated
-  messages are stored, and they are removed when the sticky is removed.
+- **Sticky messages** — when a moderator designates a message as a sticky, its text,
+  embeds, and attachments are copied to S3 so the sticky can be reposted. Only
+  staff-designated messages are stored, and they are removed, saved attachments
+  included, when the sticky is removed.
 
 ### threadbot
 
