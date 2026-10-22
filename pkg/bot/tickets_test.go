@@ -353,8 +353,34 @@ func TestTicketOpenAnswersWhenNotConfigured(t *testing.T) {
 	b.handleTicketOpen(e)
 
 	msgs := stub.followups(t, "tok")
-	if len(msgs) != 1 || !msgs[0].Flags.Has(discord.MessageFlagEphemeral) {
+	if len(msgs) != 1 || !msgs[0].Flags.Has(discord.MessageFlagEphemeral) || !strings.Contains(msgs[0].Content, "aren't set up") {
 		t.Errorf("follow-ups = %+v, want one ephemeral answer instead of leaving the user thinking", msgs)
+	}
+}
+
+// A configured guild whose ticket counter failed to load opens no ticket, and
+// says it's a temporary problem rather than that tickets aren't set up.
+func TestTicketOpenUnavailableWhileNotLoaded(t *testing.T) {
+	b, stub := newTicketBot(t)
+	b.tickets = newGuildStateStore(b.S3, b.Log, "tickets",
+		func() *ticketState { return &ticketState{Counter: 1} },
+		func(st *ticketState) *sync.Mutex { return &st.mu })
+	b.tickets.mu.Lock()
+	b.tickets.failed[10] = true
+	b.tickets.mu.Unlock()
+
+	e, _ := componentEvent(t, b.Client, "ticket_open", "", "")
+	b.handleTicketOpen(e)
+
+	msgs := stub.followups(t, "tok")
+	if len(msgs) != 1 || !msgs[0].Flags.Has(discord.MessageFlagEphemeral) || !strings.Contains(msgs[0].Content, "temporarily unavailable") {
+		t.Errorf("follow-ups = %+v, want one ephemeral 'temporarily unavailable'", msgs)
+	}
+	if got := stub.bodies("POST /channels/50/threads"); len(got) != 0 {
+		t.Errorf("created %d ticket threads with an unloaded counter, want 0", len(got))
+	}
+	if st := b.tickets.get(10); st != nil {
+		t.Errorf("state %+v installed for a guild whose load failed", st)
 	}
 }
 

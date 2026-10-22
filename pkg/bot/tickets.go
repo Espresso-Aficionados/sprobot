@@ -267,9 +267,14 @@ func (b *Bot) handleTicketOpen(e *events.ComponentInteractionCreate) {
 	}
 
 	cfg, ok := b.ticketConfigs[*guildID]
-	st := b.tickets.get(*guildID)
-	if !ok || st == nil {
+	if !ok {
 		respond("Tickets aren't set up in this server.")
+		return
+	}
+	// Nil only while the guild's ticket state (its counter) failed to load.
+	st := b.tickets.getOrCreate(*guildID)
+	if st == nil {
+		respond("Tickets are temporarily unavailable. Please try again in a few minutes.")
 		return
 	}
 
