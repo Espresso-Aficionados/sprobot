@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/disgoorg/disgo/discord"
@@ -69,6 +71,61 @@ func TestCommandFromGuildNotAllowedCreatesNoState(t *testing.T) {
 	}
 }
 
+// /threadbot refreshcounts must clear the stored counts too, or a restart
+// brings them back. It is also how corrupt stored counts get replaced.
+func TestRefreshCountsClearsStoredCounts(t *testing.T) {
+	for _, stored := range []string{
+		`{"counts":{"101":130},"fetched":{"101":"2026-10-21T00:00:00Z"}}`,
+		`not json`,
+	} {
+		fake := testutil.NewFakeS3()
+		srv := httptest.NewServer(fake)
+		fake.Objects[devCountsKey] = []byte(stored)
+		b := newTestBot(t, testutil.NewTestS3Client(t, srv))
+		b.loadMemberCounts()
+
+		e, responses := commandEvent(t, devGuild, `{"id":"3","name":"threadbot","type":1,"options":[{"name":"refreshcounts","type":1}]}`)
+		b.onCommand(e)
+		if m := <-responses; !strings.Contains(m.Content, "cleared") {
+			t.Errorf("stored %s: response %q", stored, m.Content)
+		}
+
+		restarted := newTestBot(t, testutil.NewTestS3Client(t, srv))
+		restarted.loadMemberCounts()
+		if c := restarted.memberCounts[devGuild]; c == nil || len(c.Counts) != 0 {
+			t.Errorf("stored %s: counts after restart = %+v, want an empty cache", stored, c)
+		}
+		srv.Close()
+	}
+}
+
+// /threadbot list shows each reminder's settings and flags stored ones enable
+// would reject, such as those applyDefaults rewrote, so mods can fix them.
+func TestListShowsSettingsAndFlagsInvalidOnes(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	fake.Objects[devRemindersKey] = []byte(`{
+		"500":{"channel_id":"500","guild_id":"1013566342345019512","enabled":true,"min_idle_mins":0,"max_idle_mins":15,"msg_threshold":0,"time_threshold_mins":60,"buffer":0},
+		"600":{"channel_id":"600","guild_id":"1013566342345019512","enabled":true,"min_idle_mins":30,"max_idle_mins":15,"msg_threshold":30,"time_threshold_mins":60,"buffer":5}}`)
+	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
+	b.loadReminders()
+
+	e, responses := commandEvent(t, devGuild, `{"id":"3","name":"threadbot","type":1,"options":[{"name":"list","type":1}]}`)
+	b.onCommand(e)
+	lines := strings.Split((<-responses).Content, "\n")
+	slices.Sort(lines)
+	if len(lines) != 2 {
+		t.Fatalf("list = %q, want two lines", lines)
+	}
+	if want := "<#500> — enabled; idle 0–15 min, msg threshold 0, time threshold 60 min, buffer 0"; lines[0] != want {
+		t.Errorf("valid reminder listed as %q, want %q", lines[0], want)
+	}
+	if !strings.HasPrefix(lines[1], "<#600> — enabled; idle 30–15 min") || !strings.Contains(lines[1], "invalid: max_idle (15) must be greater than min_idle (30).") {
+		t.Errorf("invalid reminder listed as %q, want its settings flagged", lines[1])
+	}
+}
+
 func TestIsThread(t *testing.T) {
 	tests := []struct {
 		ct   discord.ChannelType
@@ -105,6 +162,8 @@ func TestValidateReminderParams(t *testing.T) {
 		{"msg_threshold less than buffer", 0, 10, 3, 0, 5, false},
 		{"both thresholds zero", 0, 10, 0, 0, 0, false},
 		{"msg_threshold zero buffer nonzero ok", 0, 10, 0, 5, 3, true},
+		{"buffer at Get Channel Messages limit", 0, 10, 500, 0, 100, true},
+		{"buffer over Get Channel Messages limit", 0, 10, 500, 0, 101, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

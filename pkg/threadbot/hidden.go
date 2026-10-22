@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -47,11 +48,10 @@ func decodeHiddenThreads(data []byte) (map[snowflake.ID]struct{}, error) {
 	return set, nil
 }
 
-// ensureHiddenLoaded loads a guild's stored list the first time it is needed,
-// so guilds missing from the cache at startup are covered too. A failed load
-// is retried on the next call; until one succeeds the list can't be changed,
-// so a partial list never overwrites the stored one. Callers hold
-// b.hiddenSaveMu.
+// ensureHiddenLoaded loads a guild's stored list unless it has loaded
+// already. A failed load is retried on the next call; until one succeeds the
+// list can't be changed, so a partial list never overwrites the stored one.
+// Callers hold b.hiddenSaveMu.
 func (b *Bot) ensureHiddenLoaded(guildID snowflake.ID) error {
 	b.mu.Lock()
 	loaded := b.hiddenLoaded[guildID]
@@ -84,21 +84,19 @@ func (b *Bot) ensureHiddenLoaded(guildID snowflake.ID) error {
 }
 
 // hiddenSet returns a copy of the guild's hidden thread IDs, safe to use
-// without holding b.mu.
-func (b *Bot) hiddenSet(guildID snowflake.ID) map[snowflake.ID]struct{} {
+// without holding b.mu. It fails if the stored list can't be loaded: listing
+// threads as if none were hidden would promote the ones mods hid.
+func (b *Bot) hiddenSet(guildID snowflake.ID) (map[snowflake.ID]struct{}, error) {
 	b.hiddenSaveMu.Lock()
-	if err := b.ensureHiddenLoaded(guildID); err != nil {
-		b.Log.Error("Failed to load hidden threads", "guild_id", guildID, "error", err)
-	}
+	err := b.ensureHiddenLoaded(guildID)
 	b.hiddenSaveMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := make(map[snowflake.ID]struct{}, len(b.hidden[guildID]))
-	for id := range b.hidden[guildID] {
-		out[id] = struct{}{}
-	}
-	return out
+	return maps.Clone(b.hidden[guildID]), nil
 }
 
 // setHidden hides or unhides a thread and persists the change. It reports
@@ -148,10 +146,10 @@ func (b *Bot) setHidden(guildID, threadID snowflake.ID, hidden bool) (bool, erro
 	return true, nil
 }
 
-// loadHiddenThreads loads the hidden list for every guild known at startup.
-// Guilds that fail here, or that appear later, load on first use.
+// loadHiddenThreads loads the hidden list of every allowed guild. Guilds that
+// fail here load on first use.
 func (b *Bot) loadHiddenThreads() {
-	for _, guildID := range b.GuildIDs() {
+	for _, guildID := range botutil.AllowedGuildIDs {
 		b.hiddenSaveMu.Lock()
 		err := b.ensureHiddenLoaded(guildID)
 		b.hiddenSaveMu.Unlock()
@@ -182,35 +180,57 @@ func (b *Bot) handleHide(e *events.ApplicationCommandInteractionCreate, hide boo
 		return
 	}
 
+	// Defer: loading and saving the list in S3 can outlast the interaction's
+	// 3-second deadline.
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer hide response", "error", err)
+		return
+	}
+	reply := func(content string) { botutil.FollowupEphemeral(b.Client, e.Token(), content) }
+
 	changed, err := b.setHidden(guildID, thread.ID, hide)
 	if errors.Is(err, errHiddenNotLoaded) {
 		b.Log.Error("Hidden thread list not loaded", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Couldn't load the hidden thread list, so it can't be changed right now. Please try again in a minute.")
+		reply("Couldn't load the hidden thread list, so it can't be changed right now. Please try again in a minute.")
 		return
 	}
 	if err != nil {
 		b.Log.Error("Failed to save hidden threads", "guild_id", guildID, "thread_id", thread.ID, "error", err)
-		botutil.RespondEphemeral(e, "Something went wrong saving that, please try again.")
+		reply("Something went wrong saving that, please try again.")
 		return
 	}
 	b.Log.Info("Set thread hidden", "user_id", e.User().ID, "guild_id", guildID, "thread_id", thread.ID, "hidden", hide, "changed", changed)
 
 	switch {
 	case hide && changed:
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> is now hidden from thread reminders and `/threads`.", thread.ID))
+		reply(fmt.Sprintf("<#%d> is now hidden from thread reminders and `/threads`.", thread.ID))
 	case hide:
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> was already hidden.", thread.ID))
+		reply(fmt.Sprintf("<#%d> was already hidden.", thread.ID))
 	case changed:
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> can be promoted again.", thread.ID))
+		reply(fmt.Sprintf("<#%d> can be promoted again.", thread.ID))
 	default:
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> wasn't hidden.", thread.ID))
+		reply(fmt.Sprintf("<#%d> wasn't hidden.", thread.ID))
 	}
 }
 
 func (b *Bot) handleHiddenList(e *events.ApplicationCommandInteractionCreate) {
-	set := b.hiddenSet(*e.GuildID())
+	guildID := *e.GuildID()
+	// Defer: loading the list from S3 can outlast the interaction's 3-second
+	// deadline.
+	if err := e.DeferCreateMessage(true); err != nil {
+		b.Log.Error("Failed to defer hidden list response", "error", err)
+		return
+	}
+	reply := func(content string) { botutil.FollowupEphemeral(b.Client, e.Token(), content) }
+
+	set, err := b.hiddenSet(guildID)
+	if err != nil {
+		b.Log.Error("Hidden thread list not loaded", "guild_id", guildID, "error", err)
+		reply("Couldn't load the hidden thread list. Please try again in a minute.")
+		return
+	}
 	if len(set) == 0 {
-		botutil.RespondEphemeral(e, "No hidden threads in this server.")
+		reply("No hidden threads in this server.")
 		return
 	}
 	ids := make([]snowflake.ID, 0, len(set))
@@ -228,5 +248,5 @@ func (b *Bot) handleHiddenList(e *events.ApplicationCommandInteractionCreate) {
 		}
 		sb.WriteString(line)
 	}
-	botutil.RespondEphemeral(e, sb.String())
+	reply(sb.String())
 }
