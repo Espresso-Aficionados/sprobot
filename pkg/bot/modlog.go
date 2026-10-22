@@ -824,10 +824,10 @@ func (b *Bot) handleModLogConfig(e *events.ApplicationCommandInteractionCreate) 
 		return
 	}
 
-	st := b.modLog.get(*guildID)
+	st := b.modLog.getOrCreate(*guildID)
 	if st == nil {
-		st = &modLogState{}
-		b.modLog.set(*guildID, st)
+		botutil.RespondEphemeral(e, "The mod log config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
+		return
 	}
 
 	subCmd := data.SubCommandName
