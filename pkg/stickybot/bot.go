@@ -3,6 +3,8 @@ package stickybot
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -26,6 +29,8 @@ type Bot struct {
 	pending  botutil.MessageStash // context-menu targets awaiting modal submit
 	// Keys of removed stickies' files whose deletion failed; guarded by mu.
 	undeleted []string
+	// Guilds a GuildReady has said the bot is in; guarded by mu.
+	readyGuilds map[snowflake.ID]bool
 
 	saveMu  sync.Mutex            // serializes saveStickiesForGuild
 	unsaved map[snowflake.ID]bool // guilds whose last save failed; guarded by saveMu
@@ -38,10 +43,11 @@ func New(token string) (*Bot, error) {
 	}
 
 	b := &Bot{
-		BaseBot:  base,
-		stop:     make(chan struct{}),
-		stickies: make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
-		unsaved:  make(map[snowflake.ID]bool),
+		BaseBot:     base,
+		stop:        make(chan struct{}),
+		stickies:    make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
+		readyGuilds: make(map[snowflake.ID]bool),
+		unsaved:     make(map[snowflake.ID]bool),
 	}
 
 	client, err := disgo.New(token,
@@ -60,6 +66,7 @@ func New(token string) (*Bot, error) {
 		),
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.OnGuildJoin),
+		bot.WithEventListenerFunc(b.onGuildReady),
 		bot.WithEventListenerFunc(b.onCommand),
 		bot.WithEventListenerFunc(b.onModal),
 		bot.WithEventListenerFunc(b.onMessage),
@@ -128,6 +135,42 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	h := s.handle
 	b.mu.Unlock()
 	h.Signal()
+}
+
+// onGuildReady checks the guild's stickies for deleted channels. GuildReady
+// fires for every guild the bot is in on each new gateway session; a guild
+// whose stickies haven't loaded yet is checked by the load that succeeds (see
+// loadGuildStickies).
+func (b *Bot) onGuildReady(e *events.GuildReady) {
+	if !botutil.GuildAllowed(e.GuildID) {
+		return
+	}
+	b.mu.Lock()
+	b.readyGuilds[e.GuildID] = true
+	_, loaded := b.stickies[e.GuildID]
+	b.mu.Unlock()
+	if loaded {
+		b.dropStickiesOfDeletedChannels(e.GuildID)
+	}
+}
+
+// dropStickiesOfDeletedChannels drops guildID's stickies whose channel no
+// longer exists. Discord never replays a channel delete, so this catches
+// channels deleted while nothing was listening: the bot was down, its session
+// was replaced rather than resumed, or the guild's stickies hadn't loaded. A
+// sticky in a thread goes too when the thread's parent was deleted, since
+// that deletes the thread.
+func (b *Bot) dropStickiesOfDeletedChannels(guildID snowflake.ID) {
+	b.mu.Lock()
+	channelIDs := slices.Collect(maps.Keys(b.stickies[guildID]))
+	b.mu.Unlock()
+	for _, channelID := range channelIDs {
+		// Only Unknown Channel means deleted: a channel the bot can't see is
+		// Missing Access, and any other failure may pass.
+		if _, err := b.Client.Rest.GetChannel(channelID); rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownChannel) {
+			b.dropDeletedChannelSticky(guildID, channelID)
+		}
+	}
 }
 
 func (b *Bot) onChannelDelete(e *events.GuildChannelDelete) {

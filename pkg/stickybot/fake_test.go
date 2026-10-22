@@ -21,14 +21,20 @@ import (
 
 const testGuildID = snowflake.ID(1013566342345019512)
 
-// fakeDiscord serves the message endpoints stickybot uses and records the
-// messages it is asked to create and delete. Created messages get ID 777.
+// fakeDiscord serves Get Channel and the message endpoints stickybot uses,
+// and records the messages it is asked to create and delete. Created messages
+// get ID 777.
 type fakeDiscord struct {
 	mu        sync.Mutex
 	posts     []discord.MessageCreate
 	deleted   []snowflake.ID
 	failPosts bool // answer Create Message with a 400
 	gone      bool // answer Create Message with 404 Unknown Channel
+
+	// channelErrs makes Get Channel of a channel fail with a JSON error code:
+	// Unknown Channel as a 404, Missing Access as a 403, 0 as a 500. Other
+	// channels exist.
+	channelErrs map[snowflake.ID]int
 
 	// If hold is set, Create Message signals created and then waits for hold
 	// to close, so a test can keep a post in flight.
@@ -37,6 +43,10 @@ type fakeDiscord struct {
 }
 
 func (f *fakeDiscord) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if id, ok := strings.CutPrefix(r.URL.Path, "/channels/"); ok && r.Method == http.MethodGet && !strings.Contains(id, "/") {
+		f.getChannel(w, id)
+		return
+	}
 	if !strings.Contains(r.URL.Path, "/messages") {
 		http.NotFound(w, r)
 		return
@@ -78,6 +88,27 @@ func (f *fakeDiscord) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"timestamp": time.Now().Format(time.RFC3339),
 		})
 	}
+}
+
+func (f *fakeDiscord) getChannel(w http.ResponseWriter, id string) {
+	channelID, _ := snowflake.Parse(id)
+	f.mu.Lock()
+	code, failed := f.channelErrs[channelID]
+	f.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	if failed {
+		status := http.StatusInternalServerError
+		switch code {
+		case int(rest.JSONErrorCodeUnknownChannel):
+			status = http.StatusNotFound
+		case int(rest.JSONErrorCodeMissingAccess):
+			status = http.StatusForbidden
+		}
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "error", "code": code})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "type": 0, "guild_id": testGuildID.String(), "name": "coffee"})
 }
 
 func (f *fakeDiscord) postsMade() []discord.MessageCreate {

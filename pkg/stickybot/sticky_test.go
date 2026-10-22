@@ -23,9 +23,10 @@ import (
 func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {
 	t.Helper()
 	return &Bot{
-		BaseBot:  &botutil.BaseBot{S3: s3c, Log: testutil.DiscardLogger()},
-		stickies: make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
-		unsaved:  make(map[snowflake.ID]bool),
+		BaseBot:     &botutil.BaseBot{S3: s3c, Log: testutil.DiscardLogger()},
+		stickies:    make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
+		readyGuilds: make(map[snowflake.ID]bool),
+		unsaved:     make(map[snowflake.ID]bool),
 	}
 }
 

@@ -110,6 +110,11 @@ func (b *Bot) loadGuildStickies(ctx context.Context, guildID snowflake.ID) bool 
 		b.startStickyGoroutine(s)
 	}
 	b.Log.Info("Loaded stickies", "guild_id", guildID, "count", len(channels))
+	if b.readyGuilds[guildID] {
+		// Its GuildReady found nothing loaded to check. In a goroutine, so
+		// a command whose load this is isn't held up by the checks.
+		go b.dropStickiesOfDeletedChannels(guildID)
+	}
 	return true
 }
 
