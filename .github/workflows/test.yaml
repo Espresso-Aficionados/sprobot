@@ -2,18 +2,22 @@ name: test
 
 on:
   pull_request:
+  push:
+    branches-ignore:
+      - main # main pushes are tested via publish.yaml's workflow_call
+      - 'dependabot/**' # Dependabot branches get ran through pull_request
   workflow_call: # publish.yaml tests main before pushing images
-  workflow_dispatch: # test a branch that has no PR
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# A new push to a PR cancels that PR's older run. Every other run gets a group
-# of its own and is never cancelled; under workflow_call, github.event and
-# github.event_name are publish.yaml's push or schedule.
+# A newer run for the same PR or branch cancels the older one. Under
+# workflow_call, github.workflow is the caller ("publish"), whose own
+# concurrency group already serializes its runs, so those are never cancelled.
 concurrency:
-  group: test-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: test-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.workflow == 'test' }}
 
 jobs:
   test:
