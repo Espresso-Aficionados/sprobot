@@ -96,7 +96,9 @@ instead of sitting offline silently.
    - Discord Provided Link, scopes `bot` + `applications.commands`.
    - sprobot permissions integer 361045773440.
    - stickybot and threadbot: View Channels + Send Messages + Read Message
-     History (the invite link each logs at startup uses permissions 68608).
+     History. threadbot's portal install settings also include Send Messages
+     in Threads. The invite link each bot logs at startup (permissions 68608)
+     doesn't include that, so the portal settings are the source of truth.
 5. Re-apply per bot. A bot with **no** privileged intents (stickybot) cannot
    submit an application: the form's Submit button stays disabled with nothing
    checked. That is expected and needs no action.
