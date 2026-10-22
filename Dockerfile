@@ -71,4 +71,4 @@ CMD ["/threadbot"]
 # every PR, so warming the build cache here would just move the cold compile
 # from docker run to docker build.
 FROM base AS test
-CMD ["sh", "-c", "test -z \"$(gofmt -l .)\" || { echo 'gofmt check failed:'; gofmt -l .; exit 1; } && go vet ./... && go test ./..."]
+CMD ["sh", "-c", "test -z \"$(gofmt -l .)\" || { echo 'gofmt check failed:'; gofmt -l .; exit 1; } && go vet ./... && go test -race ./..."]

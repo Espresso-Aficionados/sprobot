@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
-	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
@@ -21,6 +21,7 @@ import (
 type Bot struct {
 	*botutil.BaseBot
 	stop                 chan struct{}
+	loops                sync.WaitGroup // the loops started by startLoop
 	searchClient         *http.Client
 	skipList             map[snowflake.ID]string // goroutine-confined to forumReminderLoop
 	topPosters           *guildStateStore[guildPostCounts]
@@ -30,7 +31,8 @@ type Bot struct {
 	welcome              *guildStateStore[welcomeState]
 	welcomeSentMu        sync.Mutex
 	welcomeSent          map[snowflake.ID]time.Time
-	msgCache             *cappedGroupedCache[discord.Message]
+	cacheDir             string // where the caches below are persisted
+	msgCache             *messageCache
 	memberCache          *cappedGroupedCache[discord.Member]
 	guildCache           *cappedCache[discord.Guild]
 	channelCache         *cappedCache[discord.GuildChannel]
@@ -64,85 +66,139 @@ func New(token string) (*Bot, error) {
 		return nil, err
 	}
 
-	msgCache := newCappedGroupedCache[discord.Message](1000000)
-	memberCache := newCappedGroupedCache[discord.Member](100000)
-	guildCache := newCappedCache[discord.Guild](100)
-	channelCache := newCappedCache[discord.GuildChannel](10000)
-	roleCache := newCappedGroupedCache[discord.Role](5000)
-	emojiCache := newCappedGroupedCache[discord.Emoji](5000)
-	stickerCache := newCappedGroupedCache[discord.Sticker](1000)
-	voiceStateCache := newCappedGroupedCache[discord.VoiceState](10000)
-	stageInstanceCache := newCappedGroupedCache[discord.StageInstance](1000)
-	scheduledEventCache := newCappedGroupedCache[discord.GuildScheduledEvent](1000)
-	soundboardSoundCache := newCappedGroupedCache[discord.SoundboardSound](1000)
-
 	b := &Bot{
-		BaseBot:      base,
-		stop:         make(chan struct{}),
-		searchClient: &http.Client{Timeout: 30 * time.Second},
-		skipList:     make(map[snowflake.ID]string),
-		topPosters: newGuildStateStore(base.S3, base.Log, "topposters",
-			func() *guildPostCounts {
-				return &guildPostCounts{Counts: make(map[string]map[string]int), Usernames: make(map[string]string)}
-			},
-			func(gc *guildPostCounts) *sync.Mutex { return &gc.mu }),
-		posterRole: newGuildStateStore(base.S3, base.Log, "posterroles",
-			func() *posterRoleState {
-				return &posterRoleState{Counts: make(map[string]int), Fetched: make(map[string]bool)}
-			},
-			func(st *posterRoleState) *sync.Mutex { return &st.mu }),
-		tickets: newGuildStateStore(base.S3, base.Log, "tickets",
-			func() *ticketState { return &ticketState{Counter: 1} },
-			func(st *ticketState) *sync.Mutex { return &st.mu }),
-		shortcuts: newGuildStateStore(base.S3, base.Log, "shortcuts",
-			func() *shortcutState {
-				return &shortcutState{Shortcuts: make(map[string]shortcutEntry), indices: make(map[string]int)}
-			},
-			func(st *shortcutState) *sync.Mutex { return &st.mu }),
-		welcome: newGuildStateStore(base.S3, base.Log, "welcome",
-			func() *welcomeState { return &welcomeState{} },
-			func(st *welcomeState) *sync.Mutex { return &st.mu }),
-		welcomeSent: make(map[snowflake.ID]time.Time),
-		starboard: newGuildStateStore(base.S3, base.Log, "starboard",
-			func() *starboardState { return &starboardState{Entries: make(map[snowflake.ID]starboardEntry)} },
-			func(st *starboardState) *sync.Mutex { return &st.mu }),
-		renameLogs: newGuildStateStore(base.S3, base.Log, "renamelogs",
-			func() *renameLogState { return &renameLogState{} },
-			func(st *renameLogState) *sync.Mutex { return &st.mu }),
-		templates:     make(map[snowflake.ID][]sprobot.Template),
-		selfroles:     make(map[snowflake.ID][]selfroleConfig),
-		ticketConfigs: make(map[snowflake.ID]ticketConfig),
-		topPostersConfig: newGuildStateStore(base.S3, base.Log, "toppostersconfig",
-			func() *topPostersConfigState { return &topPostersConfigState{} },
-			func(st *topPostersConfigState) *sync.Mutex { return &st.mu }),
-		autoRole: newGuildStateStore(base.S3, base.Log, "autorole",
-			func() *autoRoleState { return &autoRoleState{} },
-			func(st *autoRoleState) *sync.Mutex { return &st.mu }),
-		eventLog: newGuildStateStore(base.S3, base.Log, "eventlog",
-			func() *eventLogState { return &eventLogState{} },
-			func(st *eventLogState) *sync.Mutex { return &st.mu }),
-		modLog: newGuildStateStore(base.S3, base.Log, "modlog",
-			func() *modLogState { return &modLogState{} },
-			func(st *modLogState) *sync.Mutex { return &st.mu }),
-		tempRoleConfig: newGuildStateStore(base.S3, base.Log, "temproleconfig",
-			func() *tempRoleConfigState { return &tempRoleConfigState{} },
-			func(st *tempRoleConfigState) *sync.Mutex { return &st.mu }),
-		tempRoles: newGuildStateStore(base.S3, base.Log, "temproles",
-			func() *tempRoleState { return &tempRoleState{} },
-			func(st *tempRoleState) *sync.Mutex { return &st.mu }),
-		msgCache:             msgCache,
-		memberCache:          memberCache,
-		guildCache:           guildCache,
-		channelCache:         channelCache,
-		roleCache:            roleCache,
-		emojiCache:           emojiCache,
-		stickerCache:         stickerCache,
-		voiceStateCache:      voiceStateCache,
-		stageInstanceCache:   stageInstanceCache,
-		scheduledEventCache:  scheduledEventCache,
-		soundboardSoundCache: soundboardSoundCache,
-		threadHelpConfig:     getThreadHelpConfig(),
+		BaseBot:          base,
+		stop:             make(chan struct{}),
+		searchClient:     &http.Client{Timeout: 30 * time.Second},
+		skipList:         make(map[snowflake.ID]string),
+		welcomeSent:      make(map[snowflake.ID]time.Time),
+		templates:        sprobot.AllTemplates(),
+		selfroles:        getSelfroleConfig(),
+		ticketConfigs:    getTicketConfig(),
+		cacheDir:         defaultCacheDir,
+		threadHelpConfig: getThreadHelpConfig(),
 	}
+	b.initStateStores()
+
+	b.initCaches()
+	b.removeRetiredCacheFiles()
+	b.loadCaches()
+
+	client, err := disgo.New(token,
+		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
+		bot.WithCacheConfigOpts(b.cacheConfig()...),
+		bot.WithGatewayConfigOpts(
+			gateway.WithIntents(
+				gateway.IntentGuilds,
+				gateway.IntentGuildMembers,
+				gateway.IntentGuildModeration,
+				gateway.IntentGuildMessages,
+				gateway.IntentGuildMessageReactions,
+				gateway.IntentMessageContent,
+				gateway.IntentGuildExpressions,
+				gateway.IntentGuildVoiceStates,
+				gateway.IntentGuildScheduledEvents,
+			),
+			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
+			gateway.WithCloseHandler(b.OnGatewayClose),
+		),
+		bot.WithEventListenerFunc(b.OnReady),
+		bot.WithEventListenerFunc(b.OnGuildJoin),
+		bot.WithEventListenerFunc(b.onGuildLeave),
+		bot.WithEventListenerFunc(b.onCommand),
+		bot.WithEventListenerFunc(b.onModal),
+		bot.WithEventListenerFunc(b.onComponent),
+		bot.WithEventListenerFunc(b.onAutocomplete),
+		bot.WithEventListenerFunc(b.onMessage),
+		bot.WithEventListenerFunc(b.onMemberJoin),
+		bot.WithEventListenerFunc(b.onMessageDelete),
+		bot.WithEventListenerFunc(b.onMessageUpdate),
+		bot.WithEventListenerFunc(b.onMemberLeave),
+		bot.WithEventListenerFunc(b.onMemberUpdate),
+		bot.WithEventListenerFunc(b.onAuditLogEntry),
+		bot.WithEventListenerFunc(b.onChannelCreate),
+		bot.WithEventListenerFunc(b.onChannelUpdate),
+		bot.WithEventListenerFunc(b.onThreadCreate),
+		bot.WithEventListenerFunc(b.onThreadUpdate),
+		bot.WithEventListenerFunc(b.onThreadDelete),
+		bot.WithEventListenerFunc(b.onRoleUpdate),
+		bot.WithEventListenerFunc(b.onGuildUpdate),
+		bot.WithEventListenerFunc(b.onEmojiCreate),
+		bot.WithEventListenerFunc(b.onEmojiUpdate),
+		bot.WithEventListenerFunc(b.onEmojiDelete),
+		bot.WithEventListenerFunc(b.onStickerCreate),
+		bot.WithEventListenerFunc(b.onStickerUpdate),
+		bot.WithEventListenerFunc(b.onStickerDelete),
+		bot.WithEventListenerFunc(b.onStageInstanceCreate),
+		bot.WithEventListenerFunc(b.onStageInstanceUpdate),
+		bot.WithEventListenerFunc(b.onStageInstanceDelete),
+		bot.WithEventListenerFunc(b.onScheduledEventCreate),
+		bot.WithEventListenerFunc(b.onScheduledEventUpdate),
+		bot.WithEventListenerFunc(b.onScheduledEventDelete),
+		bot.WithEventListenerFunc(b.onSoundboardSoundCreate),
+		bot.WithEventListenerFunc(b.onSoundboardSoundUpdate),
+		bot.WithEventListenerFunc(b.onSoundboardSoundDelete),
+		bot.WithEventListenerFunc(b.onReactionAdd),
+		bot.WithEventListenerFunc(b.onReactionRemove),
+		bot.WithEventListenerFunc(b.onReactionRemoveAll),
+		bot.WithEventListenerFunc(b.onReactionRemoveEmoji),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	b.Client = client
+	return b, nil
+}
+
+// initStateStores creates the per-guild state stores and their load hooks.
+func (b *Bot) initStateStores() {
+	s3, log := b.S3, b.Log
+	b.topPosters = newGuildStateStore(s3, log, "topposters",
+		func() *guildPostCounts {
+			return &guildPostCounts{Counts: make(map[string]map[string]int), Usernames: make(map[string]string)}
+		},
+		func(gc *guildPostCounts) *sync.Mutex { return &gc.mu })
+	b.posterRole = newGuildStateStore(s3, log, "posterroles",
+		func() *posterRoleState {
+			return &posterRoleState{Counts: make(map[string]int), Fetched: make(map[string]bool)}
+		},
+		func(st *posterRoleState) *sync.Mutex { return &st.mu })
+	b.tickets = newGuildStateStore(s3, log, "tickets",
+		func() *ticketState { return &ticketState{Counter: 1} },
+		func(st *ticketState) *sync.Mutex { return &st.mu })
+	b.shortcuts = newGuildStateStore(s3, log, "shortcuts",
+		func() *shortcutState {
+			return &shortcutState{Shortcuts: make(map[string]shortcutEntry), indices: make(map[string]int)}
+		},
+		func(st *shortcutState) *sync.Mutex { return &st.mu })
+	b.welcome = newGuildStateStore(s3, log, "welcome",
+		func() *welcomeState { return &welcomeState{} },
+		func(st *welcomeState) *sync.Mutex { return &st.mu })
+	b.starboard = newGuildStateStore(s3, log, "starboard",
+		func() *starboardState { return &starboardState{Entries: make(map[snowflake.ID]starboardEntry)} },
+		func(st *starboardState) *sync.Mutex { return &st.mu })
+	b.renameLogs = newGuildStateStore(s3, log, "renamelogs",
+		func() *renameLogState { return &renameLogState{} },
+		func(st *renameLogState) *sync.Mutex { return &st.mu })
+	b.topPostersConfig = newGuildStateStore(s3, log, "toppostersconfig",
+		func() *topPostersConfigState { return &topPostersConfigState{} },
+		func(st *topPostersConfigState) *sync.Mutex { return &st.mu })
+	b.autoRole = newGuildStateStore(s3, log, "autorole",
+		func() *autoRoleState { return &autoRoleState{} },
+		func(st *autoRoleState) *sync.Mutex { return &st.mu })
+	b.eventLog = newGuildStateStore(s3, log, "eventlog",
+		func() *eventLogState { return &eventLogState{} },
+		func(st *eventLogState) *sync.Mutex { return &st.mu })
+	b.modLog = newGuildStateStore(s3, log, "modlog",
+		func() *modLogState { return &modLogState{} },
+		func(st *modLogState) *sync.Mutex { return &st.mu })
+	b.tempRoleConfig = newGuildStateStore(s3, log, "temproleconfig",
+		func() *tempRoleConfigState { return &tempRoleConfigState{} },
+		func(st *tempRoleConfigState) *sync.Mutex { return &st.mu })
+	b.tempRoles = newGuildStateStore(s3, log, "temproles",
+		func() *tempRoleState { return &tempRoleState{} },
+		func(st *tempRoleState) *sync.Mutex { return &st.mu })
 
 	// Set up default-fallback hooks for features with hardcoded defaults.
 	defaults := defaultEventLogConfig()
@@ -207,158 +263,68 @@ func New(token string) (*Bot, error) {
 		}
 	}
 
-	b.removeRetiredCacheFiles()
-	b.loadMessageCache()
-	b.loadMemberCache()
-	b.loadGuildCache()
-	b.loadChannelCache()
-	b.loadRoleCache()
-	b.loadEmojiCache()
-	b.loadStickerCache()
-	b.loadVoiceStateCache()
-	b.loadStageInstanceCache()
-	b.loadScheduledEventCache()
-	b.loadSoundboardSoundCache()
-
-	client, err := disgo.New(token,
-		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
-		bot.WithCacheConfigOpts(
-			cache.WithCaches(enabledCacheFlags),
-			cache.WithGuildCache(cache.NewGuildCache(guildCache, cache.NewSet[snowflake.ID](), cache.NewSet[snowflake.ID]())),
-			cache.WithChannelCache(cache.NewChannelCache(channelCache)),
-			cache.WithMessageCache(cache.NewMessageCache(msgCache)),
-			cache.WithMemberCache(cache.NewMemberCache(memberCache)),
-			cache.WithRoleCache(cache.NewRoleCache(roleCache)),
-			cache.WithEmojiCache(cache.NewEmojiCache(emojiCache)),
-			cache.WithStickerCache(cache.NewStickerCache(stickerCache)),
-			cache.WithVoiceStateCache(cache.NewVoiceStateCache(voiceStateCache)),
-			cache.WithStageInstanceCache(cache.NewStageInstanceCache(stageInstanceCache)),
-			cache.WithGuildScheduledEventCache(cache.NewGuildScheduledEventCache(scheduledEventCache)),
-			cache.WithGuildSoundboardSoundCache(cache.NewGuildSoundboardSoundCache(soundboardSoundCache)),
-		),
-		bot.WithGatewayConfigOpts(
-			gateway.WithIntents(
-				gateway.IntentGuilds,
-				gateway.IntentGuildMembers,
-				gateway.IntentGuildModeration,
-				gateway.IntentGuildMessages,
-				gateway.IntentGuildMessageReactions,
-				gateway.IntentMessageContent,
-				gateway.IntentGuildExpressions,
-				gateway.IntentGuildVoiceStates,
-				gateway.IntentGuildScheduledEvents,
-			),
-			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
-			gateway.WithCloseHandler(b.OnGatewayClose),
-		),
-		bot.WithEventListenerFunc(b.OnReady),
-		bot.WithEventListenerFunc(b.OnGuildJoin),
-		bot.WithEventListenerFunc(b.onCommand),
-		bot.WithEventListenerFunc(b.onModal),
-		bot.WithEventListenerFunc(b.onComponent),
-		bot.WithEventListenerFunc(b.onAutocomplete),
-		bot.WithEventListenerFunc(b.onMessage),
-		bot.WithEventListenerFunc(b.onMemberJoin),
-		bot.WithEventListenerFunc(b.onMessageDelete),
-		bot.WithEventListenerFunc(b.onMessageUpdate),
-		bot.WithEventListenerFunc(b.onMemberLeave),
-		bot.WithEventListenerFunc(b.onMemberUpdate),
-		bot.WithEventListenerFunc(b.onAuditLogEntry),
-		bot.WithEventListenerFunc(b.onChannelCreate),
-		bot.WithEventListenerFunc(b.onChannelUpdate),
-		bot.WithEventListenerFunc(b.onThreadCreate),
-		bot.WithEventListenerFunc(b.onThreadUpdate),
-		bot.WithEventListenerFunc(b.onThreadDelete),
-		bot.WithEventListenerFunc(b.onRoleUpdate),
-		bot.WithEventListenerFunc(b.onGuildUpdate),
-		bot.WithEventListenerFunc(b.onEmojiCreate),
-		bot.WithEventListenerFunc(b.onEmojiUpdate),
-		bot.WithEventListenerFunc(b.onEmojiDelete),
-		bot.WithEventListenerFunc(b.onStickerCreate),
-		bot.WithEventListenerFunc(b.onStickerUpdate),
-		bot.WithEventListenerFunc(b.onStickerDelete),
-		bot.WithEventListenerFunc(b.onStageInstanceCreate),
-		bot.WithEventListenerFunc(b.onStageInstanceUpdate),
-		bot.WithEventListenerFunc(b.onStageInstanceDelete),
-		bot.WithEventListenerFunc(b.onScheduledEventCreate),
-		bot.WithEventListenerFunc(b.onScheduledEventUpdate),
-		bot.WithEventListenerFunc(b.onScheduledEventDelete),
-		bot.WithEventListenerFunc(b.onSoundboardSoundCreate),
-		bot.WithEventListenerFunc(b.onSoundboardSoundUpdate),
-		bot.WithEventListenerFunc(b.onSoundboardSoundDelete),
-		bot.WithEventListenerFunc(b.onReactionAdd),
-		bot.WithEventListenerFunc(b.onReactionRemove),
-		bot.WithEventListenerFunc(b.onReactionRemoveAll),
-		bot.WithEventListenerFunc(b.onReactionRemoveEmoji),
-	)
-	if err != nil {
-		return nil, err
+	for _, s := range b.stateStores() {
+		s.setGuilds(b.servedGuilds)
 	}
-
-	b.Client = client
-	return b, nil
 }
 
-func (b *Bot) Run() error {
-	ctx := context.Background()
-
-	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045773440", b.Client.ApplicationID))
-
-	if err := b.OpenGateway(ctx); err != nil {
-		return err
-	}
-	defer b.Client.Close(ctx)
-
-	b.WaitForGuilds(30 * time.Second)
-
+// servedGuilds returns the allowed guilds the bot is in: those in the gateway
+// cache, plus those the gateway listed that are still loading or unavailable
+// through an outage. The stores' periodic and shutdown saves cover only these.
+func (b *Bot) servedGuilds() []snowflake.ID {
 	guildIDs := b.GuildIDs()
-	b.loadTemplates()
-	b.loadSelfroles()
-	b.loadTicketConfigs()
-	b.autoRole.load(guildIDs)
-	b.eventLog.load(guildIDs)
-	b.modLog.load(guildIDs)
-	b.topPostersConfig.load(guildIDs)
-	b.topPosters.load(guildIDs)
-	b.posterRole.load(guildIDs)
-	b.tickets.load(guildIDs)
-	b.shortcuts.load(guildIDs)
-	b.welcome.load(guildIDs)
-	b.starboard.load(guildIDs)
-	b.renameLogs.load(guildIDs)
-	b.tempRoleConfig.load(guildIDs)
-	b.tempRoles.load(guildIDs)
-	b.ensureTicketPanels()
-	b.ensureSelfrolePanels()
-	if err := b.registerAllCommands(); err != nil {
-		return fmt.Errorf("registering commands: %w", err)
+	if b.Client == nil || b.TestGuildIDsOverride != nil {
+		return guildIDs
 	}
-	go b.forumReminderLoop()
-	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveTopPosters)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.posterRole.save)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.shortcuts.save)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.tickets.save)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.welcome.save)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMessageCache)
-	go botutil.RunSaveLoop(&b.Ready, 1*time.Hour, b.stop, b.pruneMessageCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveGuildCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveChannelCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveRoleCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveEmojiCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveStickerCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveVoiceStateCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveStageInstanceCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveScheduledEventCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveSoundboardSoundCache)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveStarboard)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.renameLogs.save)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.tempRoles.save)
-	go botutil.RunSaveLoop(&b.Ready, 1*time.Minute, b.stop, b.processTempRoleExpiries)
+	for _, id := range slices.Concat(b.Client.Caches.UnreadyGuildIDs(), b.Client.Caches.UnavailableGuildIDs()) {
+		if botutil.GuildAllowed(id) && !slices.Contains(guildIDs, id) {
+			guildIDs = append(guildIDs, id)
+		}
+	}
+	return guildIDs
+}
 
-	shutdownErr := b.WaitForShutdown("Bot")
-	close(b.stop)
+// guildStateLoader is the part of a guildStateStore that doesn't depend on
+// its state type.
+type guildStateLoader interface {
+	load(guildIDs []snowflake.ID)
+	retryFailedLoads()
+	setGuilds(guilds func() []snowflake.ID)
+}
+
+// stateStores lists every per-guild state store.
+func (b *Bot) stateStores() []guildStateLoader {
+	return []guildStateLoader{
+		b.autoRole, b.eventLog, b.modLog, b.topPostersConfig, b.topPosters, b.posterRole, b.tickets,
+		b.shortcuts, b.welcome, b.starboard, b.renameLogs, b.tempRoleConfig, b.tempRoles,
+	}
+}
+
+// loadState loads every store for every allowed guild, the stores
+// concurrently. It needs only S3, so Run calls it before opening the gateway:
+// handlers start as soon as it opens, and one that found no state could save
+// fresh state over the real one.
+func (b *Bot) loadState() {
+	var wg sync.WaitGroup
+	for _, s := range b.stateStores() {
+		wg.Go(func() { s.load(botutil.AllowedGuildIDs) })
+	}
+	wg.Wait()
+}
+
+// retryFailedLoads retries every failed load, the stores concurrently as in
+// loadState, so a hung S3 holds up shutdown by about a storeS3Timeout per
+// guild rather than per guild and store.
+func (b *Bot) retryFailedLoads() {
+	var wg sync.WaitGroup
+	for _, s := range b.stateStores() {
+		wg.Go(s.retryFailedLoads)
+	}
+	wg.Wait()
+}
+
+// saveState saves every per-guild state store.
+func (b *Bot) saveState() {
 	b.autoRole.save()
 	b.eventLog.save()
 	b.modLog.save()
@@ -372,16 +338,58 @@ func (b *Bot) Run() error {
 	b.renameLogs.save()
 	b.tempRoleConfig.save()
 	b.tempRoles.save()
-	b.saveMessageCache()
-	b.saveMemberCache()
-	b.saveGuildCache()
-	b.saveChannelCache()
-	b.saveRoleCache()
-	b.saveEmojiCache()
-	b.saveStickerCache()
-	b.saveVoiceStateCache()
-	b.saveStageInstanceCache()
-	b.saveScheduledEventCache()
-	b.saveSoundboardSoundCache()
+}
+
+// startLoop runs fn every interval until b.stop is closed. stopLoops waits
+// for it, so a run in progress finishes before the final saves.
+func (b *Bot) startLoop(interval time.Duration, fn func()) {
+	b.loops.Go(func() { botutil.RunSaveLoop(&b.Ready, interval, b.stop, fn) })
+}
+
+// stopLoops stops the loops started by startLoop and waits for them to return.
+func (b *Bot) stopLoops() {
+	close(b.stop)
+	b.loops.Wait()
+}
+
+func (b *Bot) Run() error {
+	ctx := context.Background()
+
+	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045773440", b.Client.ApplicationID))
+
+	b.loadState()
+
+	if err := b.OpenGateway(ctx); err != nil {
+		return err
+	}
+	defer b.Client.Close(ctx)
+
+	b.WaitForGuilds(30 * time.Second)
+
+	b.ensureTicketPanels()
+	b.ensureSelfrolePanels()
+	if err := b.registerAllCommands(); err != nil {
+		return fmt.Errorf("registering commands: %w", err)
+	}
+	go b.forumReminderLoop()
+	// Not a startLoop: it saves nothing, and a hung ping would hold up shutdown.
+	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
+	b.startLoop(1*time.Minute, b.retryFailedLoads)
+	b.startLoop(5*time.Minute, b.saveTopPosters)
+	b.startLoop(5*time.Minute, b.posterRole.save)
+	b.startLoop(5*time.Minute, b.shortcuts.save)
+	b.startLoop(5*time.Minute, b.tickets.save)
+	b.startLoop(5*time.Minute, b.welcome.save)
+	b.startLoop(5*time.Minute, b.saveCaches) // also prunes expired messages
+	b.startLoop(1*time.Hour, func() { pruneCorruptBackups(b.S3, b.Log, time.Now()) })
+	b.startLoop(5*time.Minute, b.saveStarboard)
+	b.startLoop(5*time.Minute, b.renameLogs.save)
+	b.startLoop(5*time.Minute, b.tempRoles.save)
+	b.startLoop(1*time.Minute, b.processTempRoleExpiries)
+
+	shutdownErr := b.WaitForShutdown("Bot")
+	b.stopLoops()
+	b.saveState()
+	b.saveCaches()
 	return shutdownErr
 }
