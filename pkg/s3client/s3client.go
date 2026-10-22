@@ -774,6 +774,31 @@ func (c *Client) SaveShortcutImage(ctx context.Context, guildID string, fileURL 
 	return s3Path, nil
 }
 
+// CopyShortcutFile copies a saved file (a bare key, of any kind or guild) into
+// guildID's shortcut files under a new name, server side, and returns the new
+// key.
+func (c *Client) CopyShortcutFile(ctx context.Context, guildID, srcKey string) (string, error) {
+	if _, _, _, ok := sprobot.ParseFileKey(srcKey); !ok {
+		return "", fmt.Errorf("not a saved file: %q", srcKey)
+	}
+	s3Path, ok := sprobot.FileKey("shortcut", guildID, randomString(30)+sprobot.SafeFileExt(path.Ext(srcKey)))
+	if !ok {
+		return "", fmt.Errorf("invalid guild ID %q", guildID)
+	}
+	// Saved-file keys are ASCII letters, digits, '.', '_' and '/', so the copy
+	// source needs no escaping.
+	source := c.bucket + "/" + srcKey
+	if _, err := c.s3.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     &c.bucket,
+		Key:        &s3Path,
+		CopySource: &source,
+	}); err != nil {
+		return "", fmt.Errorf("copying %s: %w", srcKey, err)
+	}
+	c.log.Info("Shortcut file copied", "guild_id", guildID, "source", srcKey, "s3_key", s3Path)
+	return s3Path, nil
+}
+
 func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guildID, userID string, profile map[string]string) (userErr string, s3URL string) {
 	maybeURL, ok := profile[tmpl.Image.Name]
 	if !ok || maybeURL == "" {

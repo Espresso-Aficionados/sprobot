@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -40,10 +41,7 @@ func (b *Bot) postRenameLog(guildID snowflake.ID, embed discord.Embed) {
 
 // checkChannelRename posts to the rename log when a monitored channel's name changes.
 func (b *Bot) checkChannelRename(e *events.GuildChannelUpdate) {
-	if e.OldChannel == nil {
-		return
-	}
-	if e.OldChannel.Name() == e.Channel.Name() {
+	if e.OldChannel == nil || !isChannelRename(e.OldChannel.Name(), e.Channel.Name()) {
 		return
 	}
 
@@ -74,10 +72,7 @@ func (b *Bot) checkChannelRename(e *events.GuildChannelUpdate) {
 // checkThreadRename posts to the rename log when a monitored thread's name changes.
 // A thread matches if its ID or its parent channel ID is in the monitored list.
 func (b *Bot) checkThreadRename(e *events.ThreadUpdate) {
-	if e.OldThread.ID() == 0 {
-		return
-	}
-	if e.OldThread.Name() == e.Thread.Name() {
+	if e.OldThread.ID() == 0 || !isChannelRename(e.OldThread.Name(), e.Thread.Name()) {
 		return
 	}
 
@@ -152,6 +147,12 @@ func (b *Bot) handleRenameLogSet(e *events.ApplicationCommandInteractionCreate) 
 	ch, ok := data.OptChannel("channel")
 	if !ok {
 		botutil.RespondEphemeral(e, "Channel is required.")
+		return
+	}
+	// The option restricts the picker, but a command registered before it
+	// did, or a client that ignores it, can still send any channel.
+	if !slices.Contains(logChannelTypes, ch.Type) {
+		botutil.RespondEphemeral(e, "Rename logs must go to a text or announcement channel.")
 		return
 	}
 

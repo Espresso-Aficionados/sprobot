@@ -2,7 +2,9 @@ package bot
 
 import (
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -240,5 +242,178 @@ func TestFormatTicketDuration(t *testing.T) {
 		if got := formatTicketDuration(tt.d); got != tt.want {
 			t.Errorf("formatTicketDuration(%v) = %q, want %q", tt.d, got, tt.want)
 		}
+	}
+}
+
+func TestTicketOpenGuard(t *testing.T) {
+	st := &ticketState{}
+	now := time.Now()
+	const alice, bob = snowflake.ID(1), snowflake.ID(2)
+
+	if ok, _ := st.beginOpen(alice, now); !ok {
+		t.Fatal("first open refused")
+	}
+	if ok, recent := st.beginOpen(alice, now); ok || recent != 0 {
+		t.Errorf("click during an open = %v, %d; want refused with no ticket yet", ok, recent)
+	}
+	if ok, _ := st.beginOpen(bob, now); !ok {
+		t.Error("another user's open was refused")
+	}
+
+	st.endOpen(alice, 99, now)
+	if ok, recent := st.beginOpen(alice, now.Add(ticketOpenCooldown-time.Second)); ok || recent != 99 {
+		t.Errorf("click within the cooldown = %v, %d; want refused pointing at ticket 99", ok, recent)
+	}
+	if ok, _ := st.beginOpen(alice, now.Add(ticketOpenCooldown)); !ok {
+		t.Error("open after the cooldown refused")
+	}
+
+	// A failed open can be retried straight away.
+	st.endOpen(bob, 0, now)
+	if ok, _ := st.beginOpen(bob, now); !ok {
+		t.Error("retry after a failed open refused")
+	}
+}
+
+// newTicketBot returns a bot with tickets configured in guild 10: panel
+// channel 50, staff role 60. Opening a ticket creates thread 70.
+func newTicketBot(t *testing.T) (*Bot, *discordStub) {
+	t.Helper()
+	b, stub := newStubBot(t)
+	b.ticketConfigs = map[snowflake.ID]ticketConfig{10: {
+		ChannelID:        50,
+		StaffRoleID:      60,
+		TicketIntro:      "Hello, %s!",
+		CloseButtonLabel: "Close Ticket",
+	}}
+	b.tickets = newGuildStateStore(b.S3, b.Log, "tickets",
+		func() *ticketState { return &ticketState{Counter: 1} },
+		func(st *ticketState) *sync.Mutex { return &st.mu })
+	b.tickets.set(10, &ticketState{Counter: 1})
+	stub.on("POST /channels/50/threads", 201, `{"id":"70","type":12,"guild_id":"10","parent_id":"50","name":"ticket-1","thread_metadata":{}}`)
+	return b, stub
+}
+
+func TestTicketOpenDeletesThreadTheUserCannotJoin(t *testing.T) {
+	b, stub := newTicketBot(t)
+	stub.on("PUT /channels/70/thread-members/30", 403, discordError(50001, "Missing Access"))
+
+	e, replies := componentEvent(t, b.Client, "ticket_open", `"60"`, "")
+	b.handleTicketOpen(e)
+
+	if _, data := replies.only(t); !isEphemeral(data) {
+		t.Error("open was not deferred ephemerally")
+	}
+	if got := stub.bodies("DELETE /channels/70"); len(got) != 1 {
+		t.Errorf("deleted the unusable thread %d times, want 1", len(got))
+	}
+	if got := stub.bodies("POST /channels/70/messages"); len(got) != 0 {
+		t.Error("posted the intro (and pinged staff) in a thread the user can't see")
+	}
+	msgs := stub.followups(t, "tok")
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Content, "went wrong") || !msgs[0].Flags.Has(discord.MessageFlagEphemeral) {
+		t.Errorf("follow-ups = %+v, want one ephemeral failure notice", msgs)
+	}
+
+	// The failed open doesn't block a retry.
+	stub.on("PUT /channels/70/thread-members/30", 204, "")
+	e, _ = componentEvent(t, b.Client, "ticket_open", `"60"`, "")
+	b.handleTicketOpen(e)
+	if got := stub.bodies("POST /channels/50/threads"); len(got) != 2 {
+		t.Errorf("created %d threads, want a retry to create a second", len(got))
+	}
+}
+
+func TestTicketOpenSecondClickOpensNoSecondTicket(t *testing.T) {
+	b, stub := newTicketBot(t)
+	stub.on("PUT /channels/70/thread-members/30", 204, "")
+
+	for range 2 {
+		e, _ := componentEvent(t, b.Client, "ticket_open", `"60"`, "")
+		b.handleTicketOpen(e)
+	}
+
+	if got := stub.bodies("POST /channels/50/threads"); len(got) != 1 {
+		t.Errorf("created %d ticket threads, want 1", len(got))
+	}
+	if got := stub.bodies("POST /channels/70/messages"); len(got) != 1 {
+		t.Errorf("pinged staff %d times, want 1", len(got))
+	}
+	msgs := stub.followups(t, "tok")
+	if len(msgs) != 2 || !strings.Contains(msgs[1].Content, "<#70>") || !msgs[1].Flags.Has(discord.MessageFlagEphemeral) {
+		t.Errorf("follow-ups = %+v, want the second click pointed at the ticket", msgs)
+	}
+}
+
+func TestTicketOpenAnswersWhenNotConfigured(t *testing.T) {
+	b, stub := newTicketBot(t)
+	b.ticketConfigs = nil
+
+	e, _ := componentEvent(t, b.Client, "ticket_open", "", "")
+	b.handleTicketOpen(e)
+
+	msgs := stub.followups(t, "tok")
+	if len(msgs) != 1 || !msgs[0].Flags.Has(discord.MessageFlagEphemeral) || !strings.Contains(msgs[0].Content, "aren't set up") {
+		t.Errorf("follow-ups = %+v, want one ephemeral answer instead of leaving the user thinking", msgs)
+	}
+}
+
+// A configured guild whose ticket counter failed to load opens no ticket, and
+// says it's a temporary problem rather than that tickets aren't set up.
+func TestTicketOpenUnavailableWhileNotLoaded(t *testing.T) {
+	b, stub := newTicketBot(t)
+	b.tickets = newGuildStateStore(b.S3, b.Log, "tickets",
+		func() *ticketState { return &ticketState{Counter: 1} },
+		func(st *ticketState) *sync.Mutex { return &st.mu })
+	b.tickets.mu.Lock()
+	b.tickets.failed[10] = true
+	b.tickets.mu.Unlock()
+
+	e, _ := componentEvent(t, b.Client, "ticket_open", "", "")
+	b.handleTicketOpen(e)
+
+	msgs := stub.followups(t, "tok")
+	if len(msgs) != 1 || !msgs[0].Flags.Has(discord.MessageFlagEphemeral) || !strings.Contains(msgs[0].Content, "temporarily unavailable") {
+		t.Errorf("follow-ups = %+v, want one ephemeral 'temporarily unavailable'", msgs)
+	}
+	if got := stub.bodies("POST /channels/50/threads"); len(got) != 0 {
+		t.Errorf("created %d ticket threads with an unloaded counter, want 0", len(got))
+	}
+	if st := b.tickets.get(10); st != nil {
+		t.Errorf("state %+v installed for a guild whose load failed", st)
+	}
+}
+
+func TestTicketCloseLocksBeforeSayingClosed(t *testing.T) {
+	b, stub := newTicketBot(t)
+
+	e, replies := componentEvent(t, b.Client, "ticket_close_yes:30", `"60"`, "")
+	b.handleTicketClose(e, 30)
+
+	if typ, _ := replies.only(t); typ != discord.InteractionResponseTypeDeferredUpdateMessage {
+		t.Errorf("acknowledged with %v, want a deferred update", typ)
+	}
+	want := []string{"PATCH /channels/20", "PATCH /webhooks/2/tok/messages/@original", "PATCH /channels/20"}
+	if got := stub.routesCalled(); !slices.Equal(got, want) {
+		t.Errorf("calls = %v, want lock, edit, archive: %v", got, want)
+	}
+	if bodies := stub.bodies("PATCH /channels/20"); len(bodies) != 2 || !strings.Contains(bodies[0], `"locked":true`) || !strings.Contains(bodies[1], `"archived":true`) {
+		t.Errorf("thread updates = %v, want lock then archive", bodies)
+	}
+}
+
+func TestTicketCloseReportsLockFailure(t *testing.T) {
+	b, stub := newTicketBot(t)
+	stub.on("PATCH /channels/20", 403, discordError(50013, "Missing Permissions"))
+
+	e, _ := componentEvent(t, b.Client, "ticket_close_yes:30", `"60"`, "")
+	b.handleTicketClose(e, 30)
+
+	if got := stub.bodies("PATCH /webhooks/2/tok/messages/@original"); len(got) != 0 {
+		t.Errorf("marked the ticket closed although locking failed: %v", got)
+	}
+	msgs := stub.followups(t, "tok")
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Content, "Couldn't close") || !msgs[0].Flags.Has(discord.MessageFlagEphemeral) {
+		t.Errorf("follow-ups = %+v, want an ephemeral failure notice", msgs)
 	}
 }

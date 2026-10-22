@@ -26,26 +26,31 @@ func (b *Bot) handleWarn(e *events.ApplicationCommandInteractionCreate) {
 
 	reason := data.String("reason")
 
-	// Post public warning embed in the channel
-	if err := e.CreateMessage(discord.MessageCreate{
-		Content: userMention(targetUser.ID),
-		Embeds: []discord.Embed{{
-			Title:       "Warning",
-			Color:       colorOrange,
-			Description: fmt.Sprintf("You have been warned and this has been saved to your permanent record.\n\n**Reason:** %s", reason),
-			Footer: &discord.EmbedFooter{
-				Text:    fmt.Sprintf("Issued by @%s", e.User().Username),
-				IconURL: e.User().EffectiveAvatarURL(),
-			},
-		}},
-	}); err != nil {
+	// Post public warning embed in the channel. The callback returns the
+	// posted message, which the mod log links to.
+	callback, err := b.Client.Rest.CreateInteractionResponseWithCallback(e.ID(), e.Token(), discord.InteractionResponse{
+		Type: discord.InteractionResponseTypeCreateMessage,
+		Data: discord.MessageCreate{
+			Content: userMention(targetUser.ID),
+			Embeds: []discord.Embed{{
+				Title:       "Warning",
+				Color:       colorOrange,
+				Description: fmt.Sprintf("You have been warned and this has been saved to your permanent record.\n\n**Reason:** %s", reason),
+				Footer: &discord.EmbedFooter{
+					Text:    fmt.Sprintf("Issued by @%s", e.User().Username),
+					IconURL: e.User().EffectiveAvatarURL(),
+				},
+			}},
+		},
+	})
+	if err != nil {
 		b.Log.Error("Failed to post warning message", "error", err, "target_user_id", targetUser.ID, "guild_id", *guildID)
 		return
 	}
 
-	// Fetch the sent message to build a link for the mod log
 	var warnLink string
-	if msg, err := b.Client.Rest.GetInteractionResponse(e.ApplicationID(), e.Token()); err == nil {
+	if callback != nil && callback.Resource != nil && callback.Resource.Message != nil {
+		msg := callback.Resource.Message
 		warnLink = messageLink(*guildID, msg.ChannelID, msg.ID)
 	}
 

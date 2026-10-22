@@ -23,7 +23,7 @@ type Bot struct {
 	stop                 chan struct{}
 	loops                sync.WaitGroup // the loops started by startLoop
 	searchClient         *http.Client
-	skipList             map[snowflake.ID]string // goroutine-confined to forumReminderLoop
+	forumReminders       forumReminderState
 	topPosters           *guildStateStore[guildPostCounts]
 	posterRole           *guildStateStore[posterRoleState]
 	tickets              *guildStateStore[ticketState]
@@ -71,7 +71,6 @@ func New(token string) (*Bot, error) {
 		BaseBot:          base,
 		stop:             make(chan struct{}),
 		searchClient:     &http.Client{Timeout: 30 * time.Second},
-		skipList:         make(map[snowflake.ID]string),
 		welcomeSent:      make(map[snowflake.ID]time.Time),
 		templates:        sprobot.AllTemplates(),
 		selfroles:        getSelfroleConfig(),
@@ -120,6 +119,9 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onChannelCreate),
 		bot.WithEventListenerFunc(b.onChannelUpdate),
 		bot.WithEventListenerFunc(b.onThreadCreate),
+		bot.WithEventListenerFunc(b.onForumThreadCreate),
+		bot.WithEventListenerFunc(b.onForumReminderReady),
+		bot.WithEventListenerFunc(b.onForumThreadMessage),
 		bot.WithEventListenerFunc(b.onThreadUpdate),
 		bot.WithEventListenerFunc(b.onThreadDelete),
 		bot.WithEventListenerFunc(b.onModLogThreadCreate),
@@ -367,6 +369,9 @@ func (b *Bot) Run() error {
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045773440", b.Client.ApplicationID))
 
 	b.loadState()
+	// Lists stored profiles from S3 only; name updates probe authors until it
+	// finishes.
+	go b.loadProfileOwners(botutil.AllowedGuildIDs)
 
 	if err := b.OpenGateway(ctx); err != nil {
 		return err

@@ -124,7 +124,7 @@ func (f *fakeStarboardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if f.createStatus != 0 {
-			discordError(w, f.createStatus, 0)
+			writeJSONError(w, f.createStatus, 0)
 			return
 		}
 		f.creates = append(f.creates, body)
@@ -147,7 +147,7 @@ func (f *fakeStarboardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			<-gate
 		}
 		if !ok {
-			discordError(w, http.StatusNotFound, rest.JSONErrorCodeUnknownMessage)
+			writeJSONError(w, http.StatusNotFound, rest.JSONErrorCodeUnknownMessage)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -162,7 +162,7 @@ func (f *fakeStarboardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.channelGets++
 		ch, ok := f.channels[channelID]
 		if !ok {
-			discordError(w, http.StatusNotFound, rest.JSONErrorCodeUnknownChannel)
+			writeJSONError(w, http.StatusNotFound, rest.JSONErrorCodeUnknownChannel)
 			return
 		}
 		writeJSON(w, ch)
@@ -170,7 +170,7 @@ func (f *fakeStarboardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		key := channelID + "/" + parts[3]
 		msg, ok := f.messages[key]
 		if !ok {
-			discordError(w, http.StatusNotFound, rest.JSONErrorCodeUnknownMessage)
+			writeJSONError(w, http.StatusNotFound, rest.JSONErrorCodeUnknownMessage)
 			return
 		}
 		switch r.Method {
@@ -186,7 +186,7 @@ func (f *fakeStarboardAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, msg)
 		case http.MethodDelete:
 			if f.deleteStatus != 0 {
-				discordError(w, f.deleteStatus, 0)
+				writeJSONError(w, f.deleteStatus, 0)
 				return
 			}
 			delete(f.messages, key)
@@ -203,7 +203,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func discordError(w http.ResponseWriter, status int, code rest.JSONErrorCode) {
+func writeJSONError(w http.ResponseWriter, status int, code rest.JSONErrorCode) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"code": code, "message": "error"})
@@ -1228,13 +1228,6 @@ func TestParseEmojiInputCustom(t *testing.T) {
 func TestParseEmojiInputAnimated(t *testing.T) {
 	if got := parseEmojiInput("<a:dance:789>"); got != "dance:789" {
 		t.Errorf("expected dance:789, got %s", got)
-	}
-}
-
-func TestIntPtr(t *testing.T) {
-	p := intPtr(42)
-	if *p != 42 {
-		t.Errorf("expected 42, got %d", *p)
 	}
 }
 

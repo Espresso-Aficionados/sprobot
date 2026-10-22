@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/disgoorg/disgo/discord"
@@ -162,5 +163,81 @@ func TestGetSelfroleConfig(t *testing.T) {
 	}
 	if len(cfgs) != 3 {
 		t.Errorf("expected 3 panel configs for prod, got %d", len(cfgs))
+	}
+}
+
+func newSelfroleBot(t *testing.T) (*Bot, *discordStub) {
+	t.Helper()
+	b, stub := newStubBot(t)
+	b.selfroles = map[snowflake.ID][]selfroleConfig{10: {
+		{ChannelID: 90, Message: "pronouns", Buttons: []selfroleButton{{Label: "They/them", RoleID: 80}}},
+		{ChannelID: 90, Message: "helpers", Buttons: []selfroleButton{{Label: "Helper", RoleID: 81}}},
+		{ChannelID: 90, Message: "opt out", GrantOnly: true, Buttons: []selfroleButton{{Label: "Opt Out", RoleID: 82}}},
+	}}
+	return b, stub
+}
+
+func TestSelfroleToggleDefersBeforeChangingRole(t *testing.T) {
+	b, stub := newSelfroleBot(t)
+	stub.on("PUT /guilds/10/members/30/roles/80", 204, "")
+
+	e, replies := componentEvent(t, b.Client, "selfrole_80", "", "")
+	b.handleSelfroleToggle(e, 80)
+
+	typ, data := replies.only(t)
+	if typ != discord.InteractionResponseTypeDeferredCreateMessage || !isEphemeral(data) {
+		t.Errorf("first response = %v, want an ephemeral defer before the REST call", typ)
+	}
+	if got := stub.bodies("PUT /guilds/10/members/30/roles/80"); len(got) != 1 {
+		t.Errorf("added the role %d times, want 1", len(got))
+	}
+	msgs := stub.followups(t, "tok")
+	if len(msgs) != 1 || msgs[0].Content != "Added **They/them**" || !msgs[0].Flags.Has(discord.MessageFlagEphemeral) {
+		t.Errorf("follow-ups = %+v, want an ephemeral confirmation", msgs)
+	}
+}
+
+func TestSelfroleToggleRemovesHeldRole(t *testing.T) {
+	b, stub := newSelfroleBot(t)
+	stub.on("DELETE /guilds/10/members/30/roles/81", 204, "")
+
+	e, _ := componentEvent(t, b.Client, "selfrole_81", `"81"`, "")
+	b.handleSelfroleToggle(e, 81)
+
+	if got := stub.bodies("DELETE /guilds/10/members/30/roles/81"); len(got) != 1 {
+		t.Errorf("removed the role %d times, want 1", len(got))
+	}
+	if msgs := stub.followups(t, "tok"); len(msgs) != 1 || msgs[0].Content != "Removed **Helper**" {
+		t.Errorf("follow-ups = %+v, want a removal confirmation", msgs)
+	}
+}
+
+func TestSelfroleToggleStaleButton(t *testing.T) {
+	b, stub := newSelfroleBot(t)
+
+	e, replies := componentEvent(t, b.Client, "selfrole_999", "", "")
+	b.handleSelfroleToggle(e, 999)
+
+	_, data := replies.only(t)
+	if !isEphemeral(data) || !strings.Contains(contentOf(data), "no longer available") {
+		t.Errorf("response = %+v, want an ephemeral 'no longer available'", data)
+	}
+	if got := stub.routesCalled(); len(got) != 0 {
+		t.Errorf("made REST calls for an unconfigured role: %v", got)
+	}
+}
+
+func TestEnsureSelfrolePanelsReadsSharedChannelOnce(t *testing.T) {
+	b, stub := newSelfroleBot(t)
+	b.TestGuildIDsOverride = []snowflake.ID{10}
+	stub.on("GET /channels/90/messages", 200, "[]")
+
+	b.ensureSelfrolePanels()
+
+	if got := stub.bodies("GET /channels/90/messages"); len(got) != 1 {
+		t.Errorf("read the shared channel %d times, want 1", len(got))
+	}
+	if got := stub.bodies("POST /channels/90/messages"); len(got) != 3 {
+		t.Errorf("posted %d panels, want 3", len(got))
 	}
 }

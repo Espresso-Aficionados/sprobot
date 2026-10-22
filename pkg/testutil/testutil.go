@@ -1,11 +1,15 @@
 package testutil
 
 import (
+	"encoding/xml"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -25,6 +29,10 @@ type FakeS3 struct {
 	Fail map[string]int
 	// Deleted lists the path of every DELETE request that succeeded, in order.
 	Deleted []string
+	// Requests lists every request as "METHOD path", in order.
+	Requests []string
+	// ListPageSize caps the keys in one list response (default 1000, as S3).
+	ListPageSize int
 }
 
 func NewFakeS3() *FakeS3 {
@@ -36,6 +44,7 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer f.Mu.Unlock()
 
 	key := r.URL.Path
+	f.Requests = append(f.Requests, r.Method+" "+key)
 
 	if status, ok := f.Fail[key]; ok {
 		code := "InjectedError"
@@ -43,6 +52,11 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			code = "NoSuchKey"
 		}
 		writeError(w, status, code)
+		return
+	}
+
+	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
+		f.list(w, r)
 		return
 	}
 
@@ -66,6 +80,10 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 
 	case http.MethodPut:
+		if src := r.Header.Get("X-Amz-Copy-Source"); src != "" {
+			f.copyObject(w, key, src)
+			return
+		}
 		data, _ := io.ReadAll(r.Body)
 		f.Objects[key] = data
 		w.WriteHeader(http.StatusOK)
@@ -79,6 +97,73 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// copyObject answers CopyObject: src is "bucket/key", optionally escaped and
+// with a leading slash.
+func (f *FakeS3) copyObject(w http.ResponseWriter, key, src string) {
+	if unescaped, err := url.PathUnescape(src); err == nil {
+		src = unescaped
+	}
+	data, ok := f.Objects["/"+strings.TrimPrefix(src, "/")]
+	if !ok {
+		writeError(w, http.StatusNotFound, "NoSuchKey")
+		return
+	}
+	f.Objects[key] = slices.Clone(data)
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	io.WriteString(w, xml.Header+`<CopyObjectResult><ETag>"fake"</ETag></CopyObjectResult>`)
+}
+
+// list answers ListObjectsV2 for the bucket in the path, in key order, a page
+// at a time. The continuation token is the last key of the previous page.
+func (f *FakeS3) list(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	bucketPath := "/" + strings.Trim(r.URL.Path, "/") + "/"
+	var keys []string
+	for path := range f.Objects {
+		key, ok := strings.CutPrefix(path, bucketPath)
+		if ok && strings.HasPrefix(key, q.Get("prefix")) && key > q.Get("continuation-token") {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+
+	pageSize := 1000
+	if f.ListPageSize > 0 {
+		pageSize = f.ListPageSize
+	}
+	result := listBucketResult{Prefix: q.Get("prefix"), MaxKeys: pageSize}
+	if len(keys) > pageSize {
+		keys = keys[:pageSize]
+		result.IsTruncated = true
+		result.NextContinuationToken = keys[len(keys)-1]
+	}
+	for _, key := range keys {
+		result.Contents = append(result.Contents, listObject{Key: key, Size: len(f.Objects[bucketPath+key])})
+	}
+	result.KeyCount = len(keys)
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	io.WriteString(w, xml.Header)
+	xml.NewEncoder(w).Encode(result)
+}
+
+type listBucketResult struct {
+	XMLName               xml.Name     `xml:"http://s3.amazonaws.com/doc/2006-03-01/ ListBucketResult"`
+	Prefix                string       `xml:"Prefix"`
+	KeyCount              int          `xml:"KeyCount"`
+	MaxKeys               int          `xml:"MaxKeys"`
+	IsTruncated           bool         `xml:"IsTruncated"`
+	NextContinuationToken string       `xml:"NextContinuationToken,omitempty"`
+	Contents              []listObject `xml:"Contents"`
+}
+
+type listObject struct {
+	Key  string `xml:"Key"`
+	Size int    `xml:"Size"`
 }
 
 func writeError(w http.ResponseWriter, status int, code string) {

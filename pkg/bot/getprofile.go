@@ -16,16 +16,13 @@ import (
 )
 
 func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
-	guildStr := guildIDStr(e)
-	userStr := userIDStr(e)
-
 	b.Log.Info("Processing getprofile",
-		"user_id", userStr,
+		"user_id", userIDStr(e),
 		"template", tmpl.Name,
-		"guild_id", guildStr,
+		"guild_id", guildIDStr(e),
 	)
 
-	// Defer since GetMember + FetchProfile may exceed the 3s deadline.
+	// Defer since FetchProfile may exceed the 3s deadline.
 	if err := e.DeferCreateMessage(false); err != nil {
 		b.Log.Error("Failed to defer getprofile response", "error", err)
 		return
@@ -33,47 +30,86 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 
 	targetID := e.User().ID
 	targetName := getNickOrName(e.Member())
-	isSelf := true
-
 	if data, ok := e.Data.(discord.SlashCommandInteractionData); ok {
 		if user, ok := data.OptUser("name"); ok {
 			targetID = user.ID
-			// Try to get member for nick
-			member, err := b.Client.Rest.GetMember(*e.GuildID(), targetID)
-			if err == nil {
+			targetName = user.EffectiveName()
+			// The interaction resolves the chosen member, nickname included.
+			if member, ok := data.OptMember("name"); ok {
 				targetName = member.EffectiveName()
-			} else {
-				targetName = user.Username
 			}
-			isSelf = false
 		}
 	}
 
-	targetIDStr := fmt.Sprintf("%d", targetID)
+	b.sendProfile(e, tmpl, targetID, targetName)
+}
+
+func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
+	b.Log.Info("Processing getprofile menu",
+		"user_id", userIDStr(e),
+		"template", tmpl.Name,
+		"guild_id", guildIDStr(e),
+	)
+
+	var targetID snowflake.ID
+	var targetName string
+	fetchMember := false
+	switch data := e.Data.(type) {
+	case discord.UserCommandInteractionData:
+		user := data.TargetUser()
+		targetID = user.ID
+		targetName = user.EffectiveName()
+		if member, ok := data.Resolved.Members[targetID]; ok {
+			targetName = member.EffectiveName()
+		}
+	case discord.MessageCommandInteractionData:
+		// A message target carries its author but not their membership.
+		author := data.TargetMessage().Author
+		targetID = author.ID
+		targetName = author.EffectiveName()
+		fetchMember = true
+	default:
+		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
+		return
+	}
+
+	// Defer since GetMember + FetchProfile may exceed the 3s deadline.
+	if err := e.DeferCreateMessage(false); err != nil {
+		b.Log.Error("Failed to defer getmenu response", "error", err)
+		return
+	}
+
+	if fetchMember {
+		if member, err := b.Client.Rest.GetMember(*e.GuildID(), targetID); err == nil {
+			targetName = member.EffectiveName()
+		}
+	}
+
+	b.sendProfile(e, tmpl, targetID, targetName)
+}
+
+// sendProfile answers a deferred profile lookup with targetID's profile, or,
+// privately, with why there isn't one to show.
+func (b *Bot) sendProfile(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template, targetID snowflake.ID, targetName string) {
+	guildStr := guildIDStr(e)
+	targetIDStr := targetID.String()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, targetIDStr)
 	if err != nil {
-		if errors.Is(err, s3client.ErrNotFound) {
-			var msg string
-			if isSelf {
-				msg = fmt.Sprintf("Whoops! Unable to find a profile for you. To set one up run /edit%s", tmpl.ShortName)
-			} else {
-				msg = fmt.Sprintf("Whoops! Unable to find a profile for %s.", targetName)
-			}
-			b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-				Content: msg,
-				Flags:   discord.MessageFlagEphemeral,
-			})
-			return
+		var msg string
+		switch {
+		case !errors.Is(err, s3client.ErrNotFound):
+			b.Log.Error("Failed to fetch profile", "error", err)
+			msg = "Oops! Something went wrong."
+		case targetID == e.User().ID:
+			msg = fmt.Sprintf("Whoops! Unable to find a profile for you. To set one up run /edit%s", tmpl.ShortName)
+		default:
+			msg = fmt.Sprintf("Whoops! Unable to find a %s profile for %s.", tmpl.Name, targetName)
 		}
-		b.Log.Error("Failed to fetch profile", "error", err)
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-			Content: "Oops! Something went wrong.",
-			Flags:   discord.MessageFlagEphemeral,
-		})
+		b.followupPrivately(e.Token(), msg)
 		return
 	}
 
@@ -85,73 +121,13 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 	}
 }
 
-func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
-	b.Log.Info("Processing getprofile menu",
-		"user_id", userIDStr(e),
-		"template", tmpl.Name,
-		"guild_id", guildIDStr(e),
-	)
-
-	guildStr := guildIDStr(e)
-	var targetUser discord.User
-	var targetID snowflake.ID
-
-	switch data := e.Data.(type) {
-	case discord.UserCommandInteractionData:
-		targetUser = data.TargetUser()
-		targetID = targetUser.ID
-	case discord.MessageCommandInteractionData:
-		msg := data.TargetMessage()
-		targetUser = msg.Author
-		targetID = msg.Author.ID
-	default:
-		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
-		return
+// followupPrivately answers a publicly deferred interaction with an
+// ephemeral message. The first follow-up replaces the deferred response and
+// keeps its visibility whatever its own flags say, so the public placeholder
+// is deleted first.
+func (b *Bot) followupPrivately(token, content string) {
+	if err := b.Client.Rest.DeleteInteractionResponse(b.Client.ApplicationID, token); err != nil {
+		b.Log.Error("Failed to delete deferred response", "error", err)
 	}
-
-	// Defer since GetMember + FetchProfile are two sequential network calls.
-	if err := e.DeferCreateMessage(false); err != nil {
-		b.Log.Error("Failed to defer getmenu response", "error", err)
-		return
-	}
-
-	targetIDStr := fmt.Sprintf("%d", targetID)
-	targetName := targetUser.Username
-	member, err := b.Client.Rest.GetMember(*e.GuildID(), targetID)
-	if err == nil {
-		targetName = member.EffectiveName()
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, targetIDStr)
-	if err != nil {
-		if errors.Is(err, s3client.ErrNotFound) {
-			var msg string
-			if targetID == e.User().ID {
-				msg = fmt.Sprintf("Whoops! Unable to find a profile for you. To set one up run /edit%s", tmpl.ShortName)
-			} else {
-				msg = fmt.Sprintf("Whoops! Unable to find a %s profile for %s.", tmpl.Name, targetName)
-			}
-			b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-				Content: msg,
-				Flags:   discord.MessageFlagEphemeral,
-			})
-			return
-		}
-		b.Log.Error("Failed to fetch profile", "error", err)
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-			Content: "Oops! Something went wrong.",
-			Flags:   discord.MessageFlagEphemeral,
-		})
-		return
-	}
-
-	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr, b.S3)
-	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-		Embeds: []discord.Embed{embed},
-	}); err != nil {
-		b.Log.Error("Failed to send profile embed", "error", err)
-	}
+	botutil.FollowupEphemeral(b.Client, token, content)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 
+	"github.com/sadbox/sprobot/pkg/botutil"
 	"github.com/sadbox/sprobot/pkg/s3client"
 	"github.com/sadbox/sprobot/pkg/sprobot"
 )
@@ -128,6 +129,9 @@ func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
 			}
 		}
 	}
+
+	// A button from an older build, or for something since removed.
+	botutil.RespondEphemeral(e, noLongerAvailable)
 }
 
 func (b *Bot) confirmDeleteProfile(e *events.ComponentInteractionCreate, tmpl sprobot.Template) {

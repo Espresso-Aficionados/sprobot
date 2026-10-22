@@ -81,7 +81,7 @@ func (f *fakeModLogAPI) postCount(threadID snowflake.ID) int {
 	return f.posts[threadID]
 }
 
-func threadJSON(t fakeModLogThread) map[string]any {
+func modLogThreadJSON(t fakeModLogThread) map[string]any {
 	meta := map[string]any{"archived": !t.archivedAt.IsZero(), "auto_archive_duration": 10080}
 	if !t.archivedAt.IsZero() {
 		meta["archive_timestamp"] = t.archivedAt.Format(time.RFC3339Nano)
@@ -124,7 +124,7 @@ func (f *fakeModLogAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		threads := []any{}
 		for _, t := range f.threads {
 			if t.archivedAt.IsZero() {
-				threads = append(threads, threadJSON(t))
+				threads = append(threads, modLogThreadJSON(t))
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"threads": threads, "members": []any{}})
@@ -164,7 +164,7 @@ func (f *fakeModLogAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		threads := []any{}
 		for _, t := range archived {
-			threads = append(threads, threadJSON(t))
+			threads = append(threads, modLogThreadJSON(t))
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"threads": threads, "members": []any{}, "has_more": hasMore})
 
@@ -183,7 +183,7 @@ func (f *fakeModLogAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.nextID++
 		thread := fakeModLogThread{id: f.nextID, name: body.Name}
 		f.threads = append(f.threads, thread)
-		resp := threadJSON(thread)
+		resp := modLogThreadJSON(thread)
 		resp["message"] = map[string]any{"id": thread.id.String(), "channel_id": thread.id.String(), "content": "topic"}
 		_ = json.NewEncoder(w).Encode(resp)
 

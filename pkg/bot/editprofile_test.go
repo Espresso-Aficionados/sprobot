@@ -34,7 +34,7 @@ func respondTo(responses chan<- editResponse) events.InteractionResponderFunc {
 	}
 }
 
-func interactionJSON(kind discord.InteractionType, data string) []byte {
+func editInteractionJSON(kind discord.InteractionType, data string) []byte {
 	return []byte(fmt.Sprintf(`{"id":"1","application_id":"2","type":%d,"token":"tok","guild_id":"1",
 		"channel":{"id":"500","type":0,"guild_id":"1","name":"general"},
 		"user":{"id":"%s","username":"user"},"data":%s}`, kind, editUserID, data))
@@ -50,7 +50,7 @@ func newEditBot(t *testing.T) (*Bot, *hookedS3) {
 func editCommand(t *testing.T, responses chan<- editResponse) *events.ApplicationCommandInteractionCreate {
 	t.Helper()
 	var i discord.ApplicationCommandInteraction
-	if err := json.Unmarshal(interactionJSON(discord.InteractionTypeApplicationCommand, `{"id":"3","name":"editprofile","type":1}`), &i); err != nil {
+	if err := json.Unmarshal(editInteractionJSON(discord.InteractionTypeApplicationCommand, `{"id":"3","name":"editprofile","type":1}`), &i); err != nil {
 		t.Fatalf("decoding interaction: %v", err)
 	}
 	return &events.ApplicationCommandInteractionCreate{ApplicationCommandInteraction: i, Respond: respondTo(responses)}
@@ -119,7 +119,7 @@ func TestEditSubmitKeepsProfileWhenUnreadable(t *testing.T) {
 	h.setHook(failGets(path))
 
 	var i discord.ModalSubmitInteraction
-	if err := json.Unmarshal(interactionJSON(discord.InteractionTypeModalSubmit, `{"custom_id":"edit_profile","components":[]}`), &i); err != nil {
+	if err := json.Unmarshal(editInteractionJSON(discord.InteractionTypeModalSubmit, `{"custom_id":"edit_profile","components":[]}`), &i); err != nil {
 		t.Fatalf("decoding interaction: %v", err)
 	}
 	responses := make(chan editResponse, 2)
