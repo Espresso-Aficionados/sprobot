@@ -138,6 +138,18 @@ func embeddedIPv4(addr netip.Addr) (netip.Addr, bool) {
 // It is a variable so tests can override it.
 var urlValidator = validateImageURL
 
+// AllowLocalFetchesForTesting lifts the checks that keep fetches away from
+// local and private addresses, so tests in other packages can serve files
+// from httptest servers, and returns a func that restores them. Only tests
+// may call it: the checks are what keep a user-supplied URL from reaching
+// internal services.
+func AllowLocalFetchesForTesting() (restore func()) {
+	origValidator, origDial := urlValidator, dialCheck
+	urlValidator = func(string) error { return nil }
+	dialCheck = func(string) error { return nil }
+	return func() { urlValidator, dialCheck = origValidator, origDial }
+}
+
 // validateImageURL checks that the URL uses an allowed scheme and does not
 // resolve to a blocked IP range. It gives an early, clear error; the fetch
 // clients enforce the IP check on the address actually dialed.
@@ -351,6 +363,30 @@ func (c *Client) FileURL(stored string) string {
 		return stored
 	}
 	return c.webEndpoint + sprobot.FileWebPath(kind, guildID, name)
+}
+
+// FileKey is the inverse of FileURL: it resolves a reference to a saved file
+// (its web route, a bucket URL or a bare key) to the file's bucket key.
+func (c *Client) FileKey(ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if i := strings.IndexByte(ref, '?'); i >= 0 {
+		ref = ref[:i]
+	}
+	if route, ok := strings.CutPrefix(ref, c.webEndpoint+"files/"); ok {
+		parts := strings.Split(route, "/")
+		if len(parts) != 3 {
+			return "", false
+		}
+		return sprobot.FileKey(parts[0], parts[1], parts[2])
+	}
+	key, ok := c.objectKey(ref)
+	if !ok {
+		return "", false
+	}
+	if _, _, _, ok := sprobot.ParseFileKey(key); !ok {
+		return "", false
+	}
+	return key, true
 }
 
 // LegacyLinkKind classifies a URL found in a message posted while files were
@@ -1035,6 +1071,25 @@ func (c *Client) SaveHiddenThreads(ctx context.Context, guildID string, data []b
 
 func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (string, error) {
 	return c.saveRemoteFile(ctx, guildID, fileURL, sprobot.FileKindSticky)
+}
+
+// CopyStickyFile copies the saved file at key to a new sticky file of guildID
+// and returns the new key.
+func (c *Client) CopyStickyFile(ctx context.Context, guildID, key string) (string, error) {
+	s3Path, ok := sprobot.FileKey(sprobot.FileKindSticky, guildID, randomString(30)+sprobot.SafeFileExt(path.Ext(key)))
+	if !ok {
+		return "", fmt.Errorf("invalid guild ID %q", guildID)
+	}
+	source := (&url.URL{Path: c.bucket + "/" + key}).EscapedPath()
+	_, err := c.s3.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     &c.bucket,
+		Key:        &s3Path,
+		CopySource: &source,
+	})
+	if err != nil {
+		return "", fmt.Errorf("copying %s in s3: %w", key, err)
+	}
+	return s3Path, nil
 }
 
 // randomString returns n characters from crypto/rand. Saved-file names are the

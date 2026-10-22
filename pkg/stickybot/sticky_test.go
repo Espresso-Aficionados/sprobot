@@ -1,12 +1,18 @@
 package stickybot
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/sadbox/sprobot/pkg/botutil"
@@ -17,104 +23,60 @@ import (
 func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {
 	t.Helper()
 	return &Bot{
-		BaseBot: &botutil.BaseBot{
-			S3:                   s3c,
-			Log:                  testutil.DiscardLogger(),
-			TestGuildIDsOverride: []snowflake.ID{1013566342345019512},
-		},
-		stickies: make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
+		BaseBot:     &botutil.BaseBot{S3: s3c, Log: testutil.DiscardLogger()},
+		stickies:    make(map[snowflake.ID]map[snowflake.ID]*stickyMessage),
+		readyGuilds: make(map[snowflake.ID]bool),
+		unsaved:     make(map[snowflake.ID]bool),
 	}
 }
 
-func TestJSONRoundTrip(t *testing.T) {
-	s := &stickyMessage{
-		ChannelID:         100,
-		GuildID:           200,
-		Content:           "sticky text",
-		Active:            true,
-		MinIdleMins:       15,
-		MaxIdleMins:       30,
-		MsgThreshold:      5,
-		TimeThresholdMins: 10,
-		LastMessageID:     500,
+// The JSON names are the stored format: renaming one drops that field from
+// every sticky already in S3. file_urls in particular is what lets a removed
+// sticky's files be deleted.
+func TestStoredFormat(t *testing.T) {
+	const stored = `{"channel_id":"100","guild_id":"200","content":"text","file_urls":["sticky_files/200/a.png"],"created_by":"300","active":true,"last_message_id":"500","min_idle_mins":0,"max_idle_mins":30,"msg_threshold":0,"time_threshold_mins":10,"buffer":0}`
+	want := stickyMessage{
+		ChannelID: 100, GuildID: 200, Content: "text", FileURLs: []string{"sticky_files/200/a.png"},
+		CreatedBy: 300, Active: true, LastMessageID: 500, MaxIdleMins: 30, TimeThresholdMins: 10,
 	}
 
-	data, err := json.Marshal(s)
+	var got stickyMessage
+	if err := json.Unmarshal([]byte(stored), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("decoded %+v, want %+v", got, want)
+	}
+	data, err := json.Marshal(&want)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatal(err)
 	}
-
-	var s2 stickyMessage
-	if err := json.Unmarshal(data, &s2); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if s2.ChannelID != s.ChannelID {
-		t.Errorf("ChannelID = %d, want %d", s2.ChannelID, s.ChannelID)
-	}
-	if s2.Content != s.Content {
-		t.Errorf("Content = %q, want %q", s2.Content, s.Content)
-	}
-	if s2.Active != s.Active {
-		t.Errorf("Active = %v, want %v", s2.Active, s.Active)
-	}
-	if s2.MinIdleMins != s.MinIdleMins {
-		t.Errorf("MinIdleMins = %d, want %d", s2.MinIdleMins, s.MinIdleMins)
-	}
-	if s2.MaxIdleMins != s.MaxIdleMins {
-		t.Errorf("MaxIdleMins = %d, want %d", s2.MaxIdleMins, s.MaxIdleMins)
-	}
-	if s2.MsgThreshold != s.MsgThreshold {
-		t.Errorf("MsgThreshold = %d, want %d", s2.MsgThreshold, s.MsgThreshold)
-	}
-	if s2.TimeThresholdMins != s.TimeThresholdMins {
-		t.Errorf("TimeThresholdMins = %d, want %d", s2.TimeThresholdMins, s.TimeThresholdMins)
-	}
-	// handle should be nil after unmarshal
-	if s2.handle != nil {
-		t.Error("handle should be nil after unmarshal")
+	if string(data) != stored {
+		t.Errorf("encoded %s, want %s", data, stored)
 	}
 }
 
-func TestJSONOmitsEmptyEmbeds(t *testing.T) {
-	s := &stickyMessage{
-		ChannelID: 100,
-		GuildID:   200,
-		Content:   "test",
-		Active:    true,
-	}
+// Zero is a valid setting for min idle, the message threshold and the buffer
+// (the modal accepts it), so loading must keep it rather than swap in a
+// default.
+func TestLoadStickiesKeepsZeroSettings(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
 
-	data, err := json.Marshal(s)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	fake.Objects["/test-bucket/stickies/1013566342345019512.json"] = []byte(`{"111": {
+		"channel_id": "111", "guild_id": "1013566342345019512", "content": "x", "active": false,
+		"min_idle_mins": 0, "max_idle_mins": 10, "msg_threshold": 0, "time_threshold_mins": 5, "buffer": 0}}`)
 
-	if strings.Contains(string(data), "embeds") {
-		t.Error("expected embeds to be omitted when empty")
-	}
-	if strings.Contains(string(data), "file_urls") {
-		t.Error("expected file_urls to be omitted when empty")
-	}
-}
+	b := newTestBot(t, testutil.NewTestS3Client(t, server))
+	b.loadStickies()
 
-func TestApplyDefaults(t *testing.T) {
-	s := &stickyMessage{}
-	s.applyDefaults()
-	if s.MinIdleMins != 15 {
-		t.Errorf("MinIdleMins = %d, want 15", s.MinIdleMins)
+	s := b.stickies[1013566342345019512][111]
+	if s == nil {
+		t.Fatal("sticky not loaded")
 	}
-	if s.MaxIdleMins != 30 {
-		t.Errorf("MaxIdleMins = %d, want 30", s.MaxIdleMins)
-	}
-	if s.MsgThreshold != 30 {
-		t.Errorf("MsgThreshold = %d, want 30", s.MsgThreshold)
-	}
-
-	// Non-zero values should not be overwritten
-	s2 := &stickyMessage{MinIdleMins: 5, MaxIdleMins: 10, MsgThreshold: 2}
-	s2.applyDefaults()
-	if s2.MinIdleMins != 5 {
-		t.Errorf("MinIdleMins = %d, want 5", s2.MinIdleMins)
+	if s.MinIdleMins != 0 || s.MsgThreshold != 0 || s.Buffer != 0 {
+		t.Errorf("loaded min idle %d, msg threshold %d, buffer %d; want all 0", s.MinIdleMins, s.MsgThreshold, s.Buffer)
 	}
 }
 
@@ -323,27 +285,191 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSaveAllStickies(t *testing.T) {
+// The periodic save retries failed saves and writes nothing else, so it never
+// overwrites a guild's stored stickies with an unchanged, possibly stale copy.
+func TestSaveUnsavedStickiesRetriesOnlyFailedSaves(t *testing.T) {
 	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)
 	defer server.Close()
+	b := newTestBot(t, testutil.NewTestS3Client(t, server))
 
-	c := testutil.NewTestS3Client(t, server)
-	b := newTestBot(t, c)
-
-	guild1 := snowflake.ID(1013566342345019512)
-	b.stickies[guild1] = map[snowflake.ID]*stickyMessage{
-		100: {ChannelID: 100, GuildID: guild1, Content: "g1", Active: true, MinIdleMins: 5, MaxIdleMins: 10, MsgThreshold: 2},
-	}
-
-	b.saveAllStickies()
-
+	const failedPath = "/test-bucket/stickies/1013566342345019512.json"
+	const untouchedPath = "/test-bucket/stickies/726985544038612993.json"
+	b.stickies[1013566342345019512] = map[snowflake.ID]*stickyMessage{100: {ChannelID: 100, GuildID: 1013566342345019512, Content: "changed"}}
+	b.stickies[726985544038612993] = map[snowflake.ID]*stickyMessage{200: {ChannelID: 200, GuildID: 726985544038612993, Content: "loaded"}}
 	fake.Mu.Lock()
-	_, ok := fake.Objects["/test-bucket/stickies/1013566342345019512.json"]
+	fake.Objects[untouchedPath] = []byte(`{"written": "elsewhere"}`)
+	fake.Fail[failedPath] = http.StatusForbidden
 	fake.Mu.Unlock()
 
-	if !ok {
-		t.Error("saveAllStickies did not save guild data")
+	b.saveStickiesForGuild(1013566342345019512)
+	fake.Mu.Lock()
+	delete(fake.Fail, failedPath)
+	fake.Mu.Unlock()
+	b.saveUnsavedStickies()
+
+	fake.Mu.Lock()
+	defer fake.Mu.Unlock()
+	if !strings.Contains(string(fake.Objects[failedPath]), "changed") {
+		t.Errorf("failed save not retried: stored %q", fake.Objects[failedPath])
+	}
+	if got := string(fake.Objects[untouchedPath]); got != `{"written": "elsewhere"}` {
+		t.Errorf("unchanged guild overwritten with %q", got)
+	}
+}
+
+// After a load fails, nothing may be saved over the stored stickies; the next
+// use retries the load and then goes ahead.
+func TestLoadFailureBlocksChangesUntilRetry(t *testing.T) {
+	f := &fakeDiscord{}
+	b, fake := newFakeBot(t, f)
+	delete(b.stickies, testGuildID) // not loaded yet
+	const path = "/test-bucket/stickies/1013566342345019512.json"
+	stored := `{"111": {"channel_id": "111", "guild_id": "1013566342345019512", "content": "existing", "max_idle_mins": 10, "msg_threshold": 1}}`
+	fake.Mu.Lock()
+	fake.Objects[path] = []byte(stored)
+	fake.Fail[path] = http.StatusForbidden
+	fake.Mu.Unlock()
+
+	b.loadStickies()
+	newSticky := func() *stickyMessage {
+		return &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
+	}
+	if reply := b.createSticky(newSticky(), discord.Message{Content: "new"}); reply != notLoadedReply {
+		t.Errorf("create while not loaded replied %q, want %q", reply, notLoadedReply)
+	}
+	b.saveStickiesForGuild(testGuildID)
+	fake.Mu.Lock()
+	got := string(fake.Objects[path])
+	delete(fake.Fail, path)
+	fake.Mu.Unlock()
+	if got != stored {
+		t.Errorf("stored stickies overwritten with %q", got)
+	}
+	if posts := f.postsMade(); len(posts) != 0 {
+		t.Errorf("posted %d stickies while not loaded", len(posts))
+	}
+
+	if reply := b.createSticky(newSticky(), discord.Message{Content: "new"}); !strings.HasPrefix(reply, "Sticky created") {
+		t.Fatalf("create after S3 recovered replied %q", reply)
+	}
+	fake.Mu.Lock()
+	var saved map[string]*stickyMessage
+	err := json.Unmarshal(fake.Objects[path], &saved)
+	fake.Mu.Unlock()
+	if err != nil || saved["111"] == nil || saved["500"] == nil {
+		t.Errorf("stored channels %v (%v), want the existing 111 and the new 500", keysOf(saved), err)
+	}
+}
+
+// A guild whose stickies failed to load at boot is loaded by the periodic
+// retry, so its loops start without waiting for a moderator's command.
+func TestRetryFailedLoadsUnloadedGuild(t *testing.T) {
+	f := &fakeDiscord{}
+	b, fake := newFakeBot(t, f)
+	delete(b.stickies, testGuildID) // not loaded yet
+	const path = "/test-bucket/stickies/1013566342345019512.json"
+	fake.Mu.Lock()
+	fake.Objects[path] = []byte(`{"111": {"channel_id": "111", "guild_id": "1013566342345019512", "content": "x", "active": true, "max_idle_mins": 10, "msg_threshold": 1}}`)
+	fake.Fail[path] = http.StatusForbidden
+	fake.Mu.Unlock()
+
+	b.loadStickies()
+	if _, ok := b.stickies[testGuildID]; ok {
+		t.Fatal("guild loaded although its fetch failed")
+	}
+	fake.Mu.Lock()
+	delete(fake.Fail, path)
+	fake.Mu.Unlock()
+	b.retryFailed()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if s := b.stickies[testGuildID][111]; s == nil || s.handle == nil {
+		t.Errorf("after the retry, sticky = %+v, want it loaded with its loop started", s)
+	}
+}
+
+// A retried load runs alongside the event handlers, so it must take b.mu.
+// Under -race this fails if the loader writes b.stickies without it.
+func TestLoadGuildStickiesConcurrentWithMessages(t *testing.T) {
+	f := &fakeDiscord{}
+	b, fake := newFakeBot(t, f)
+	delete(b.stickies, testGuildID) // not loaded yet
+	fake.Mu.Lock()
+	fake.Objects["/test-bucket/stickies/1013566342345019512.json"] = []byte(`{"111": {"channel_id": "111", "guild_id": "1013566342345019512", "content": "x"}}`)
+	fake.Mu.Unlock()
+	guildID := testGuildID
+	e := &events.MessageCreate{GenericMessage: &events.GenericMessage{
+		ChannelID: 111, GuildID: &guildID, Message: discord.Message{Author: discord.User{ID: 9}},
+	}}
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 100 {
+			b.onMessage(e)
+		}
+	})
+	wg.Go(func() { b.loadGuildStickies(context.Background(), testGuildID) })
+	wg.Wait()
+
+	if b.stickies[testGuildID][111] == nil {
+		t.Error("sticky not loaded")
+	}
+}
+
+// A save that hangs gives up rather than holding saveMu, and with it every
+// other save and every repost, indefinitely. It is retried later.
+func TestSaveStickiesForGuildTimesOut(t *testing.T) {
+	hang := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-hang:
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(hang) }) // first, so Close doesn't wait on the handler
+	orig := saveTimeout
+	saveTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { saveTimeout = orig })
+	b := newTestBot(t, testutil.NewTestS3Client(t, server))
+	b.stickies[testGuildID] = map[snowflake.ID]*stickyMessage{100: {ChannelID: 100, GuildID: testGuildID}}
+
+	done := make(chan struct{})
+	go func() {
+		b.saveStickiesForGuild(testGuildID)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("save still waiting on S3")
+	}
+	if !b.unsaved[testGuildID] {
+		t.Error("timed-out save not marked for retry")
+	}
+}
+
+// A retried load that loses a race with another keeps the stickies already
+// loaded, whose loops are running, rather than replacing them.
+func TestLoadGuildStickiesKeepsLoadedGuild(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	fake.Objects["/test-bucket/stickies/1013566342345019512.json"] = []byte(`{"111": {"channel_id": "111", "guild_id": "1013566342345019512"}}`)
+	b := newTestBot(t, testutil.NewTestS3Client(t, server))
+
+	ctx := context.Background()
+	if !b.loadGuildStickies(ctx, 1013566342345019512) {
+		t.Fatal("first load failed")
+	}
+	first := b.stickies[1013566342345019512][111]
+	if !b.loadGuildStickies(ctx, 1013566342345019512) {
+		t.Fatal("second load failed")
+	}
+	if b.stickies[1013566342345019512][111] != first {
+		t.Error("second load replaced the loaded stickies")
 	}
 }
 
@@ -448,12 +574,15 @@ func TestLoadStickiesInvalidJSON(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	// Should not panic
 	b.loadStickies()
 
-	guildID := snowflake.ID(1013566342345019512)
-	if channels, ok := b.stickies[guildID]; ok && len(channels) > 0 {
-		t.Error("should not load stickies from invalid JSON")
+	// Not loaded, so nothing saves over the stored stickies; another allowed
+	// guild with none stored still loads.
+	if _, ok := b.stickies[1013566342345019512]; ok {
+		t.Error("guild with unreadable stickies counted as loaded")
+	}
+	if _, ok := b.stickies[726985544038612993]; !ok {
+		t.Error("guild with no stored stickies not loaded")
 	}
 }
 
