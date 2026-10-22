@@ -268,17 +268,17 @@ func (s *guildStateStore[T]) served() map[snowflake.ID]*T {
 func pruneCorruptBackups(s3 *s3client.Client, log *slog.Logger, now time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeS3Timeout)
 	defer cancel()
-	keys, err := s3.ListKeys(ctx, corruptPrefix+"/")
+	objects, err := s3.ListObjects(ctx, corruptPrefix+"/")
 	if err != nil {
 		log.Error("Failed to list corrupt state backups", "error", err)
 		return
 	}
 	var expired []string
-	for _, key := range keys {
-		_, created, _ := strings.Cut(strings.TrimSuffix(path.Base(key), ".json"), "-")
+	for _, o := range objects {
+		_, created, _ := strings.Cut(strings.TrimSuffix(path.Base(o.Key), ".json"), "-")
 		secs, err := strconv.ParseInt(created, 10, 64)
 		if err == nil && now.Sub(time.Unix(secs, 0)) > corruptRetention {
-			expired = append(expired, key)
+			expired = append(expired, o.Key)
 		}
 	}
 	if len(expired) == 0 {
