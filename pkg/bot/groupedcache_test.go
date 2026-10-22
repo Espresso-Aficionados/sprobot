@@ -2,6 +2,7 @@ package bot
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -122,10 +123,14 @@ func TestMessageExpired_Boundary(t *testing.T) {
 	}
 }
 
+// makeMessage returns a message in a served guild; the message cache keeps
+// nothing else.
 func makeMessage(channelID, messageID snowflake.ID) discord.Message {
+	guildID := botutil.AllowedGuildIDs[0]
 	return discord.Message{
 		ChannelID: channelID,
 		ID:        messageID,
+		GuildID:   &guildID,
 		Content:   "test",
 	}
 }
@@ -944,7 +949,7 @@ func readerView(m discord.Message, ok bool) messageReaderView {
 }
 
 func fullMessages() []discord.Message {
-	guildID := snowflake.ID(1)
+	guildID := botutil.AllowedGuildIDs[0]
 	avatar := "a_0123456789abcdef"
 	nick := "nick"
 	id := snowflake.New(time.Now().Add(-time.Hour))
@@ -1003,8 +1008,12 @@ func TestMessageCache_KeepsWhatReadersUse(t *testing.T) {
 	loaded.cacheDir = b.cacheDir
 	loaded.loadCaches()
 	for _, m := range msgs {
-		if got, want := readerView(loaded.msgCache.Get(m.ChannelID, m.ID)), readerView(m, true); got != want {
+		// A message outside a served guild (here, a DM) is dropped on load.
+		served := m.GuildID != nil && botutil.GuildAllowed(*m.GuildID)
+		if got, want := readerView(loaded.msgCache.Get(m.ChannelID, m.ID)), readerView(m, served); got != want && served {
 			t.Errorf("after save and load:\n got %+v\nwant %+v", got, want)
+		} else if _, ok := loaded.msgCache.Get(m.ChannelID, m.ID); ok && !served {
+			t.Errorf("message %d outside a served guild was loaded", m.ID)
 		}
 	}
 
@@ -1081,15 +1090,44 @@ func TestMemberCache_SkipsThreadMembers(t *testing.T) {
 		t.Errorf("member cache holds %d entries after a thread join, want 0", n)
 	}
 
-	// Members of an allowed guild, or of one in the guild cache, are kept.
+	// Members of a served guild are kept; members of any other guild are not,
+	// even one in the guild cache.
 	otherGuildID := snowflake.ID(600)
 	b.guildCache.Put(otherGuildID, discord.Guild{ID: otherGuildID})
 	for _, id := range []snowflake.ID{guildID, otherGuildID} {
 		handleGatewayEvent(client, gateway.EventTypeGuildMemberAdd, gateway.EventGuildMemberAdd{
 			Member: discord.Member{GuildID: id, User: discord.User{ID: userID}},
 		})
-		if _, ok := b.memberCache.Get(id, userID); !ok {
-			t.Errorf("member of guild %d not cached", id)
+	}
+	if _, ok := b.memberCache.Get(guildID, userID); !ok {
+		t.Error("member of the served guild not cached")
+	}
+	if _, ok := b.memberCache.Get(otherGuildID, userID); ok {
+		t.Error("member of an unserved guild was cached")
+	}
+}
+
+// TestMessageCache_OnlyServedGuilds: message content from a guild outside the
+// allowlist, or from a DM, is never cached.
+func TestMessageCache_OnlyServedGuilds(t *testing.T) {
+	b := newCacheTestBot(t)
+	client := gatewayTestClient(b)
+	served, other := botutil.AllowedGuildIDs[0], snowflake.ID(600)
+	cases := []struct {
+		id      snowflake.ID
+		guildID *snowflake.ID
+		want    bool
+	}{
+		{id: 10, guildID: &served, want: true},
+		{id: 11, guildID: &other, want: false},
+		{id: 12, guildID: nil, want: false}, // DM
+	}
+	for _, c := range cases {
+		handleGatewayEvent(client, gateway.EventTypeMessageCreate, gateway.EventMessageCreate{
+			Message: discord.Message{ID: c.id, ChannelID: 20, GuildID: c.guildID, Content: "hi", Author: discord.User{ID: 3}},
+		})
+		if _, ok := client.Caches.Message(20, c.id); ok != c.want {
+			t.Errorf("message %d cached=%v, want %v", c.id, ok, c.want)
 		}
 	}
 }
@@ -1111,16 +1149,17 @@ func TestLoadCaches_DropsMembersOutsideGuilds(t *testing.T) {
 
 	b.loadCaches()
 
-	if b.memberCache.Len() != 2 {
-		t.Errorf("loaded %d members, want 2", b.memberCache.Len())
+	if b.memberCache.Len() != 1 {
+		t.Errorf("loaded %d members, want 1", b.memberCache.Len())
+	}
+	if _, ok := b.memberCache.Get(allowedID, 1); !ok {
+		t.Error("member of the served guild not loaded")
+	}
+	if _, ok := b.memberCache.Get(cachedGuildID, 2); ok {
+		t.Error("member of an unserved guild was loaded")
 	}
 	if _, ok := b.memberCache.Get(threadID, 3); ok {
 		t.Error("member filed under a thread ID was loaded")
-	}
-	for _, m := range members[:2] {
-		if _, ok := b.memberCache.Get(m.GuildID, m.User.ID); !ok {
-			t.Errorf("member of guild %d not loaded", m.GuildID)
-		}
 	}
 }
 
@@ -1222,7 +1261,7 @@ func unmarshalChannel(t *testing.T, data string) discord.GuildChannel {
 
 func TestCachesRoundTrip(t *testing.T) {
 	b := newCacheTestBot(t)
-	guildID, channelID, userID := snowflake.ID(1), snowflake.ID(2), snowflake.ID(3)
+	guildID, channelID, userID := botutil.AllowedGuildIDs[0], snowflake.ID(2), snowflake.ID(3)
 	msgID := snowflake.New(time.Now().Add(-time.Hour))
 	b.msgCache.Put(channelID, msgID, discord.Message{
 		ID: msgID, ChannelID: channelID, GuildID: &guildID, Content: "hello",
@@ -1230,7 +1269,7 @@ func TestCachesRoundTrip(t *testing.T) {
 	})
 	b.memberCache.Put(guildID, userID, discord.Member{GuildID: guildID, User: discord.User{ID: userID}})
 	b.guildCache.Put(guildID, discord.Guild{ID: guildID, Name: "guild"})
-	b.channelCache.Put(channelID, unmarshalChannel(t, `{"id":"2","type":0,"guild_id":"1","name":"general"}`))
+	b.channelCache.Put(channelID, unmarshalChannel(t, fmt.Sprintf(`{"id":"2","type":0,"guild_id":"%d","name":"general"}`, guildID)))
 	b.roleCache.Put(guildID, 4, discord.Role{ID: 4, GuildID: guildID})
 	b.emojiCache.Put(guildID, 5, discord.Emoji{ID: 5, GuildID: guildID})
 	b.stickerCache.Put(guildID, 6, discord.Sticker{ID: 6, GuildID: &guildID})
@@ -1318,7 +1357,7 @@ func TestCachesRoundTrip_KeepsEvictionOrder(t *testing.T) {
 func TestLoadCaches_LegacyFiles(t *testing.T) {
 	b := newCacheTestBot(t)
 	msgID := snowflake.New(time.Now().Add(-time.Hour))
-	guildID := snowflake.ID(1)
+	guildID := botutil.AllowedGuildIDs[0]
 	old, err := json.Marshal([]discord.Message{{
 		ID: msgID, ChannelID: 2, GuildID: &guildID, Content: "old format",
 		Author: discord.User{ID: 3, Username: "someone"},

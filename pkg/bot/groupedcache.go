@@ -125,7 +125,6 @@ func (b *Bot) cacheConfig() []cache.ConfigOpt {
 		}),
 		cache.WithMemberCache(guildMemberCache{
 			disgoMemberCache: cache.NewMemberCache(b.memberCache),
-			isGuild:          b.isKnownGuild,
 			unavailable:      guilds.IsGuildUnavailable,
 		}),
 		cache.WithRoleCache(cache.NewRoleCache(b.roleCache)),
@@ -136,16 +135,6 @@ func (b *Bot) cacheConfig() []cache.ConfigOpt {
 		cache.WithGuildScheduledEventCache(cache.NewGuildScheduledEventCache(b.scheduledEventCache)),
 		cache.WithGuildSoundboardSoundCache(cache.NewGuildSoundboardSoundCache(b.soundboardSoundCache)),
 	}
-}
-
-// isKnownGuild reports whether id is a guild: an allowed one, or one in the
-// guild cache.
-func (b *Bot) isKnownGuild(id snowflake.ID) bool {
-	if botutil.GuildAllowed(id) {
-		return true
-	}
-	_, ok := b.guildCache.Get(id)
-	return ok
 }
 
 // Aliases to embed disgo's caches under: a field named GuildCache,
@@ -185,13 +174,21 @@ func (b *Bot) onGuildLeave(e *events.GuildLeave) {
 	caches.RemoveMembersByGuildID(e.GuildID)
 }
 
-// outageSafeMessageCache keeps a guild's messages while it is unavailable.
-// On GUILD_DELETE disgo removes them even when the guild is only down in an
-// outage, nothing refills them when it comes back, and the next save would
-// take up to 30 days of edit and delete context off disk with them.
+// outageSafeMessageCache keeps only messages from served guilds: content from
+// a guild outside botutil.AllowedGuildIDs, or from a DM, is not ours to keep.
+// It also keeps a guild's messages while it is unavailable. On GUILD_DELETE
+// disgo removes them even when the guild is only down in an outage, nothing
+// refills them when it comes back, and the next save would take up to 30 days
+// of edit and delete context off disk with them.
 type outageSafeMessageCache struct {
 	disgoMessageCache
 	unavailable func(guildID snowflake.ID) bool
+}
+
+func (c outageSafeMessageCache) AddMessage(message discord.Message) {
+	if message.GuildID != nil && botutil.GuildAllowed(*message.GuildID) {
+		c.disgoMessageCache.AddMessage(message)
+	}
 }
 
 func (c outageSafeMessageCache) RemoveMessagesByGuildID(guildID snowflake.ID) {
@@ -200,19 +197,19 @@ func (c outageSafeMessageCache) RemoveMessagesByGuildID(guildID snowflake.ID) {
 	}
 }
 
-// guildMemberCache files members only under known guilds. disgo's
-// THREAD_MEMBERS_UPDATE handler adds them under the thread ID, where nothing
-// ever removes them: they would push real members out at the cap, and save
-// thread membership we don't keep. Like outageSafeMessageCache, it also keeps
-// a guild's members through an outage: GUILD_CREATE brings back only a few.
+// guildMemberCache files members only under served guilds
+// (botutil.AllowedGuildIDs). That also drops disgo's THREAD_MEMBERS_UPDATE
+// members, which it adds under the thread ID, where nothing ever removes
+// them: they would push real members out at the cap, and save thread
+// membership we don't keep. Like outageSafeMessageCache, it also keeps a
+// guild's members through an outage: GUILD_CREATE brings back only a few.
 type guildMemberCache struct {
 	disgoMemberCache
-	isGuild     func(guildID snowflake.ID) bool
 	unavailable func(guildID snowflake.ID) bool
 }
 
 func (c guildMemberCache) AddMember(member discord.Member) {
-	if c.isGuild(member.GuildID) {
+	if botutil.GuildAllowed(member.GuildID) {
 		c.disgoMemberCache.AddMember(member)
 	}
 }
@@ -702,7 +699,7 @@ func (b *Bot) loadCaches() {
 			expired++
 			return m, 0, 0, false
 		}
-		return m, m.ChannelID, m.ID, true
+		return m, m.ChannelID, m.ID, botutil.GuildAllowed(m.GuildID)
 	})
 	// Nothing prunes the file while the bot is down. Rewrite it now rather
 	// than at the first save, which waits for the gateway.
@@ -710,13 +707,13 @@ func (b *Bot) loadCaches() {
 		b.Log.Info("Dropped expired messages from the cache file", "removed", expired)
 		b.saveMessageCache()
 	}
-	// Guilds before members: members filed under anything else (see
-	// guildMemberCache) are dropped.
 	loadCache(b, guildCacheFile, b.guildCache.cappedGroupedCache, func(g discord.Guild) (discord.Guild, snowflake.ID, snowflake.ID, bool) {
 		return g, 0, g.ID, true
 	})
+	// Members filed under anything but a served guild (see guildMemberCache)
+	// are dropped.
 	loadCache(b, memberCacheFile, b.memberCache, func(m discord.Member) (discord.Member, snowflake.ID, snowflake.ID, bool) {
-		return m, m.GuildID, m.User.ID, b.isKnownGuild(m.GuildID)
+		return m, m.GuildID, m.User.ID, botutil.GuildAllowed(m.GuildID)
 	})
 	// Channels are an interface: UnmarshalChannel decodes the concrete type.
 	loadCache(b, channelCacheFile, b.channelCache.cappedGroupedCache, func(w discord.UnmarshalChannel) (discord.GuildChannel, snowflake.ID, snowflake.ID, bool) {
