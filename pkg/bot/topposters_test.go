@@ -2,6 +2,7 @@ package bot
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -321,5 +322,41 @@ func TestTemplateCommandsRoaster(t *testing.T) {
 		if !names[name] {
 			t.Errorf("missing command %q", name)
 		}
+	}
+}
+
+// /config topposters creates a guild's state on first use, but not while its
+// load has failed: a save of fresh state would replace the stored filters.
+func TestTopPostersConfigNeedsLoadedState(t *testing.T) {
+	b, _ := newStubBot(t)
+	b.topPostersConfig = newGuildStateStore(b.S3, b.Log, "toppostersconfig",
+		func() *topPostersConfigState { return &topPostersConfigState{} },
+		func(st *topPostersConfigState) *sync.Mutex { return &st.mu })
+	const filterAdd = `{"id":"100","name":"config","type":1,"options":[{"name":"topposters","type":2,"options":[` +
+		`{"name":"filter-add","type":1,"options":[{"name":"user","type":6,"value":"55"}]}]}],` +
+		`"resolved":{"users":{"55":{"id":"55","username":"bob"}}}}`
+
+	b.topPostersConfig.mu.Lock()
+	b.topPostersConfig.failed[10] = true
+	b.topPostersConfig.mu.Unlock()
+	e, replies := commandEvent(t, b.Client, filterAdd)
+	b.handleTopPostersConfigCmd(e)
+	if _, resp := replies.only(t); !isEphemeral(resp) || !strings.Contains(contentOf(resp), "can't be changed right now") {
+		t.Errorf("reply while the load has failed = %q, want an ephemeral refusal", contentOf(resp))
+	}
+	if st := b.topPostersConfig.get(10); st != nil {
+		t.Errorf("state %+v installed for a guild whose load failed", st)
+	}
+
+	b.topPostersConfig.mu.Lock()
+	delete(b.topPostersConfig.failed, 10)
+	b.topPostersConfig.mu.Unlock()
+	e, replies = commandEvent(t, b.Client, filterAdd)
+	b.handleTopPostersConfigCmd(e)
+	if _, resp := replies.only(t); !strings.HasPrefix(contentOf(resp), "Added to filter") {
+		t.Errorf("reply on a guild with no state = %q, want the filter added", contentOf(resp))
+	}
+	if st := b.topPostersConfig.get(10); st == nil || !st.isUserFiltered(55) {
+		t.Errorf("state after filter-add on a guild with none = %+v, want user 55 filtered", st)
 	}
 }

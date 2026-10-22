@@ -344,10 +344,10 @@ func (b *Bot) handleTopPostersConfigCmd(e *events.ApplicationCommandInteractionC
 		return
 	}
 
-	st := b.topPostersConfig.get(*guildID)
+	st := b.topPostersConfig.getOrCreate(*guildID)
 	if st == nil {
-		st = &topPostersConfigState{}
-		b.topPostersConfig.set(*guildID, st)
+		botutil.RespondEphemeral(e, "The top posters config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
+		return
 	}
 
 	subCmd := data.SubCommandName
