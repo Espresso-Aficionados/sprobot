@@ -323,28 +323,63 @@ func TestSaveAllReminders(t *testing.T) {
 }
 
 func TestStopReminderGoroutineIdempotent(t *testing.T) {
-	b := &Bot{
-		BaseBot: &botutil.BaseBot{Log: testutil.DiscardLogger()},
-	}
+	b := newTestBot(t, nil)
 	r := &threadReminder{
 		ChannelID:    100,
+		GuildID:      1,
+		Enabled:      true,
 		MinIdleMins:  30,
 		MaxIdleMins:  720,
 		MsgThreshold: 30,
 	}
+	b.reminders[1] = map[snowflake.ID]*threadReminder{100: r}
 
+	b.mu.Lock()
 	b.startReminderGoroutine(r)
+	b.mu.Unlock()
 	if r.handle == nil {
 		t.Fatal("handle should be set after start")
 	}
 
 	b.stopReminderGoroutine(r)
-	if r.handle != nil {
-		t.Error("handle should be nil after stop")
-	}
+	// A second stop, as when a command and shutdown stop the same reminder,
+	// returns too.
+	b.stopReminderGoroutine(r)
+}
 
-	// Second stop should not panic (handle is nil, Stop is nil-safe)
-	r.handle.Stop()
+// A loop only starts for the reminder its channel currently has, and only
+// while it is enabled: a start that loses a race with /threadbot disable, a
+// replacement or shutdown must not leave a loop nothing can stop.
+func TestStartReminderGoroutineOnlyForCurrentReminder(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(b *Bot, r *threadReminder)
+		want  bool
+	}{
+		{"current and enabled", func(*Bot, *threadReminder) {}, true},
+		{"disabled", func(_ *Bot, r *threadReminder) { r.Enabled = false }, false},
+		{"removed", func(b *Bot, _ *threadReminder) { delete(b.reminders[1], 100) }, false},
+		{"replaced", func(b *Bot, _ *threadReminder) { b.reminders[1][100] = &threadReminder{ChannelID: 100, GuildID: 1} }, false},
+		{"shutting down", func(b *Bot, _ *threadReminder) { close(b.stop) }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestBot(t, nil)
+			b.stop = make(chan struct{})
+			r := &threadReminder{ChannelID: 100, GuildID: 1, Enabled: true, MinIdleMins: 30, MaxIdleMins: 720, MsgThreshold: 30}
+			b.reminders[1] = map[snowflake.ID]*threadReminder{100: r}
+			tt.setup(b, r)
+
+			b.mu.Lock()
+			b.startReminderGoroutine(r)
+			started := r.handle != nil
+			b.mu.Unlock()
+			r.handle.Stop()
+			if started != tt.want {
+				t.Errorf("loop started = %v, want %v", started, tt.want)
+			}
+		})
+	}
 }
 
 func TestLoadRemindersInvalidJSON(t *testing.T) {

@@ -304,12 +304,7 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 
 // ephemeralFollowup answers a deferred interaction.
 func (b *Bot) ephemeralFollowup(token, content string) {
-	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, token, discord.MessageCreate{
-		Content: content,
-		Flags:   discord.MessageFlagEphemeral,
-	}); err != nil {
-		b.Log.Error("Failed to send follow-up", "error", err)
-	}
+	botutil.FollowupEphemeral(b.Client, token, content)
 }
 
 func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteractionCreate) {

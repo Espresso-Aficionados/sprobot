@@ -37,6 +37,10 @@ func New(token string) (*Bot, error) {
 	}
 
 	client, err := disgo.New(token,
+		// Handlers run off the gateway goroutine: stopping a repost loop
+		// waits out a repost in flight, which must not stall other events or
+		// heartbeat ACKs.
+		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
 		bot.WithCacheConfigOpts(cache.WithCaches(cache.FlagGuilds)),
 		bot.WithGatewayConfigOpts(
 			gateway.WithIntents(
@@ -44,8 +48,10 @@ func New(token string) (*Bot, error) {
 				gateway.IntentGuildMessages,
 			),
 			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
+			gateway.WithCloseHandler(b.OnGatewayClose),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
+		bot.WithEventListenerFunc(b.OnGuildJoin),
 		bot.WithEventListenerFunc(b.onCommand),
 		bot.WithEventListenerFunc(b.onModal),
 		bot.WithEventListenerFunc(b.onMessage),
@@ -61,7 +67,7 @@ func New(token string) (*Bot, error) {
 func (b *Bot) Run() error {
 	ctx := context.Background()
 
-	if err := b.Client.OpenGateway(ctx); err != nil {
+	if err := b.OpenGateway(ctx); err != nil {
 		return err
 	}
 	defer b.Client.Close(ctx)
@@ -76,11 +82,11 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveAllStickies)
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
-	botutil.WaitForShutdown(b.Log, "Stickybot")
+	shutdownErr := b.WaitForShutdown("Stickybot")
 	close(b.stop)
 	b.stopAllStickyGoroutines()
 	b.saveAllStickies()
-	return nil
+	return shutdownErr
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {
@@ -103,6 +109,7 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 		b.mu.Unlock()
 		return
 	}
+	h := s.handle
 	b.mu.Unlock()
-	s.handle.Signal()
+	h.Signal()
 }

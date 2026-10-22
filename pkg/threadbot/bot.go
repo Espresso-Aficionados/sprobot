@@ -44,6 +44,10 @@ func New(token string) (*Bot, error) {
 	}
 
 	client, err := disgo.New(token,
+		// Handlers run off the gateway goroutine: stopping a repost loop
+		// waits out a repost in flight, which must not stall other events or
+		// heartbeat ACKs.
+		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
 		// Only guilds are cached: the member and thread-member events that
 		// GuildMembers delivers are counted, never stored.
 		bot.WithCacheConfigOpts(cache.WithCaches(cache.FlagGuilds)),
@@ -57,8 +61,10 @@ func New(token string) (*Bot, error) {
 				gateway.IntentGuildMembers,
 			),
 			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
+			gateway.WithCloseHandler(b.OnGatewayClose),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
+		bot.WithEventListenerFunc(b.OnGuildJoin),
 		bot.WithEventListenerFunc(b.onCommand),
 		bot.WithEventListenerFunc(b.onMessage),
 		bot.WithEventListenerFunc(b.onSessionReady),
@@ -79,7 +85,7 @@ func (b *Bot) Run() error {
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
 
-	if err := b.Client.OpenGateway(ctx); err != nil {
+	if err := b.OpenGateway(ctx); err != nil {
 		return err
 	}
 	defer b.Client.Close(ctx)
@@ -96,12 +102,12 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveAllReminders)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCounts)
 
-	botutil.WaitForShutdown(b.Log, "Threadbot")
+	shutdownErr := b.WaitForShutdown("Threadbot")
 	close(b.stop)
 	b.stopAllReminderGoroutines()
 	b.saveAllReminders()
 	b.saveMemberCounts()
-	return nil
+	return shutdownErr
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {
@@ -124,6 +130,7 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 		b.mu.Unlock()
 		return
 	}
+	h := r.handle
 	b.mu.Unlock()
-	r.handle.Signal()
+	h.Signal()
 }

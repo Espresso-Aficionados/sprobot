@@ -376,28 +376,63 @@ func TestGetSticky(t *testing.T) {
 }
 
 func TestStopStickyGoroutineIdempotent(t *testing.T) {
-	b := &Bot{
-		BaseBot: &botutil.BaseBot{Log: testutil.DiscardLogger()},
-	}
+	b := newTestBot(t, nil)
 	s := &stickyMessage{
 		ChannelID:    100,
+		GuildID:      1,
+		Active:       true,
 		MinIdleMins:  15,
 		MaxIdleMins:  30,
 		MsgThreshold: 4,
 	}
+	b.stickies[1] = map[snowflake.ID]*stickyMessage{100: s}
 
+	b.mu.Lock()
 	b.startStickyGoroutine(s)
+	b.mu.Unlock()
 	if s.handle == nil {
 		t.Fatal("handle should be set after start")
 	}
 
 	b.stopStickyGoroutine(s)
-	if s.handle != nil {
-		t.Error("handle should be nil after stop")
-	}
-
-	// Second stop should not panic
+	// A second stop, as when a command and shutdown stop the same sticky,
+	// returns too.
 	b.stopStickyGoroutine(s)
+}
+
+// A loop only starts for the sticky its channel currently has, and only while
+// it is active: a start that loses a race with /sticky stop, remove, a
+// replacement or shutdown must not leave a loop nothing can stop.
+func TestStartStickyGoroutineOnlyForCurrentActiveSticky(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(b *Bot, s *stickyMessage)
+		want  bool
+	}{
+		{"current and active", func(*Bot, *stickyMessage) {}, true},
+		{"paused", func(_ *Bot, s *stickyMessage) { s.Active = false }, false},
+		{"removed", func(b *Bot, _ *stickyMessage) { delete(b.stickies[1], 100) }, false},
+		{"replaced", func(b *Bot, _ *stickyMessage) { b.stickies[1][100] = &stickyMessage{ChannelID: 100, GuildID: 1} }, false},
+		{"shutting down", func(b *Bot, _ *stickyMessage) { close(b.stop) }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestBot(t, nil)
+			b.stop = make(chan struct{})
+			s := &stickyMessage{ChannelID: 100, GuildID: 1, Active: true, MinIdleMins: 15, MaxIdleMins: 30, MsgThreshold: 4}
+			b.stickies[1] = map[snowflake.ID]*stickyMessage{100: s}
+			tt.setup(b, s)
+
+			b.mu.Lock()
+			b.startStickyGoroutine(s)
+			started := s.handle != nil
+			b.mu.Unlock()
+			s.handle.Stop()
+			if started != tt.want {
+				t.Errorf("loop started = %v, want %v", started, tt.want)
+			}
+		})
+	}
 }
 
 func TestLoadStickiesInvalidJSON(t *testing.T) {

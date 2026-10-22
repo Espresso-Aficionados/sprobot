@@ -249,8 +249,10 @@ func New(token string) (*Bot, error) {
 				gateway.IntentGuildScheduledEvents,
 			),
 			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
+			gateway.WithCloseHandler(b.OnGatewayClose),
 		),
 		bot.WithEventListenerFunc(b.OnReady),
+		bot.WithEventListenerFunc(b.OnGuildJoin),
 		bot.WithEventListenerFunc(b.onCommand),
 		bot.WithEventListenerFunc(b.onModal),
 		bot.WithEventListenerFunc(b.onComponent),
@@ -302,7 +304,7 @@ func (b *Bot) Run() error {
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045773440", b.Client.ApplicationID))
 
-	if err := b.Client.OpenGateway(ctx); err != nil {
+	if err := b.OpenGateway(ctx); err != nil {
 		return err
 	}
 	defer b.Client.Close(ctx)
@@ -355,7 +357,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.tempRoles.save)
 	go botutil.RunSaveLoop(&b.Ready, 1*time.Minute, b.stop, b.processTempRoleExpiries)
 
-	botutil.WaitForShutdown(b.Log, "Bot")
+	shutdownErr := b.WaitForShutdown("Bot")
 	close(b.stop)
 	b.autoRole.save()
 	b.eventLog.save()
@@ -381,5 +383,5 @@ func (b *Bot) Run() error {
 	b.saveStageInstanceCache()
 	b.saveScheduledEventCache()
 	b.saveSoundboardSoundCache()
-	return nil
+	return shutdownErr
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
@@ -193,11 +194,14 @@ func (b *Bot) loadReminders() {
 		for _, r := range loaded {
 			r.applyDefaults()
 			channels[r.ChannelID] = r
-			if r.Enabled {
-				b.startReminderGoroutine(r)
-			}
 		}
+		// The gateway is already dispatching events that read b.reminders.
+		b.mu.Lock()
 		b.reminders[guildID] = channels
+		for _, r := range channels {
+			b.startReminderGoroutine(r)
+		}
+		b.mu.Unlock()
 		b.Log.Info("Loaded thread reminders", "guild_id", guildID, "count", len(channels))
 	}
 }
@@ -242,9 +246,23 @@ func (b *Bot) saveAllReminders() {
 	}
 }
 
+// startReminderGoroutine starts r's repost loop, unless r is no longer its
+// channel's enabled reminder or the bot is shutting down. The caller holds
+// b.mu, so the loop starts in the same critical section as the change that
+// calls for it. Any earlier loop of r is stopped, and the new one runs only
+// once it has exited, so r never has two reposts in flight.
 func (b *Bot) startReminderGoroutine(r *threadReminder) {
+	select {
+	case <-b.stop:
+		return
+	default:
+	}
+	if !r.Enabled || b.reminders[r.GuildID][r.ChannelID] != r {
+		return
+	}
+	prev := r.handle
 	r.handle = idleloop.NewHandle()
-	r.handle.Start(idleloop.Config{
+	r.handle.StartAfter(prev, idleloop.Config{
 		MinIdleMins:       r.MinIdleMins,
 		MaxIdleMins:       r.MaxIdleMins,
 		MsgThreshold:      r.MsgThreshold,
@@ -253,20 +271,36 @@ func (b *Bot) startReminderGoroutine(r *threadReminder) {
 	}, func() bool { return b.repostReminder(r) })
 }
 
+// stopReminderGoroutine stops r's repost loop and waits out any repost in
+// progress, so r.LastMessageID is final when it returns. The caller must not
+// hold b.mu, which the repost takes, and must already have taken r out of
+// b.reminders, so no new loop can start for it.
 func (b *Bot) stopReminderGoroutine(r *threadReminder) {
-	r.handle.Stop()
-	r.handle = nil
+	b.mu.Lock()
+	h := r.handle
+	b.mu.Unlock()
+	h.Stop()
 }
 
 func (b *Bot) stopAllReminderGoroutines() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	var handles []*idleloop.Handle
 	for _, channels := range b.reminders {
 		for _, r := range channels {
-			r.handle.Stop()
-			r.handle = nil
+			// Left in place: a command stopping the same reminder meanwhile
+			// must wait for this goroutine too.
+			handles = append(handles, r.handle)
 		}
 	}
+	b.mu.Unlock()
+
+	// Stop in parallel so shutdown waits for the slowest in-flight repost,
+	// not the sum of them.
+	var wg sync.WaitGroup
+	for _, h := range handles {
+		wg.Go(h.Stop)
+	}
+	wg.Wait()
 }
 
 // buildThreadEmbed fetches active threads for the given guild/channel and
@@ -571,7 +605,9 @@ func (b *Bot) loadMemberCounts() {
 		if cache.Fetched == nil {
 			cache.Fetched = make(map[snowflake.ID]time.Time)
 		}
+		b.mu.Lock()
 		b.memberCounts[guildID] = &cache
+		b.mu.Unlock()
 		b.Log.Info("Loaded thread member counts", "guild_id", guildID, "count", len(cache.Counts))
 	}
 }

@@ -66,7 +66,7 @@ func (b *Bot) registerAllCommands() error {
 }
 
 func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
-	if e.GuildID() == nil {
+	if e.GuildID() == nil || b.RejectGuildNotAllowed(e) {
 		return
 	}
 
@@ -96,7 +96,7 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 }
 
 func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
-	if e.GuildID() == nil {
+	if e.GuildID() == nil || b.RejectGuildNotAllowed(e) {
 		return
 	}
 	if strings.HasPrefix(e.Data.CustomID, modalPrefix) {
@@ -317,15 +317,16 @@ func (b *Bot) handleStickyConfigModal(e *events.ModalSubmitInteractionCreate) {
 	}
 	old := b.stickies[guildID][channelID]
 	b.stickies[guildID][channelID] = s
+	b.startStickyGoroutine(s)
 	b.mu.Unlock()
 
 	if old != nil {
 		b.stopStickyGoroutine(old)
+		// Read only after the stop: a repost in flight replaces the message.
 		if old.LastMessageID != 0 {
 			_ = b.Client.Rest.DeleteMessage(channelID, old.LastMessageID)
 		}
 	}
-	b.startStickyGoroutine(s)
 
 	// Save to S3 immediately
 	b.saveStickiesForGuild(guildID)
@@ -349,11 +350,14 @@ func (b *Bot) handleStickyStop(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 	s.Active = false
+	h := s.handle // this loop, not one a /sticky start begins meanwhile
 	b.mu.Unlock()
 
-	b.stopStickyGoroutine(s)
-	b.saveStickiesForGuild(guildID)
+	// Respond first: stopping waits for any repost in flight, which can
+	// outlast the interaction's 3-second deadline.
 	botutil.RespondEphemeral(e, "Sticky paused.")
+	h.Stop()
+	b.saveStickiesForGuild(guildID)
 }
 
 func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
@@ -376,9 +380,9 @@ func (b *Bot) handleStickyStart(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 	s.Active = true
+	b.startStickyGoroutine(s)
 	b.mu.Unlock()
 
-	b.startStickyGoroutine(s)
 	b.saveStickiesForGuild(guildID)
 	botutil.RespondEphemeral(e, "Sticky resumed.")
 }
@@ -405,12 +409,15 @@ func (b *Bot) handleStickyRemove(e *events.ApplicationCommandInteractionCreate) 
 	delete(channels, channelID)
 	b.mu.Unlock()
 
+	// Respond first: stopping waits for any repost in flight, which can
+	// outlast the interaction's 3-second deadline.
+	botutil.RespondEphemeral(e, "Sticky removed.")
 	b.stopStickyGoroutine(s)
+	// Read only after the stop: a repost in flight replaces the message.
 	if s.LastMessageID != 0 {
 		_ = b.Client.Rest.DeleteMessage(channelID, s.LastMessageID)
 	}
 	b.saveStickiesForGuild(guildID)
-	botutil.RespondEphemeral(e, "Sticky removed.")
 }
 
 func (b *Bot) handleStickyList(e *events.ApplicationCommandInteractionCreate) {

@@ -1,10 +1,73 @@
 package threadbot
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/sadbox/sprobot/pkg/testutil"
 )
+
+// commandEvent builds a slash command interaction from user 9 in channel 500
+// of guildID, carrying data. Its responses go to the returned channel.
+func commandEvent(t *testing.T, guildID snowflake.ID, data string) (*events.ApplicationCommandInteractionCreate, <-chan discord.MessageCreate) {
+	t.Helper()
+	raw := fmt.Sprintf(`{"id":"1","application_id":"2","type":2,"token":"tok","guild_id":"%d",
+		"channel":{"id":"500","type":0,"guild_id":"%d","name":"coffee"},
+		"user":{"id":"9","username":"mod"},"data":%s}`, guildID, guildID, data)
+	var i discord.ApplicationCommandInteraction
+	if err := json.Unmarshal([]byte(raw), &i); err != nil {
+		t.Fatalf("decoding interaction: %v", err)
+	}
+	responses := make(chan discord.MessageCreate, 4)
+	return &events.ApplicationCommandInteractionCreate{
+		ApplicationCommandInteraction: i,
+		Respond: func(_ discord.InteractionResponseType, d discord.InteractionResponseData, _ ...rest.RequestOpt) error {
+			m, _ := d.(discord.MessageCreate)
+			responses <- m
+			return nil
+		},
+	}, responses
+}
+
+const enableData = `{"id":"3","name":"threadbot","type":1,"options":[{"name":"enable","type":1}]}`
+
+// Commands registered in a guild before it left the allowlist stay
+// registered, so the handler itself must turn them away without creating
+// state.
+func TestCommandFromGuildNotAllowedCreatesNoState(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	s3srv := httptest.NewServer(fake)
+	defer s3srv.Close()
+	b := newTestBot(t, testutil.NewTestS3Client(t, s3srv))
+
+	const foreignGuild snowflake.ID = 555
+	e, responses := commandEvent(t, foreignGuild, enableData)
+	b.onCommand(e)
+
+	select {
+	case m := <-responses:
+		if m.Flags != discord.MessageFlagEphemeral {
+			t.Errorf("response = %+v, want an ephemeral notice", m)
+		}
+	default:
+		t.Error("no response to a command from a guild that is not allowed")
+	}
+	if _, ok := b.reminders[foreignGuild]; ok {
+		t.Error("reminders created for a guild that is not allowed")
+	}
+	fake.Mu.Lock()
+	defer fake.Mu.Unlock()
+	for key := range fake.Objects {
+		t.Errorf("S3 object written: %s", key)
+	}
+}
 
 func TestIsThread(t *testing.T) {
 	tests := []struct {

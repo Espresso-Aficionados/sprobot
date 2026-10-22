@@ -1,6 +1,9 @@
 package botutil
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -29,19 +32,61 @@ func RespondEphemeral(e MessageResponder, content string) {
 	}
 }
 
-// PostWithRetry attempts to create a message up to 3 times with exponential backoff.
+// FollowupEphemeral answers a deferred interaction with an ephemeral
+// follow-up message, logging any failure.
+func FollowupEphemeral(client *bot.Client, token, content string) {
+	if _, err := client.Rest.CreateFollowupMessage(client.ApplicationID, token, discord.MessageCreate{
+		Content: content,
+		Flags:   discord.MessageFlagEphemeral,
+	}); err != nil {
+		slog.Error("Failed to send follow-up", "error", err)
+	}
+}
+
+// postRetryDelay is the backoff step between PostWithRetry attempts, a
+// variable so tests can shorten it.
+var postRetryDelay = 2 * time.Second
+
+// PostWithRetry creates a message, making up to 3 attempts with increasing
+// backoff. Every attempt carries the same nonce with enforce_nonce set, so if
+// an earlier attempt created the message but its response was lost (a timeout
+// or 5xx), Discord returns that message instead of posting a duplicate. 4xx
+// responses are not retried: they fail the same way again, and disgo already
+// waits out 429s.
 func PostWithRetry(restClient rest.Rest, channelID snowflake.ID, msg discord.MessageCreate, log *slog.Logger) (*discord.Message, error) {
+	msg = msg.WithNonce(newNonce()).WithEnforceNonce(true)
 	var sent *discord.Message
 	var err error
 	for attempt := range 3 {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * postRetryDelay)
+		}
 		sent, err = restClient.CreateMessage(channelID, msg)
 		if err == nil {
 			return sent, nil
 		}
 		log.Warn("Repost attempt failed", "channel_id", channelID, "attempt", attempt+1, "error", err)
-		time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+		if isClientError(err) {
+			break
+		}
 	}
 	return nil, err
+}
+
+// newNonce returns a random message nonce. Discord allows up to 25 characters.
+func newNonce() string {
+	b := make([]byte, 12)
+	rand.Read(b) // never fails since Go 1.24
+	return hex.EncodeToString(b)
+}
+
+// isClientError reports whether err is a 4xx response from Discord.
+func isClientError(err error) bool {
+	var restErr *rest.Error
+	if !errors.As(err, &restErr) || restErr.Response == nil {
+		return false
+	}
+	return restErr.Response.StatusCode >= 400 && restErr.Response.StatusCode < 500
 }
 
 // OnlyBotsAfter fetches the most recent messages in a channel and checks

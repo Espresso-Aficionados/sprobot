@@ -664,6 +664,26 @@ func (c *Client) DeleteProfile(ctx context.Context, tmpl sprobot.Template, guild
 	return nil
 }
 
+// DeleteKeys deletes each object key, skipping empty ones. Keys are bare S3
+// keys, not URLs. A key that is already gone counts as deleted; every other
+// failure is returned, joined, after all keys have been tried.
+func (c *Client) DeleteKeys(ctx context.Context, keys ...string) error {
+	var errs []error
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		_, err := c.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: &c.bucket,
+			Key:    &key,
+		})
+		if err != nil && !isNotFound(err) {
+			errs = append(errs, fmt.Errorf("deleting %s from s3: %w", key, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // saveRemoteFile downloads fileURL whole and stores it under
 // {s3Prefix}/{guildID}/, returning the new key. Files over MaxFileSize fail
 // with ErrFileTooLarge rather than being truncated.
