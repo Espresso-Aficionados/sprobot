@@ -3,6 +3,8 @@ package bot
 import (
 	"encoding/json"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/disgoorg/disgo/discord"
@@ -125,6 +127,36 @@ func TestLogChannelSetChecksType(t *testing.T) {
 		if tt.dest() != 77 {
 			t.Errorf("%s set refused an announcement channel", tt.group)
 		}
+	}
+}
+
+// /config eventlog creates a guild's state on first use, but not while its
+// load has failed: a save of fresh state would replace the stored config.
+func TestEventLogConfigNeedsLoadedState(t *testing.T) {
+	b, _ := newStubBot(t)
+	b.eventLog = newGuildStateStore(b.S3, b.Log, "eventlog",
+		func() *eventLogState { return &eventLogState{} },
+		func(st *eventLogState) *sync.Mutex { return &st.mu })
+
+	b.eventLog.mu.Lock()
+	b.eventLog.failed[10] = true
+	b.eventLog.mu.Unlock()
+	e, replies := commandEvent(t, b.Client, configSetData("eventlog", discord.ChannelTypeGuildText))
+	b.handleEventLogConfig(e)
+	if _, resp := replies.only(t); !isEphemeral(resp) || !strings.Contains(contentOf(resp), "can't be changed right now") {
+		t.Errorf("reply while the load has failed = %q, want an ephemeral refusal", contentOf(resp))
+	}
+	if st := b.eventLog.get(10); st != nil {
+		t.Errorf("state %+v installed for a guild whose load failed", st)
+	}
+
+	b.eventLog.mu.Lock()
+	delete(b.eventLog.failed, 10)
+	b.eventLog.mu.Unlock()
+	e, _ = commandEvent(t, b.Client, configSetData("eventlog", discord.ChannelTypeGuildText))
+	b.handleEventLogConfig(e)
+	if st := b.eventLog.get(10); st == nil || st.ChannelID != 77 {
+		t.Errorf("state after set on a guild with none = %+v, want channel 77", st)
 	}
 }
 

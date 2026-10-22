@@ -1640,10 +1640,10 @@ func (b *Bot) handleEventLogConfig(e *events.ApplicationCommandInteractionCreate
 		return
 	}
 
-	st := b.eventLog.get(*guildID)
+	st := b.eventLog.getOrCreate(*guildID)
 	if st == nil {
-		st = &eventLogState{}
-		b.eventLog.set(*guildID, st)
+		botutil.RespondEphemeral(e, "The event log config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
+		return
 	}
 
 	subCmd := data.SubCommandName
