@@ -156,7 +156,7 @@ func newRoleTestBot(t *testing.T) (*Bot, *roleAPI, *testutil.FakeS3) {
 	}
 	b.Client = &disgobot.Client{
 		Rest:   rest.New(rest.NewClient("test", rest.WithURL(srv.URL), rest.WithLogger(log))),
-		Caches: cache.New(cache.WithCaches(cache.FlagGuilds | cache.FlagRoles | cache.FlagMembers)),
+		Caches: cache.New(cache.WithCaches(cache.FlagGuilds | cache.FlagRoles | cache.FlagMembers | cache.FlagChannels)),
 	}
 	c := b.Client.Caches
 	c.AddGuild(discord.Guild{ID: roleTestGuild, OwnerID: roleTestOwner})

@@ -40,6 +40,8 @@ Profile bot. Members create and view profiles using slash commands that are dyna
 | `starboard` | `config`, `show-config`, `disable`, `filter-add`, `filter-remove`, `filter-list`, `filter-clear` | starboard channel, emoji, threshold and filtered channels |
 | `migrate-links` | `dry-run`, `run` | temporary: points old bot messages' file links at stable links |
 
+The starboard never reposts messages from private threads, reposts messages from age-restricted channels only to an age-restricted starboard channel, and skips channels and categories on its filter list, threads included. It doesn't compare who can see the source channel with who can see the starboard, so add any channel whose messages shouldn't be reposted to the filter list.
+
 **Features:** ticket system, self-assign role panels, temporary role assignment with auto-expiry, mod log, event logging (join/leave/ban/kick/timeout/message edit and delete/channel and role changes/emoji, sticker, stage instance, scheduled event, and soundboard sound changes), channel and thread rename logging, welcome DMs, auto-role on join, poster role tracking, starboard, forum helper reminders, message cache for edit/delete logging.
 
 ### stickybot
