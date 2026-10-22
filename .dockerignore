@@ -6,3 +6,8 @@ LICENSE
 .vscode
 .idea
 config/
+.claude
+docs
+*.sh
+docker-compose*.yml
+Dockerfile

@@ -1,7 +1,7 @@
 # sprobot
-[![sprobot build, test, and maybe push](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/build-test-push.yaml/badge.svg?branch=main)](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/build-test-push.yaml)
+[![publish](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/publish.yaml/badge.svg?branch=main)](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/publish.yaml)
 
-This repo contains four Discord bots and a web server for the Espresso Aficionados Discord server.
+This repo contains three Discord bots and a web server for the Espresso Aficionados Discord server. Each bot is a separate Discord application with its own token.
 
 ## Bots
 
@@ -9,19 +9,38 @@ This repo contains four Discord bots and a web server for the Espresso Aficionad
 
 Profile bot. Members create and view profiles using slash commands that are dynamically generated from templates.
 
-- `/edit<template>` / `/get<template>` / `/delete<template>` — edit, view, or delete a profile
+- `/edit<template>` / `/get<template>` — edit your profile, or view a member's profile
+- `/delete<template>` — delete your entire profile or just its picture
 - `/wiki` — search the wiki (with autocomplete)
 - `/s` — post a shortcut response (round-robin through configured responses, with autocomplete)
-- `/config shortcuts set|remove|list` — manage shortcuts (requires Manage Messages)
-- `/config welcome set|clear|show|test|enable|disable` — manage welcome DMs for new members (requires Manage Messages)
-- `/warn` — issue a warning to a member (requires Manage Messages)
-- `/temprole user role` — assign a whitelisted temporary role to a member (requires Manage Messages)
-- `/config temprole add|remove|list` — manage temporary role configuration (requires Manage Messages)
-- `/market progress` — check a member's poster role progress (requires Manage Messages)
-- `/topposters` — show top posters for the guild (requires Manage Messages)
-- Context menus for saving messages to the mod log and viewing profiles
+- `/warn user reason` — issue a warning to a member
+- `/temprole user role` — assign a whitelisted temporary role to a member
+- `/market progress user` — check a member's progress toward the marketplace poster role
+- `/market leaderboard` — show the members closest to the marketplace poster role
+- `/topposters` — show the top posters over the last 7 days
+- `/config <group> <subcommand>` — configure the bot (groups below)
+- "Get <Name> Profile" user and message context menus (one pair per template) — view a member's profile
+- "Save message to mod log" message context menu
 
-**Features:** ticket system, self-assign role panels, temporary role assignment with auto-expiry, event logging (join/leave/ban/kick/timeout/message edit and delete/channel and role changes/emoji, sticker, stage instance, scheduled event, and soundboard sound changes), auto-role on join, poster role tracking, forum helper reminders, message cache for edit/delete logging.
+`/market` replies are hidden unless `public` is set. `/warn`, `/temprole`, `/market`, `/topposters`, `/config` and the mod log context menu require Manage Messages.
+
+`/config` groups:
+
+| Group | Subcommands | Configures |
+|---|---|---|
+| `shortcuts` | `set`, `remove`, `list` | `/s` shortcuts |
+| `welcome` | `set`, `clear`, `show`, `test`, `enable`, `disable` | welcome DM for new members |
+| `renamelog` | `set`, `add`, `remove`, `list`, `clear` | logging of channel and thread renames |
+| `market` | `config`, `show-config`, `ban`, `unban`, `banlist`, `filter-add`, `filter-remove`, `filter-list`, `filter-clear` | marketplace poster role |
+| `autorole` | `set`, `show`, `clear` | role given to new members |
+| `eventlog` | `set`, `show`, `clear` | event log channel |
+| `modlog` | `set`, `show`, `clear`, `audit` | mod log forum channel |
+| `temprole` | `add`, `remove`, `list` | temporary role whitelist |
+| `topposters` | `filter-add`, `filter-remove`, `filter-list`, `filter-clear` | users, roles and channels left out of `/topposters` |
+| `starboard` | `config`, `show-config`, `disable`, `filter-add`, `filter-remove`, `filter-list`, `filter-clear` | starboard channel, emoji, threshold and filtered channels |
+| `migrate-links` | `dry-run`, `run` | temporary: points old bot messages' file links at stable links |
+
+**Features:** ticket system, self-assign role panels, temporary role assignment with auto-expiry, mod log, event logging (join/leave/ban/kick/timeout/message edit and delete/channel and role changes/emoji, sticker, stage instance, scheduled event, and soundboard sound changes), channel and thread rename logging, welcome DMs, auto-role on join, poster role tracking, starboard, forum helper reminders, message cache for edit/delete logging.
 
 ### stickybot
 
@@ -34,18 +53,22 @@ All commands require Manage Messages permission.
 
 ### threadbot
 
-Posts periodic reminders in threads to keep them active. Configurable idle timers and message thresholds. When the reminder is still the last message in the channel, it edits the existing message in place instead of deleting and reposting, reducing message churn.
+Posts a reminder listing a channel's active threads and reposts it at the bottom of the channel as the conversation moves on. Configurable idle timers and message/time thresholds. When the reminder is still the last message in the channel, it edits the existing message in place instead of deleting and reposting, reducing message churn.
 
-- `/threadbot enable` — enable reminders in the current thread (with optional min_idle, max_idle, msg_threshold, time_threshold)
-- `/threadbot disable` — disable reminders
-- `/threadbot list` — list active reminders
+- `/threadbot enable` — enable reminders in the current channel (optional `min_idle`, `max_idle`, `msg_threshold`, `time_threshold`, `buffer`)
+- `/threadbot disable` — disable reminders in the current channel
+- `/threadbot list` — list channels with reminders in this server
+- `/threadbot refreshcounts` — clear cached thread member counts so they are fetched again
+- `/threadbot fetchall` — show all active threads across the server (hidden unless `public` is set)
 - `/threadbot hide <thread>` / `/threadbot unhide <thread>` — never promote a thread in reminders or `/threads` (until unhidden or deleted)
 - `/threadbot hidden` — list hidden threads
 - `/threads` — show active threads in the current channel
 
+`/threadbot` requires Manage Messages and works in channels, not threads. `/threads` is open to everyone.
+
 ### sprobot-web
 
-Web server that renders profile pages from S3 data. Serves profile URLs linked from Discord embeds.
+Web server that renders profile pages and serves files saved by the bots (mod log, shortcut and sticky attachments) from S3. It serves the profile and file URLs linked from Discord messages and makes no Discord API calls.
 
 ## Project Structure
 
@@ -61,6 +84,9 @@ Web server that renders profile pages from S3 data. Serves profile URLs linked f
 - `pkg/testutil/` — shared test helpers (fake S3, test client)
 - `pkg/sprobot/` — shared types (templates, links, config)
 - `pkg/s3client/` — S3 storage client
+- `docs/` — project documentation, including Discord privileged-intent evidence
+- `PRIVACY.md` / `TERMS.md` — privacy policy and terms of service for the bots and web server
+- `.github/` — CI workflows and Dependabot configuration
 
 ## Quickstart
 
@@ -109,16 +135,20 @@ See `config/example.env` for the full list. Key variables:
 | `SPROBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for sprobot (optional) |
 | `STICKYBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for stickybot (optional) |
 | `THREADBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for threadbot (optional) |
-| `PORT` | Web server port (default 8080) |
+| `PORT` | Web server port (default 8080; the prod `sadbox/sprobot-web` image sets `PORT=9001`) |
 
 ## Deployment
 
-Multiarch Docker images are automatically built and pushed to Docker Hub on commits to main:
+Pull requests run the gofmt check, `go vet` and the tests on amd64 and arm64, and build the prod images for amd64 without pushing them.
+
+Multiarch Docker images are built and pushed to Docker Hub on every push to `main` and on a Mon/Wed/Fri 05:00 UTC schedule, which picks up base image updates:
 
 - `sadbox/sprobot`
 - `sadbox/sprobot-web`
 - `sadbox/stickybot`
 - `sadbox/threadbot`
+
+A publish moves `latest` for all four images only if its commit is still the tip of `main`. The first images built from a commit are tagged `sha-<short commit SHA>`, and that tag never moves; later builds of the same commit (scheduled rebuilds with refreshed base images, re-runs) are tagged `sha-<short commit SHA>-<UTC build time>` instead. Images carry the full commit SHA in the `org.opencontainers.image.revision` label, so a running image can be traced to its commit and rolled back by tag.
 
 ## Style
 
