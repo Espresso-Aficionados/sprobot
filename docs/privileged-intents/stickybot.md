@@ -5,6 +5,12 @@ toggle is off and has stayed off since the PR #222 rollout (2026-08), with
 sticky creation working throughout.
 
 Gateway intents (`pkg/stickybot/bot.go`): `IntentGuilds`, `IntentGuildMessages`.
+Only guilds are cached (`cache.FlagGuilds`).
+
+stickybot serves only the guilds in `botutil.AllowedGuildIDs`; any other guild
+is logged and ignored, and the bot never leaves it. Events are dispatched
+asynchronously (`bot.WithAsyncEventsEnabled`), because stopping a sticky's
+repost loop waits out a repost in flight and must not stall the gateway.
 
 ## History
 
@@ -52,10 +58,26 @@ the bot carries the resolved message across (`pkg/stickybot/commands.go`):
 ## What never needed the intent
 
 - **Reposting** uses stickybot's own stored copy of the sticky's content
-  (`pkg/stickybot/sticky.go`).
+  (`pkg/stickybot/sticky.go`). The buffer and "only bots posted since" checks
+  list recent messages but compare only message IDs and the author's bot flag.
 - **`onMessage`** only uses incoming messages as an activity signal for the
   idle-repost loop. It never reads their content.
 - The `/sticky` slash commands take their input from command options.
+
+## Stored files and deleted channels
+
+A sticky's attachments are copied to S3 (`sticky` files). They are deleted with
+the sticky: `retireSticky` stops the repost loop, deletes the last posted
+message, then deletes the files through `s3client.DeleteKeys`
+(`deleteStickyFiles`). A failed delete is kept in memory and retried on the
+save loop and at shutdown (`retryFileDeletes`). Only keys that parse as this
+guild's sticky files are ever deleted.
+
+A sticky whose channel or thread is deleted is removed the same way: live on
+`GuildChannelDelete` and `ThreadDelete`, and on each `GuildReady`
+(`dropStickiesOfDeletedChannels`), which checks each stored sticky's channel
+with `GetChannel` and drops those that answer Unknown Channel. `cmd/s3-orphans`
+reports sticky files that no sticky refers to.
 
 ## Keeping it this way
 

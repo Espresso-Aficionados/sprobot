@@ -7,6 +7,11 @@ Gateway intents (`pkg/threadbot/bot.go`): `IntentGuilds`, `IntentGuildMessages`,
 `IntentGuildMembers`. Only guilds are cached (`cache.FlagGuilds`), so the member
 and thread-member events the intent delivers are counted, never stored.
 
+threadbot serves only the guilds in `botutil.AllowedGuildIDs`; any other guild
+is logged and ignored, and the bot never leaves it. Events are dispatched
+asynchronously (`bot.WithAsyncEventsEnabled`), so stopping a repost loop, which
+waits out a repost in flight, cannot stall the gateway.
+
 ## Why Server Members
 
 Reminders and `/threads` show a member count per thread. The intent is used for
@@ -17,7 +22,10 @@ and no privileged access is used.
 
 For a **displayed** thread at the cap, threadbot needs an exact count:
 1. **REST: List Thread Members** (`countThreadMembers`,
-   `pkg/threadbot/reminders.go`) lists the thread and counts the result.
+   `pkg/threadbot/reminders.go`) pages through the thread with
+   `Rest.GetThreadMembersPage` (disgo sends `with_member=true`; 100 per page,
+   continuing after the last user ID) and counts the items. Members are
+   counted and discarded, never stored.
    - Discord's docs say of that whole endpoint: *"This endpoint is restricted
      according to whether the `GUILD_MEMBERS` Privileged Intent is enabled for
      your application."* The restriction covers the endpoint itself, not just
@@ -35,7 +43,9 @@ For a **displayed** thread at the cap, threadbot needs an exact count:
 
 **What is stored:** one integer count and one fetch time per thread
 (`threadmembercounts/<guild>.json` in S3). No user IDs, member objects or join
-times. Counts not re-fetched for 7 days are pruned.
+times. Counts not re-fetched for 7 days are pruned. The bot's other state is
+per-channel reminder settings (including the ID of the user who enabled each
+one) and the list of hidden thread IDs.
 
 ## Refresh design
 
@@ -55,13 +65,33 @@ times. Counts not re-fetched for 7 days are pruned.
 - List Thread Members is ordered by user ID, not join time, so there is no
   watermark for fetching only new members. Each refresh lists the whole thread.
 - `/threadbot refreshcounts` clears the cache for a guild.
+- If a guild's stored counts failed to load, nothing is fetched or saved for it
+  and the capped `member_count` is shown until the load succeeds, so stored
+  counts are never overwritten.
+
+## Deleted channels
+
+Reminders for channels that no longer exist are dropped: live on
+`GuildChannelDelete` (`onChannelDelete`), and on each `GuildReady`
+(`startGuildReminders`), which checks every stored reminder's channel with
+`GetChannel` and drops those that answer Unknown Channel. The startup check
+catches deletes Discord never replays (bot down, new session). A deleted thread
+is also removed from the hidden-thread list (`onThreadDelete`).
 
 ## Failure mode if the intent is revoked
 
 `IntentGuildMembers` is in the identify bitmask. **If the portal toggle is
 turned off, Discord refuses the gateway connection (close code 4014,
-disallowed intents) and threadbot goes fully offline.** This is not the graceful
+disallowed intents) and threadbot goes offline.** This is not the graceful
 fallback the REST-only design had.
+
+What the bot does about it (`pkg/botutil/base.go`, `signal.go`): a close that
+disgo won't reconnect from makes `OnGatewayClose` signal the bot, which saves
+its state, **waits 10 minutes** (`fatalCloseDelay`, so a restart loop doesn't
+re-identify often enough to get the token reset), then exits non-zero. The
+code expects the container runtime to restart it, which then fails the same
+way. The restart policy is deployment configuration, outside this repo. The
+healthcheck pings only while the gateway is ready.
 
 To drop the intent, follow the deploy-then-toggle order:
 1. Ship a build without `IntentGuildMembers` and without the REST counts.
@@ -84,6 +114,10 @@ To drop the intent, follow the deploy-then-toggle order:
 - PR #251 (2026-10-21): `IntentGuildMembers` back on the gateway for thread
   member events, which keep counts current. Approved explicitly by the
   maintainer.
+- PR #254 / #261 (2026-10-21): counting went back to paged
+  `GetThreadMembersPage(with_member=true)` (members counted, never stored);
+  events are dispatched asynchronously; state loads before the gateway opens;
+  reminders of deleted channels are dropped at startup and live.
 
 ## Why Message Content was never needed
 
@@ -93,9 +127,11 @@ To drop the intent, follow the deploy-then-toggle order:
   creation time) returned by the active-threads API call.
 - Nothing reads `.Content`, embeds or attachments from other users' messages.
 
-## Future risk
+## API v11 pagination
 
-Discord's docs warn that List Thread Members will **always return paginated
-results starting in API v11**. When disgo moves to v11, a thread with n members
-costs ceil(n/100) calls. That only applies to displayed threads at the cap, at
-most once a day each. Re-check this whenever disgo's API version changes.
+Discord's docs say List Thread Members **always returns paginated results
+starting in API v11**. `countThreadMembers` already pages (100 per call, using
+`GetThreadMembersPage`), so a thread with n members costs ceil(n/100) calls
+today and the v11 change needs no code change. That cost only applies to
+displayed threads at the cap, at most once a day each (7 days when events have
+kept the count live).

@@ -51,21 +51,40 @@ off first breaks the REST paths immediately.
 It is worse for an intent in a bot's identify bitmask. Discord then refuses the
 gateway connection outright (close code 4014, disallowed intents), and the bot
 goes offline. That applies to sprobot's Server Members and Message Content, and
-to threadbot's Server Members (since PR #251).
+to threadbot's Server Members (since PR #251). A bot whose gateway closes for
+good (4014 included) saves its state, waits 10 minutes, then exits non-zero
+instead of sitting offline silently.
 
 ## Renewal checklist
 
 1. **Re-verify the dependency tables** in each bot's doc against the code. At
    minimum, grep for `Intent[A-Z]`, `GetMessage(`, `GetMessages(`,
-   `GetThreadMembers`, `SearchMembers` and `Caches().Member`. Update the docs
-   where the code has moved.
+   `GetThreadMembers` (also matches `GetThreadMembersPage`), `SearchMembers` and
+   `Caches.Member(`. Also check the cache types in
+   `pkg/bot/groupedcache.go` (`cachedMessage`, `guildMemberCache`,
+   `outageSafeMessageCache`) and `enabledCacheFlags`. Update the docs where
+   the code has moved.
 2. **Confirm the claims the form asks you to certify**, and that
    [`PRIVACY.md`](../../PRIVACY.md) still matches the code:
    - Message content retention ≤ 30 days: `messageRetention` in
-     `pkg/bot/groupedcache.go`.
+     `pkg/bot/groupedcache.go`, applied on load and before every save
+     (`pruneMessageCache`).
    - Encryption at rest: the production host's disk is encrypted. The app
-     writes the cache as plain JSON, so re-confirm this on the current host. See
+     writes the cache as plain JSON (mode `0600`), so re-confirm this on the
+     current host. See [sprobot.md](sprobot.md).
+   - The member cache has no time limit (a member is dropped when the bot sees
+     them leave). `PRIVACY.md` says so; see the open item in
      [sprobot.md](sprobot.md).
+   - `PRIVACY.md` has a "Moderator-private data" section covering mod-log
+     records, saved attachments (not deleted automatically) and the in-memory
+     user-to-thread index. Re-read it against `pkg/bot/modlog.go`.
+   - Deletion and retention evidence: profile images and sticky and shortcut
+     files are deleted with their records, and `go run ./cmd/s3-orphans`
+     (report only; `-delete` removes) lists objects in the bucket that nothing
+     refers to. `mod_files/` is never touched by it. Run it in report mode
+     before renewal if the form asks about stored files.
+   - The bots serve only `botutil.AllowedGuildIDs`; a guild outside it is
+     ignored and never left.
    - A privacy policy is discoverable. Every bot sets
      `botutil.PrivacyPolicyStatus` as its custom status, and the portal links
      `PRIVACY.md` and `TERMS.md`.
@@ -77,7 +96,7 @@ to threadbot's Server Members (since PR #251).
    - Discord Provided Link, scopes `bot` + `applications.commands`.
    - sprobot permissions integer 361045773440.
    - stickybot and threadbot: View Channels + Send Messages + Read Message
-     History. threadbot also needs Send Messages in Threads.
+     History (the invite link each logs at startup uses permissions 68608).
 5. Re-apply per bot. A bot with **no** privileged intents (stickybot) cannot
    submit an application: the form's Submit button stays disabled with nothing
    checked. That is expected and needs no action.
