@@ -1076,7 +1076,10 @@ func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (s
 // CopyStickyFile copies the saved file at key to a new sticky file of guildID
 // and returns the new key.
 func (c *Client) CopyStickyFile(ctx context.Context, guildID, key string) (string, error) {
-	s3Path := fmt.Sprintf("sticky_files/%s/%s%s", guildID, randomString(30), sprobot.SafeFileExt(path.Ext(key)))
+	s3Path, ok := sprobot.FileKey(sprobot.FileKindSticky, guildID, randomString(30)+sprobot.SafeFileExt(path.Ext(key)))
+	if !ok {
+		return "", fmt.Errorf("invalid guild ID %q", guildID)
+	}
 	source := (&url.URL{Path: c.bucket + "/" + key}).EscapedPath()
 	_, err := c.s3.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     &c.bucket,
