@@ -41,12 +41,13 @@ plus the **sprobot-web** server, which renders profile pages and files saved by 
   image, and author to the starboard channel on Discord. Messages are not reposted from
   private threads, from channels or categories on the staff's starboard filter list,
   or from age-restricted channels when the starboard channel isn't age-restricted. The
-  repost is removed if the original message is deleted. The bot stores the message,
+  repost is removed when the bot sees the original message deleted, so a message
+  deleted while the bot is offline keeps its repost. The bot stores the message,
   channel, and author IDs, the channel name, and the reaction count. Reactions are
   counted for 90 days after a message is sent: older messages aren't reposted, and a
   repost's count stops updating. Entries for messages that were never reposted are
-  dropped after 30 days; a reposted message's entry is kept until the original is
-  deleted, so the repost can be removed with it.
+  dropped after 30 days; a reposted message's entry is kept until the bot sees the
+  original deleted, so the repost can be removed with it.
 - **Temporary roles** — the user ID, role ID, and expiry time of staff-assigned
   temporary roles.
 - **Server configuration** — channel, role, and user IDs set by staff (for example,
