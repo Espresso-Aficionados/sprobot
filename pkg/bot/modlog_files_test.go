@@ -54,13 +54,13 @@ func TestSaveModAttachmentTooLarge(t *testing.T) {
 	b := &Bot{} // rejected before any download, so no S3 client is needed
 	att := discord.Attachment{Filename: "clip`.mov", Size: s3client.MaxFileSize + 1}
 
-	line, ok := b.saveModAttachment(context.Background(), "1", att)
-	if ok {
+	saved := b.saveModAttachment(context.Background(), "1", att)
+	if saved.key != "" {
 		t.Fatal("oversized attachment should fail")
 	}
 	for _, want := range []string{"`clip.mov`", "500.0 MiB", "not saved"} {
-		if !strings.Contains(line, want) {
-			t.Errorf("line %q missing %q", line, want)
+		if !strings.Contains(saved.line, want) {
+			t.Errorf("line %q missing %q", saved.line, want)
 		}
 	}
 }

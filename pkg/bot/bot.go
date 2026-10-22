@@ -53,6 +53,7 @@ type Bot struct {
 	eventLog             *guildStateStore[eventLogState]
 	modLog               *guildStateStore[modLogState]
 	modLogPending        botutil.MessageStash // context-menu targets awaiting the mod note modal
+	modLogThreads        modLogThreadIndex    // user -> mod log thread, in memory only
 	tempRoleConfig       *guildStateStore[tempRoleConfigState]
 	tempRoles            *guildStateStore[tempRoleState]
 	threadHelpConfig     map[snowflake.ID]threadHelpInfo
@@ -121,6 +122,10 @@ func New(token string) (*Bot, error) {
 		bot.WithEventListenerFunc(b.onThreadCreate),
 		bot.WithEventListenerFunc(b.onThreadUpdate),
 		bot.WithEventListenerFunc(b.onThreadDelete),
+		bot.WithEventListenerFunc(b.onModLogThreadCreate),
+		bot.WithEventListenerFunc(b.onModLogThreadUpdate),
+		bot.WithEventListenerFunc(b.onModLogThreadDelete),
+		bot.WithEventListenerFunc(b.onModLogReady),
 		bot.WithEventListenerFunc(b.onRoleUpdate),
 		bot.WithEventListenerFunc(b.onGuildUpdate),
 		bot.WithEventListenerFunc(b.onEmojiCreate),

@@ -31,6 +31,10 @@ plus **sprobot-web**, which serves profile pages and files the bots have saved.
   Saved attachments are not deleted automatically. sprobot-web serves them at
   unguessable links that appear only in the mod log; anyone holding a link can open
   the file.
+- **Mod log thread index** — to find each user's thread in the staff-only mod log
+  forum, sprobot keeps an in-memory map of user IDs to thread IDs, plus the names of
+  older threads whose name has no user ID. It is rebuilt from the forum after a
+  restart and never written to disk.
 - **Temporary roles** — the user ID, role ID, and expiry time of staff-assigned
   temporary roles.
 - **Server configuration** — channel/role IDs and staff-authored text (welcome

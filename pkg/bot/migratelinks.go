@@ -227,14 +227,14 @@ func (m *linkMigration) activeThreads() map[snowflake.ID][]snowflake.ID {
 // listed before any error.
 func (m *linkMigration) listArchivedThreads(channelID snowflake.ID, private bool) ([]snowflake.ID, error) {
 	var threads []snowflake.ID
-	before := time.Time{}
+	opts := []rest.RequestOpt{rest.WithCtx(m.ctx)}
 	for {
 		var page *discord.GetThreads
 		err := m.call("listing archived threads", func() (err error) {
 			if private {
-				page, err = m.b.Client.Rest.GetPrivateArchivedThreads(channelID, before, 100, rest.WithCtx(m.ctx))
+				page, err = m.b.Client.Rest.GetPrivateArchivedThreads(channelID, time.Time{}, 100, opts...)
 			} else {
-				page, err = m.b.Client.Rest.GetPublicArchivedThreads(channelID, before, 100, rest.WithCtx(m.ctx))
+				page, err = m.b.Client.Rest.GetPublicArchivedThreads(channelID, time.Time{}, 100, opts...)
 			}
 			return err
 		})
@@ -247,7 +247,7 @@ func (m *linkMigration) listArchivedThreads(channelID snowflake.ID, private bool
 		if !page.HasMore || len(page.Threads) == 0 {
 			return threads, nil
 		}
-		before = page.Threads[len(page.Threads)-1].ThreadMetadata.ArchiveTimestamp
+		opts = []rest.RequestOpt{rest.WithCtx(m.ctx), archivedBefore(page.Threads[len(page.Threads)-1].ThreadMetadata.ArchiveTimestamp)}
 	}
 }
 
