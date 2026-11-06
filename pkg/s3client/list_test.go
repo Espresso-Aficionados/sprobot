@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 func TestListObjectsFollowsPages(t *testing.T) {

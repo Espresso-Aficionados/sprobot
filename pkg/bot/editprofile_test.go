@@ -15,9 +15,9 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
 
-	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/sprobot"
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 const editUserID = "9"

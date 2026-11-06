@@ -23,6 +23,7 @@ Shared packages:
   `PostWithRetry`, `FollowupEphemeral`, `MessageStash`, `RegisterGuildCommands`,
   `PrivacyPolicyStatus`.
 - `pkg/idleloop`: the idle-repost loop used by stickybot and threadbot.
+- `pkg/opsecrets`: reads secret env vars, resolving 1Password `op://` references.
 - `pkg/s3client`: all S3 persistence.
 - `pkg/sprobot`: shared types such as templates.
 - `pkg/testutil`: fake S3 and a test client.
@@ -45,6 +46,16 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
 - **Config:** `config/config.env`, copied from `config/example.env`. It holds
   the bot tokens and S3 credentials. Never commit it, and never print tokens
   from it.
+  - Read secrets with `opsecrets.Getenv`, not `os.Getenv`: a value of the form
+    `op://vault/item/field` is resolved through 1Password using
+    `OP_SERVICE_ACCOUNT_TOKEN`, and plain values pass through. The SDK loads
+    only on the first `op://` value. In dev, `run*.sh` resolve the references
+    with `op run` (your own 1Password account, desktop app) and pass plain values
+    into the containers, so no service-account token is needed locally.
+    Resolve at startup only, and use `opsecrets.GetenvAll` where one call site
+    needs several secrets: the 1Password account allows 1,000
+    service-account requests a day, shared across every prod service.
+    towngear and oncall-sync import this package too, so keep its API stable.
 
 ## CI and deploy
 

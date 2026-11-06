@@ -16,7 +16,7 @@ import (
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 const testGuildID = snowflake.ID(1013566342345019512)

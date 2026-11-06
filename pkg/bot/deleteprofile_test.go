@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/sadbox/sprobot/pkg/sprobot"
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 func putStored(t *testing.T, fake *testutil.FakeS3, key string, body []byte) {

@@ -19,8 +19,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/sadbox/sprobot/pkg/s3client"
-	"github.com/sadbox/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
 //go:embed templates/*.html

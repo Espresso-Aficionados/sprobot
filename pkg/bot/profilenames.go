@@ -12,7 +12,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 )
 
 // profileNameRetry is how long to wait before retrying a failed name update,

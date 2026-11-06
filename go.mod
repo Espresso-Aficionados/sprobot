@@ -1,8 +1,9 @@
-module github.com/sadbox/sprobot
+module github.com/Espresso-Aficionados/sprobot
 
 go 1.26.0
 
 require (
+	github.com/1password/onepassword-sdk-go v0.4.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.12
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.6
 	github.com/disgoorg/disgo v0.19.6
@@ -24,9 +25,17 @@ require (
 	github.com/aws/smithy-go v1.28.7 // indirect
 	github.com/disgoorg/godave v0.1.0 // indirect
 	github.com/disgoorg/json/v2 v2.0.0 // indirect
+	github.com/dylibso/observe-sdk/go v0.0.0-20240828172851-9145d8ad07e1 // indirect
+	github.com/extism/go-sdk v1.7.1 // indirect
+	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/ianlancetaylor/demangle v0.0.0-20251118225945-96ee0021ea0f // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/sasha-s/go-csync v0.0.0-20240107134140-fcbab37b09ad // indirect
+	github.com/tetratelabs/wabin v0.0.0-20230304001439-f6f874872834 // indirect
+	github.com/tetratelabs/wazero v1.11.0 // indirect
+	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )

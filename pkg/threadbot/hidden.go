@@ -13,8 +13,8 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 )
 
 // Hidden threads are never promoted: they are left out of channel reminders

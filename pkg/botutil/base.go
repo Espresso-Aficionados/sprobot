@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,7 +15,8 @@ import (
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 )
 
 // PrivacyPolicyStatus is the custom status shown by all bots, pointing at the
@@ -46,11 +46,15 @@ func NewBaseBot(envVarPrefix string) (*BaseBot, error) {
 	if err != nil {
 		return nil, err
 	}
+	healthcheckEndpoint, err := opsecrets.Getenv(envVarPrefix + "_HEALTHCHECK_ENDPOINT")
+	if err != nil {
+		return nil, err
+	}
 
 	return &BaseBot{
 		S3:                  s3,
 		Log:                 slog.Default(),
-		healthcheckEndpoint: os.Getenv(envVarPrefix + "_HEALTHCHECK_ENDPOINT"),
+		healthcheckEndpoint: healthcheckEndpoint,
 		httpClient:          &http.Client{Timeout: 10 * time.Second},
 		gatewayFailed:       make(chan error, 1),
 	}, nil

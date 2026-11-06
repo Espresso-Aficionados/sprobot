@@ -14,8 +14,8 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 func TestPosterRoleSettingsJSONRoundTrip(t *testing.T) {

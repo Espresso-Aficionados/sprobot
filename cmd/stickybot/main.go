@@ -2,13 +2,16 @@ package main
 
 import (
 	"log"
-	"os"
 
-	"github.com/sadbox/sprobot/pkg/stickybot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
+	"github.com/Espresso-Aficionados/sprobot/pkg/stickybot"
 )
 
 func main() {
-	token := os.Getenv("STICKYBOT_DISCORD_TOKEN")
+	token, err := opsecrets.Getenv("STICKYBOT_DISCORD_TOKEN")
+	if err != nil {
+		log.Fatalf("Reading bot token: %v", err)
+	}
 	if token == "" {
 		log.Fatal("Missing bot token: STICKYBOT_DISCORD_TOKEN")
 	}

@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/sadbox/sprobot/pkg/s3client"
-	"github.com/sadbox/sprobot/pkg/sprobot"
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 const (

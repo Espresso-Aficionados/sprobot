@@ -92,7 +92,7 @@ Web server that renders profile pages and serves files saved by the bots (mod lo
 
 ## Quickstart
 
-Copy `config/example.env` to `config/config.env` and fill in the values.
+Copy `config/example.env` to `config/config.env` and fill in the values. Secrets may be 1Password references (`op://vault/item/field`): the run scripts resolve them with `op run` using your own 1Password account, so they need the [1Password CLI](https://developer.1password.com/docs/cli/) with desktop-app integration turned on.
 
 Run tests:
 
@@ -125,10 +125,11 @@ go test -race ./...
 
 ## Environment Variables
 
-See `config/example.env` for the full list. Key variables:
+See `config/example.env` for the full list. The tokens, `S3_KEY`/`S3_SECRET` and the healthcheck URLs may be plain values or 1Password secret references (`op://vault/item/field`), resolved at startup through `OP_SERVICE_ACCOUNT_TOKEN` in prod. In dev, the run scripts resolve them before the container starts. Key variables:
 
 | Variable | Description |
 |---|---|
+| `OP_SERVICE_ACCOUNT_TOKEN` | Prod only: 1Password service account the binaries use to resolve `op://` values that reach them |
 | `SPROBOT_DISCORD_TOKEN` | Discord token for sprobot |
 | `STICKYBOT_DISCORD_TOKEN` | Discord token for stickybot |
 | `THREADBOT_DISCORD_TOKEN` | Discord token for threadbot |

@@ -2,13 +2,16 @@ package main
 
 import (
 	"log"
-	"os"
 
-	"github.com/sadbox/sprobot/pkg/bot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/bot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
 )
 
 func main() {
-	token := os.Getenv("SPROBOT_DISCORD_TOKEN")
+	token, err := opsecrets.Getenv("SPROBOT_DISCORD_TOKEN")
+	if err != nil {
+		log.Fatalf("Reading bot token: %v", err)
+	}
 	if token == "" {
 		log.Fatal("Missing bot token: SPROBOT_DISCORD_TOKEN")
 	}

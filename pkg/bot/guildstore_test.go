@@ -14,7 +14,7 @@ import (
 
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 type testState struct {
