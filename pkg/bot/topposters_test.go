@@ -9,7 +9,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 
-	"github.com/sadbox/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
 func TestDefaultTopPostersConfig(t *testing.T) {

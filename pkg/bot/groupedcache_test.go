@@ -18,7 +18,7 @@ import (
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 )
 
 // --- Message retention ---

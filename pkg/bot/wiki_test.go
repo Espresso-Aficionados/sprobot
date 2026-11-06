@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sadbox/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
 func TestWikiAutocompleteMatchesShortcut(t *testing.T) {

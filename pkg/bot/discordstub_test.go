@@ -16,8 +16,8 @@ import (
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgo/rest"
 
-	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 // stubAppID is the application ID of the client newDiscordStub returns.

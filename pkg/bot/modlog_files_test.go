@@ -7,7 +7,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 
-	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 )
 
 func TestAttachmentFieldsPacksUnderLimit(t *testing.T) {

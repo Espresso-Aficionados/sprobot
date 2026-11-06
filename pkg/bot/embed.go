@@ -3,8 +3,8 @@ package bot
 import (
 	"github.com/disgoorg/disgo/discord"
 
-	"github.com/sadbox/sprobot/pkg/s3client"
-	"github.com/sadbox/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
 const footerIconURL = sprobot.WebEndpoint + sprobot.AvatarWebPath

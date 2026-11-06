@@ -17,7 +17,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/gateway"
 
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 // fakeGateway reports a fixed status and fails Open with openErr; nothing

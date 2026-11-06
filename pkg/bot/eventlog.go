@@ -12,7 +12,7 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 )
 
 // Embed colors for event log entries.

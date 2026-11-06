@@ -15,9 +15,9 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/botutil"
-	"github.com/sadbox/sprobot/pkg/s3client"
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 func newTestBot(t *testing.T, s3c *s3client.Client) *Bot {

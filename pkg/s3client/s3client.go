@@ -27,7 +27,8 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	lru "github.com/hashicorp/golang-lru/v2"
 
-	"github.com/sadbox/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
 const maxImageSize = 10 * 1024 * 1024 // 10 MB
@@ -194,11 +195,14 @@ type Client struct {
 }
 
 func New() (*Client, error) {
-	key := os.Getenv("S3_KEY")
+	creds, err := opsecrets.GetenvAll("S3_KEY", "S3_SECRET")
+	if err != nil {
+		return nil, err
+	}
+	key, secret := creds["S3_KEY"], creds["S3_SECRET"]
 	if key == "" {
 		return nil, fmt.Errorf("S3_KEY env var is undefined")
 	}
-	secret := os.Getenv("S3_SECRET")
 	if secret == "" {
 		return nil, fmt.Errorf("S3_SECRET env var is undefined")
 	}

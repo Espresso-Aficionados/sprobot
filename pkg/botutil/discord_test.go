@@ -13,7 +13,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 // fakeCreateMessageAPI answers Create Message with the queued status codes in

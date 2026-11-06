@@ -12,8 +12,8 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	lru "github.com/hashicorp/golang-lru/v2"
 
-	"github.com/sadbox/sprobot/pkg/s3client"
-	"github.com/sadbox/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
 func newTestS3(t *testing.T) *s3client.Client {

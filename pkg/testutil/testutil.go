@@ -18,7 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	lru "github.com/hashicorp/golang-lru/v2"
 
-	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 )
 
 // FakeS3 is an in-memory S3-compatible server for testing.

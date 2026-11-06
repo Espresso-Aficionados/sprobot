@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sadbox/sprobot/pkg/sprobot"
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 func TestCopyShortcutFile(t *testing.T) {

@@ -23,7 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	lru "github.com/hashicorp/golang-lru/v2"
 
-	"github.com/sadbox/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
 // disableURLValidation overrides the URL validator for testing with local servers.

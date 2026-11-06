@@ -4,7 +4,6 @@ services:
       context: .
       target: dev
     init: true
-    env_file: ./config/config.env
     volumes:
       - sprobot-cache:/sprobot-cache
 
@@ -12,7 +11,6 @@ services:
     build:
       context: .
       target: devweb
-    env_file: ./config/config.env
     ports:
       - "8080:8080"
 
@@ -21,14 +19,12 @@ services:
       context: .
       target: devstickybot
     init: true
-    env_file: ./config/config.env
 
   threadbot:
     build:
       context: .
       target: devthreadbot
     init: true
-    env_file: ./config/config.env
 
 volumes:
   sprobot-cache:

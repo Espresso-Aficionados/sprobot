@@ -7,7 +7,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 
-	"github.com/sadbox/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
 // getprofileData is /getprofile with the name option set to member 31, whose

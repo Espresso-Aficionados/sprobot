@@ -16,7 +16,7 @@ import (
 
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/sadbox/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 )
 
 // errNotLoaded is returned by persist for a guild whose state failed to load.

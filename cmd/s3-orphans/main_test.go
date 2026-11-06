@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sadbox/sprobot/pkg/testutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
 func name(c byte) string { return strings.Repeat(string(c), 30) }
