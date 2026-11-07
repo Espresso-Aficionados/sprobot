@@ -153,6 +153,12 @@ func (b *Bot) onMessageDelete(e *events.GuildMessageDelete) {
 			Name: "Author", Value: userMention(msg.Author.ID), Inline: boolPtr(true),
 		})
 	}
+	// The message is gone, but its link still opens the channel where it
+	// was, with the conversation around it.
+	link := messageLink(e.GuildID, e.ChannelID, e.MessageID)
+	embed.Fields = append(embed.Fields, discord.EmbedField{
+		Name: "Link", Value: fmt.Sprintf("[Jump to where it was](%s)", link), Inline: boolPtr(true),
+	})
 	embed.Fields = append(embed.Fields, messageMetaFields(e.MessageID)...)
 	if msg.Content != "" {
 		embed.Description = truncate(msg.Content, 4000)
