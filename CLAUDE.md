@@ -68,8 +68,8 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
   review on PRs.
 - `.github/workflows/publish.yaml` runs on pushes to `main` and a Mon/Wed/Fri
   cron. It calls the tests, then builds per-arch images and combines them into
-  the multiarch images `sadbox/sprobot`, `sadbox/sprobot-web`,
-  `sadbox/stickybot` and `sadbox/threadbot`.
+  the multiarch images `ghcr.io/espresso-aficionados/{sprobot,sprobot-web,
+  stickybot,threadbot}`, pushed with the workflow token.
   - Runs are serialized (one publish at a time, none cancelled once running).
   - `:latest` moves only if the commit is still the tip of `main`, checked once
     per run for all four images.

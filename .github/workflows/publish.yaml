@@ -25,45 +25,48 @@ jobs:
 
   publish-build:
     needs: [test]
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io/espresso-aficionados with the workflow token
     strategy:
       matrix:
         include:
-          - image: sadbox/sprobot
+          - image: ghcr.io/espresso-aficionados/sprobot
             target: prod
             platform: linux/amd64
             runner: ubuntu-26.04
             cache-scope: publish-bot-amd64
-          - image: sadbox/sprobot
+          - image: ghcr.io/espresso-aficionados/sprobot
             target: prod
             platform: linux/arm64
             runner: ubuntu-26.04-arm
             cache-scope: publish-bot-arm64
-          - image: sadbox/sprobot-web
+          - image: ghcr.io/espresso-aficionados/sprobot-web
             target: prodweb
             platform: linux/amd64
             runner: ubuntu-26.04
             cache-scope: publish-web-amd64
-          - image: sadbox/sprobot-web
+          - image: ghcr.io/espresso-aficionados/sprobot-web
             target: prodweb
             platform: linux/arm64
             runner: ubuntu-26.04-arm
             cache-scope: publish-web-arm64
-          - image: sadbox/stickybot
+          - image: ghcr.io/espresso-aficionados/stickybot
             target: prodstickybot
             platform: linux/amd64
             runner: ubuntu-26.04
             cache-scope: publish-stickybot-amd64
-          - image: sadbox/stickybot
+          - image: ghcr.io/espresso-aficionados/stickybot
             target: prodstickybot
             platform: linux/arm64
             runner: ubuntu-26.04-arm
             cache-scope: publish-stickybot-arm64
-          - image: sadbox/threadbot
+          - image: ghcr.io/espresso-aficionados/threadbot
             target: prodthreadbot
             platform: linux/amd64
             runner: ubuntu-26.04
             cache-scope: publish-threadbot-amd64
-          - image: sadbox/threadbot
+          - image: ghcr.io/espresso-aficionados/threadbot
             target: prodthreadbot
             platform: linux/arm64
             runner: ubuntu-26.04-arm
@@ -76,11 +79,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
-      - name: Login to Docker Hub
+      - name: Login to GHCR
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
       - name: Build and push by digest
         id: build
@@ -90,7 +94,10 @@ jobs:
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
-          labels: org.opencontainers.image.revision=${{ github.sha }}
+          # source links each GHCR package to this repo (access inheritance).
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: |
             type=gha,scope=${{ matrix.platform }}
             type=gha,scope=${{ matrix.cache-scope }}
@@ -119,16 +126,20 @@ jobs:
   # checks the tip again.
   publish-merge:
     needs: [publish-build]
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-26.04
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
-      - name: Login to Docker Hub
+      - name: Login to GHCR
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
       # Each digest-<image>-<platform> artifact lands in a directory of that
       # name.
@@ -155,7 +166,8 @@ jobs:
             arm64=$(cat "${dir}-linux-arm64/digest.txt")
             docker buildx imagetools create -t "${1}:${2}" "${1}@${amd64}" "${1}@${arm64}"
           }
-          images=(sadbox/sprobot sadbox/sprobot-web sadbox/stickybot sadbox/threadbot)
+          registry=ghcr.io/espresso-aficionados
+          images=("$registry/sprobot" "$registry/sprobot-web" "$registry/stickybot" "$registry/threadbot")
           sha_tag="sha-${GITHUB_SHA::7}"
           rebuild_tag="${sha_tag}-$(date -u +%Y%m%d-%H%M%S)"
           tip=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
