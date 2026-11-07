@@ -49,8 +49,21 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
+      # vet and the race tests compile everything inside `docker run`, so a
+      # host directory mounted as the container's Go build cache carries the
+      # compiled packages, and passing test results, from run to run. The key
+      # changes only with go.mod/go.sum; a miss starts from this platform's
+      # newest older cache. It lives outside the workspace so the prod image
+      # builds below don't send it as build context.
+      - name: Go build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/go-build-cache
+          key: go-test-${{ matrix.platform }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: go-test-${{ matrix.platform }}-
+
       - name: Run vet and tests
-        run: docker run --platform ${{ matrix.platform }} sprobot-test
+        run: docker run --platform ${{ matrix.platform }} -v "${{ runner.temp }}/go-build-cache:/root/.cache/go-build" sprobot-test
 
       # Catch a broken prod stage before merge. The builder already holds the
       # base stage from the test image. publish.yaml builds and pushes these

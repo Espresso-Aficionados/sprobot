@@ -63,8 +63,11 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
   arm64. It runs on pull requests, on pushes to non-default branches
   (Dependabot branches are excluded; they are tested through their PR), and
   when `publish.yaml` calls it. A newer run for the same PR or branch cancels
-  the older one. PRs from amd64 also build the four prod images (not pushed),
-  to catch a broken prod stage before merge. `depcheck.yaml` runs dependency
+  the older one. The test container's Go build cache is a host directory
+  kept between runs with `actions/cache` (per platform, keyed on
+  go.mod/go.sum), so unchanged packages neither recompile nor re-test. PRs
+  from amd64 also build the four prod images (not pushed), to catch a broken
+  prod stage before merge. `depcheck.yaml` runs dependency
   review on PRs.
 - `.github/workflows/publish.yaml` runs on pushes to `main` and a Mon/Wed/Fri
   cron. It calls the tests, then builds per-arch images and combines them into
