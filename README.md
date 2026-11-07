@@ -138,18 +138,20 @@ See `config/example.env` for the full list. The tokens, `S3_KEY`/`S3_SECRET` and
 | `SPROBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for sprobot (optional) |
 | `STICKYBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for stickybot (optional) |
 | `THREADBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for threadbot (optional) |
-| `PORT` | Web server port (default 8080; the prod `sadbox/sprobot-web` image sets `PORT=9001`) |
+| `PORT` | Web server port (default 8080; the prod `sprobot-web` image sets `PORT=9001`) |
 
 ## Deployment
 
 Pull requests run the gofmt check, `go vet` and the tests on amd64 and arm64, and build the prod images for amd64 without pushing them.
 
-Multiarch Docker images are built and pushed to Docker Hub on every push to `main` and on a Mon/Wed/Fri 05:00 UTC schedule, which picks up base image updates:
+Multiarch images are built and pushed to the GitHub Container Registry on every push to `main` and on a Mon/Wed/Fri 05:00 UTC schedule, which picks up base image updates:
 
-- `sadbox/sprobot`
-- `sadbox/sprobot-web`
-- `sadbox/stickybot`
-- `sadbox/threadbot`
+- `ghcr.io/espresso-aficionados/sprobot`
+- `ghcr.io/espresso-aficionados/sprobot-web`
+- `ghcr.io/espresso-aficionados/stickybot`
+- `ghcr.io/espresso-aficionados/threadbot`
+
+They were published to Docker Hub as `sadbox/*` until November 2026; those images are no longer updated.
 
 A publish moves `latest` for all four images only if its commit is still the tip of `main`. The first images built from a commit are tagged `sha-<short commit SHA>`, and that tag never moves; later builds of the same commit (scheduled rebuilds with refreshed base images, re-runs) are tagged `sha-<short commit SHA>-<UTC build time>` instead. Images carry the full commit SHA in the `org.opencontainers.image.revision` label, so a running image can be traced to its commit and rolled back by tag.
 
