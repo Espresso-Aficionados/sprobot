@@ -66,9 +66,9 @@ CMD ["/threadbot"]
 FROM build-threadbot AS devthreadbot
 CMD ["/threadbot"]
 
-# The test image carries the module cache but no build cache. The dependency
-# packages to precompile are only known from our sources, which change on
-# every PR, so warming the build cache here would just move the cold compile
-# from docker run to docker build.
+# The test image carries the module cache but no build cache: the packages
+# to compile are only known from our sources, which change on every PR.
+# Instead, CI mounts a Go build cache it keeps between runs at
+# /root/.cache/go-build when it runs this image (see test.yaml).
 FROM base AS test
 CMD ["sh", "-c", "test -z \"$(gofmt -l .)\" || { echo 'gofmt check failed:'; gofmt -l .; exit 1; } && go vet ./... && go test -race ./..."]
