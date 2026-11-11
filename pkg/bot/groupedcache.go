@@ -101,7 +101,7 @@ const soundboardSoundCacheFile = "soundboardsoundcache.json"
 func (b *Bot) initCaches() {
 	b.msgCache = newMessageCache(1000000)
 	b.memberCache = newCappedGroupedCache[discord.Member](100000)
-	b.guildCache = newCappedCache[discord.Guild](100)
+	b.guildCache = newCappedCache[discord.CacheGuild](100)
 	b.channelCache = newCappedCache[discord.GuildChannel](10000)
 	b.roleCache = newCappedGroupedCache[discord.Role](5000)
 	b.emojiCache = newCappedGroupedCache[discord.Emoji](5000)
@@ -240,7 +240,7 @@ const orderSlack = 1024
 
 var _ cache.GroupedCache[discord.Message] = (*messageCache)(nil)
 var _ cache.GroupedCache[discord.Member] = (*cappedGroupedCache[discord.Member])(nil)
-var _ cache.Cache[discord.Guild] = (*cappedCache[discord.Guild])(nil)
+var _ cache.Cache[discord.CacheGuild] = (*cappedCache[discord.CacheGuild])(nil)
 var _ cache.Cache[discord.GuildChannel] = (*cappedCache[discord.GuildChannel])(nil)
 
 // cappedCache is a cappedGroupedCache with a single group (0), for disgo's
@@ -707,7 +707,7 @@ func (b *Bot) loadCaches() {
 		b.Log.Info("Dropped expired messages from the cache file", "removed", expired)
 		b.saveMessageCache()
 	}
-	loadCache(b, guildCacheFile, b.guildCache.cappedGroupedCache, func(g discord.Guild) (discord.Guild, snowflake.ID, snowflake.ID, bool) {
+	loadCache(b, guildCacheFile, b.guildCache.cappedGroupedCache, func(g discord.CacheGuild) (discord.CacheGuild, snowflake.ID, snowflake.ID, bool) {
 		return g, 0, g.ID, true
 	})
 	// Members filed under anything but a served guild (see guildMemberCache)

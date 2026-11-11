@@ -32,7 +32,7 @@ const (
 func guildCaches(ids ...snowflake.ID) cache.Caches {
 	caches := cache.New(cache.WithCaches(cache.FlagGuilds))
 	for _, id := range ids {
-		caches.AddGuild(discord.Guild{ID: id})
+		caches.AddGuild(discord.CacheGuild{Guild: discord.Guild{ID: id}})
 	}
 	return caches
 }

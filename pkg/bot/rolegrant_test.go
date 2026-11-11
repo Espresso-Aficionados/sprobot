@@ -159,7 +159,7 @@ func newRoleTestBot(t *testing.T) (*Bot, *roleAPI, *testutil.FakeS3) {
 		Caches: cache.New(cache.WithCaches(cache.FlagGuilds | cache.FlagRoles | cache.FlagMembers | cache.FlagChannels)),
 	}
 	c := b.Client.Caches
-	c.AddGuild(discord.Guild{ID: roleTestGuild, OwnerID: roleTestOwner})
+	c.AddGuild(discord.CacheGuild{Guild: discord.Guild{ID: roleTestGuild, OwnerID: roleTestOwner}})
 	c.SetSelfUser(discord.OAuth2User{User: discord.User{ID: roleTestSelf}})
 	addTestRole(b, discord.Role{ID: roleTestGuild, Permissions: discord.PermissionViewChannel})
 	addTestRole(b, discord.Role{ID: roleTestBotTop, Position: 50, Permissions: discord.PermissionManageRoles})
