@@ -4,16 +4,7 @@ on:
   push:
     branches:
       - main
-    # Skip pushes that only touch docs: bonnet's podman-auto-update restarts
-    # a bot whenever its :latest moves, and a docs-only push would rebuild
-    # identical binaries into new images. An ignore list, not an allowlist:
-    # anything not listed here (new code anywhere) still publishes. Keep in
-    # sync with docs_only in publish-merge's "Create manifests and push".
-    paths-ignore:
-      - "**.md"
-      - docs/**
-      - LICENSE
-  workflow_dispatch:
+  workflow_dispatch: # always builds
 
 permissions:
   contents: read
@@ -28,7 +19,63 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Does this push change what goes into the images? Compared with the commit
+  # :latest was built from (its revision label), not with the previous push:
+  # bonnet's podman-auto-update restarts a bot whenever its :latest moves, so
+  # a docs-only push publishes nothing, and since the comparison is against
+  # what :latest actually holds, a skipped run can never strand an earlier
+  # code push (the next run builds whatever :latest is missing). Anything
+  # outside the docs list counts as an image change.
+  changes:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      build: ${{ steps.compare.outputs.build }}
+    steps:
+      - name: checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # to diff against :latest's commit
+
+      - name: Login to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Compare with :latest
+        id: compare
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          decide() { # build reason
+            echo "build=$1" >> "$GITHUB_OUTPUT"
+            echo "::notice::build=$1: $2"
+            exit 0
+          }
+          [ "$EVENT" = workflow_dispatch ] && decide true "manual run"
+          revs=()
+          for image in sprobot sprobot-web stickybot threadbot; do
+            revs+=("$(docker buildx imagetools inspect "ghcr.io/espresso-aficionados/${image}:latest" \
+              --format '{{ index (index .Image "linux/amd64").Config.Labels "org.opencontainers.image.revision" }}' \
+              2>/dev/null || true)")
+          done
+          base=${revs[0]}
+          for rev in "${revs[@]}"; do
+            [ -n "$rev" ] && [ "$rev" = "$base" ] || decide true "the :latest images don't share one revision (${revs[*]})"
+          done
+          git cat-file -e "${base}^{commit}" 2>/dev/null || decide true ":latest's revision ${base} isn't in this repo's history"
+          if git diff --quiet "$base" "$GITHUB_SHA" -- . ':(exclude)*.md' ':(exclude)docs' ':(exclude)LICENSE'; then
+            decide false "only docs changed since :latest (${base::7})"
+          fi
+          decide true "image inputs changed since :latest (${base::7})"
+
   test:
+    needs: [changes]
+    if: needs.changes.outputs.build == 'true'
     uses: ./.github/workflows/test.yaml
 
   publish-build:
@@ -186,30 +233,9 @@ jobs:
               create "$image" "$sha_tag"
             fi
           done
-          # docs_only FILE: the push trigger's paths-ignore (keep in sync).
-          docs_only() { case "$1" in *.md | docs/* | LICENSE) return 0 ;; *) return 1 ;; esac; }
           if [ "$tip" != "$GITHUB_SHA" ]; then
-            # A docs-only push after this one published nothing, so this run
-            # still has the newest image content: move :latest if main only
-            # moved past it by such pushes. Otherwise a newer run publishes.
-            # More than 300 changed files (the compare API's cap) counts as
-            # newer content.
-            cmp=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${tip}" \
-              --jq '.status, (.files | length), .files[].filename')
-            status=$(sed -n 1p <<<"$cmp") nfiles=$(sed -n 2p <<<"$cmp")
-            newer=0
-            if [ "$status" != ahead ] || [ "$nfiles" -ge 300 ]; then
-              newer=1
-            else
-              while IFS= read -r f; do
-                [ -z "$f" ] || docs_only "$f" || { newer=1; break; }
-              done < <(sed 1,2d <<<"$cmp")
-            fi
-            if [ "$newer" = 1 ]; then
-              echo "::notice::main is at ${tip} (${status}, newer image content than ${GITHUB_SHA}); not moving :latest"
-              exit 0
-            fi
-            echo "::notice::main is at ${tip}, ahead of ${GITHUB_SHA} by docs-only changes; moving :latest"
+            echo "::notice::main is at ${tip}, not ${GITHUB_SHA}; not moving :latest (its run builds whatever :latest lacks)"
+            exit 0
           fi
           for image in "${images[@]}"; do
             create "$image" latest
