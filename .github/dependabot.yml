@@ -1,9 +1,16 @@
+# Daily. Go, npm and Actions version updates wait out a 3-day cooldown (a
+# release has to be 3 days old, so a compromised or broken one can be caught
+# and yanked first); their security updates skip it and open as soon as an
+# advisory lands. Docker gets no cooldown: Dependabot has no advisories for
+# base images, so a patched image only ever arrives as a version/digest
+# update, and it should go out right away. The "dependabot review" Claude
+# routine reviews and merges what's safe (majors wait for a human).
 version: 2
 updates:
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     # Base images are pinned by digest (tag@sha256): a refreshed image under
     # the same tag is a PR too. One PR per week for all of them.
     groups:
@@ -13,7 +20,9 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
+    cooldown:
+      default-days: 3
     groups:
       # AWS SDK + smithy-go bump in lockstep and rewrite the same go.mod
       # lines. github.com/aws/* covers aws-sdk-go-v2* and smithy-go.
@@ -33,7 +42,9 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
+    cooldown:
+      default-days: 3
     groups:
       # Collapse the routine minor/patch action bumps into one PR.
       actions:
