@@ -4,6 +4,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Base images are pinned by digest (tag@sha256): a refreshed image under
+    # the same tag is a PR too. One PR per week for all of them.
+    groups:
+      docker:
+        patterns: ["*"]
 
   - package-ecosystem: "gomod"
     directory: "/"

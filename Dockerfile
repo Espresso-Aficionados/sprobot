@@ -1,4 +1,4 @@
-FROM golang:1.27.3 AS base
+FROM golang:1.27.3@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e AS base
 WORKDIR /build
 COPY go.mod go.sum ./
 # Modules are downloaded into the layer, not a cache mount, so layer caching
@@ -28,14 +28,14 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # its updates. Dependabot skips FROM lines with no tag or digest, so it does
 # not track this base; pinning a digest would let it, but would stop those
 # rebuilds from refreshing the base until its PRs merge.
-FROM gcr.io/distroless/static-debian12 AS prod
+FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS prod
 COPY --from=build-sprobot /sprobot /sprobot
 COPY --from=base --chown=nonroot:nonroot /empty-dir /sprobot-cache
 VOLUME /sprobot-cache
 USER nonroot:nonroot
 CMD ["/sprobot"]
 
-FROM gcr.io/distroless/static-debian12 AS prodweb
+FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS prodweb
 ENV PORT=9001
 COPY --from=build-sprobot-web /sprobot-web /sprobot-web
 USER nonroot:nonroot
@@ -50,7 +50,7 @@ ENV WEB_ENDPOINT=http://localhost:8080/
 ENV PORT=8080
 CMD ["/sprobot-web"]
 
-FROM gcr.io/distroless/static-debian12 AS prodstickybot
+FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS prodstickybot
 COPY --from=build-stickybot /stickybot /stickybot
 USER nonroot:nonroot
 CMD ["/stickybot"]
@@ -58,7 +58,7 @@ CMD ["/stickybot"]
 FROM build-stickybot AS devstickybot
 CMD ["/stickybot"]
 
-FROM gcr.io/distroless/static-debian12 AS prodthreadbot
+FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS prodthreadbot
 COPY --from=build-threadbot /threadbot /threadbot
 USER nonroot:nonroot
 CMD ["/threadbot"]
