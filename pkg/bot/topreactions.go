@@ -474,7 +474,10 @@ func (b *Bot) onStarboardThreadDelete(e *events.ThreadDelete) {
 }
 
 // deleteChannelSources deletes the posts and entries of messages in
-// channelID, including its threads that the channel cache knows of.
+// channelID, including its threads that the channel cache knows of. Since
+// disgo 0.20 that is none on a channel delete: disgo evicts the channel's
+// threads before it dispatches the event, so posts of messages in them stay.
+// Accepted: channels are almost never deleted.
 func (b *Bot) deleteChannelSources(guildID, channelID snowflake.ID) {
 	st := b.starboard.get(guildID)
 	if st == nil {

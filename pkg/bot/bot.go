@@ -34,7 +34,7 @@ type Bot struct {
 	cacheDir             string // where the caches below are persisted
 	msgCache             *messageCache
 	memberCache          *cappedGroupedCache[discord.Member]
-	guildCache           *cappedCache[discord.Guild]
+	guildCache           *cappedCache[discord.CacheGuild]
 	channelCache         *cappedCache[discord.GuildChannel]
 	roleCache            *cappedGroupedCache[discord.Role]
 	emojiCache           *cappedGroupedCache[discord.Emoji]

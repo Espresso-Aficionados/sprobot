@@ -120,10 +120,10 @@ func TestSaveStateSkipsGuildsBotIsNotIn(t *testing.T) {
 func TestServedGuildsIncludesUnreadyAndUnavailable(t *testing.T) {
 	const foreign snowflake.ID = 555
 	caches := cache.New(cache.WithCaches(cache.FlagGuilds))
-	caches.AddGuild(discord.Guild{ID: devGuild})
+	caches.AddGuild(discord.CacheGuild{Guild: discord.Guild{ID: devGuild}})
 	caches.SetGuildUnready(devGuild, true)
 	caches.SetGuildUnavailable(prodGuild, true) // in an outage
-	caches.AddGuild(discord.Guild{ID: foreign})
+	caches.AddGuild(discord.CacheGuild{Guild: discord.Guild{ID: foreign}})
 	caches.SetGuildUnready(foreign, true)
 	b := &Bot{BaseBot: &botutil.BaseBot{Client: &bot.Client{Caches: caches}}}
 

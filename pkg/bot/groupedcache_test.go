@@ -1093,7 +1093,7 @@ func TestMemberCache_SkipsThreadMembers(t *testing.T) {
 	// Members of a served guild are kept; members of any other guild are not,
 	// even one in the guild cache.
 	otherGuildID := snowflake.ID(600)
-	b.guildCache.Put(otherGuildID, discord.Guild{ID: otherGuildID})
+	b.guildCache.Put(otherGuildID, discord.CacheGuild{Guild: discord.Guild{ID: otherGuildID}})
 	for _, id := range []snowflake.ID{guildID, otherGuildID} {
 		handleGatewayEvent(client, gateway.EventTypeGuildMemberAdd, gateway.EventGuildMemberAdd{
 			Member: discord.Member{GuildID: id, User: discord.User{ID: userID}},
@@ -1135,7 +1135,7 @@ func TestMessageCache_OnlyServedGuilds(t *testing.T) {
 func TestLoadCaches_DropsMembersOutsideGuilds(t *testing.T) {
 	b := newCacheTestBot(t)
 	allowedID, cachedGuildID, threadID := botutil.AllowedGuildIDs[0], snowflake.ID(600), snowflake.ID(500)
-	if err := writeCacheFile(b.cacheDir, guildCacheFile, []discord.Guild{{ID: cachedGuildID}}); err != nil {
+	if err := writeCacheFile(b.cacheDir, guildCacheFile, []discord.CacheGuild{{Guild: discord.Guild{ID: cachedGuildID}}}); err != nil {
 		t.Fatal(err)
 	}
 	members := []discord.Member{
@@ -1170,7 +1170,7 @@ func TestLoadCaches_DropsMembersOutsideGuilds(t *testing.T) {
 func TestGuildOutage_KeepsMessagesAndMembers(t *testing.T) {
 	guildID, channelID, userID := botutil.AllowedGuildIDs[0], snowflake.ID(2), snowflake.ID(3)
 	guildCreate := gateway.EventGuildCreate{
-		GatewayGuild: discord.GatewayGuild{RestGuild: discord.RestGuild{Guild: discord.Guild{ID: guildID}}},
+		GatewayGuild: discord.GatewayGuild{CacheGuild: discord.CacheGuild{Guild: discord.Guild{ID: guildID}}},
 	}
 	for name, recoverGuild := range map[string]func(client *bot.Client){
 		"GUILD_CREATE": func(client *bot.Client) {
@@ -1268,7 +1268,7 @@ func TestCachesRoundTrip(t *testing.T) {
 		Author: discord.User{ID: userID, Username: "someone"},
 	})
 	b.memberCache.Put(guildID, userID, discord.Member{GuildID: guildID, User: discord.User{ID: userID}})
-	b.guildCache.Put(guildID, discord.Guild{ID: guildID, Name: "guild"})
+	b.guildCache.Put(guildID, discord.CacheGuild{Guild: discord.Guild{ID: guildID, Name: "guild"}, MemberCount: 7})
 	b.channelCache.Put(channelID, unmarshalChannel(t, fmt.Sprintf(`{"id":"2","type":0,"guild_id":"%d","name":"general"}`, guildID)))
 	b.roleCache.Put(guildID, 4, discord.Role{ID: 4, GuildID: guildID})
 	b.emojiCache.Put(guildID, 5, discord.Emoji{ID: 5, GuildID: guildID})
@@ -1304,7 +1304,7 @@ func TestCachesRoundTrip(t *testing.T) {
 	if _, ok := got.memberCache.Get(guildID, userID); !ok {
 		t.Error("member not loaded")
 	}
-	if g, ok := got.guildCache.Get(guildID); !ok || g.Name != "guild" {
+	if g, ok := got.guildCache.Get(guildID); !ok || g.Name != "guild" || g.MemberCount != 7 {
 		t.Errorf("guild = %+v, %v", g, ok)
 	}
 	if ch, ok := got.channelCache.Get(channelID); !ok || ch.Name() != "general" || ch.GuildID() != guildID {
