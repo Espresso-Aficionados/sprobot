@@ -101,6 +101,7 @@ func (b *Bot) Run() error {
 	b.loadMemberCounts()
 	b.loadHiddenThreads()
 
+	b.ServeHealth()
 	if err := b.OpenGateway(ctx); err != nil {
 		b.shutdown()
 		return err

@@ -2,12 +2,18 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/bot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/healthcheck"
 	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
 )
 
 func main() {
+	if healthcheck.Requested() {
+		os.Exit(healthcheck.Run(botutil.HealthURL))
+	}
 	token, err := opsecrets.Getenv("SPROBOT_DISCORD_TOKEN")
 	if err != nil {
 		log.Fatalf("Reading bot token: %v", err)
