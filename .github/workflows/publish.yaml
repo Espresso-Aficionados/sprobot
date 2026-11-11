@@ -7,7 +7,8 @@ on:
     # Skip pushes that only touch docs: bonnet's podman-auto-update restarts
     # a bot whenever its :latest moves, and a docs-only push would rebuild
     # identical binaries into new images. An ignore list, not an allowlist:
-    # anything not listed here (new code anywhere) still publishes.
+    # anything not listed here (new code anywhere) still publishes. Keep in
+    # sync with docs_only in publish-merge's "Create manifests and push".
     paths-ignore:
       - "**.md"
       - docs/**
@@ -185,9 +186,30 @@ jobs:
               create "$image" "$sha_tag"
             fi
           done
+          # docs_only FILE: the push trigger's paths-ignore (keep in sync).
+          docs_only() { case "$1" in *.md | docs/* | LICENSE) return 0 ;; *) return 1 ;; esac; }
           if [ "$tip" != "$GITHUB_SHA" ]; then
-            echo "::notice::main is at ${tip}, not ${GITHUB_SHA}; not moving :latest"
-            exit 0
+            # A docs-only push after this one published nothing, so this run
+            # still has the newest image content: move :latest if main only
+            # moved past it by such pushes. Otherwise a newer run publishes.
+            # More than 300 changed files (the compare API's cap) counts as
+            # newer content.
+            cmp=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${tip}" \
+              --jq '.status, (.files | length), .files[].filename')
+            status=$(sed -n 1p <<<"$cmp") nfiles=$(sed -n 2p <<<"$cmp")
+            newer=0
+            if [ "$status" != ahead ] || [ "$nfiles" -ge 300 ]; then
+              newer=1
+            else
+              while IFS= read -r f; do
+                [ -z "$f" ] || docs_only "$f" || { newer=1; break; }
+              done < <(sed 1,2d <<<"$cmp")
+            fi
+            if [ "$newer" = 1 ]; then
+              echo "::notice::main is at ${tip} (${status}, newer image content than ${GITHUB_SHA}); not moving :latest"
+              exit 0
+            fi
+            echo "::notice::main is at ${tip}, ahead of ${GITHUB_SHA} by docs-only changes; moving :latest"
           fi
           for image in "${images[@]}"; do
             create "$image" latest
