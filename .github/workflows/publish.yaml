@@ -4,6 +4,19 @@ on:
   push:
     branches:
       - main
+    # Only what goes into the images (the Dockerfile copies go.mod, go.sum,
+    # cmd/ and pkg/). bonnet's podman-auto-update restarts a bot whenever its
+    # :latest moves, so docs, scripts and CI-only pushes must not publish.
+    paths:
+      - cmd/**
+      - pkg/**
+      - go.mod
+      - go.sum
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/publish.yaml
+      - .github/workflows/test.yaml
+  workflow_dispatch:
 
 permissions:
   contents: read
