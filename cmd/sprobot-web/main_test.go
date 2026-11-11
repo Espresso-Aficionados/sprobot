@@ -729,3 +729,12 @@ func TestS3ErrorsAreBadGateway(t *testing.T) {
 		}
 	}
 }
+
+func TestHealthz(t *testing.T) {
+	_, mux := newTestServer(t)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok\n" {
+		t.Fatalf("GET /healthz = %d %q, want 200 \"ok\\n\"", rec.Code, rec.Body.String())
+	}
+}

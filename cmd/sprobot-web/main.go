@@ -19,6 +19,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Espresso-Aficionados/sprobot/pkg/healthcheck"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
@@ -88,6 +89,9 @@ func loadTemplates() error {
 }
 
 func main() {
+	if healthcheck.Requested() {
+		os.Exit(healthcheck.Run("http://127.0.0.1:" + listenPort() + "/healthz"))
+	}
 	if err := loadTemplates(); err != nil {
 		log.Fatal(err)
 	}
@@ -97,10 +101,7 @@ func main() {
 		log.Fatalf("Failed to create S3 client: %v", err)
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	port := listenPort()
 
 	server := &http.Server{
 		Addr:         ":" + port,
@@ -129,8 +130,20 @@ func main() {
 	}
 }
 
+// listenPort is $PORT (9001 in the prod image), else 8080.
+func listenPort() string {
+	if port := os.Getenv("PORT"); port != "" {
+		return port
+	}
+	return "8080"
+}
+
 func newMux(s3 *s3client.Client) *http.ServeMux {
 	mux := http.NewServeMux()
+	// The container healthcheck (`sprobot-web -healthcheck`): the server is up.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, "ok\n")
+	})
 	mux.HandleFunc("GET /", handleIndex)
 	mux.HandleFunc("GET /"+sprobot.AvatarWebPath, handleAvatar)
 	mux.HandleFunc("GET /profiles/{guildID}/{templateName}/{userID}", handleProfile(s3))
@@ -515,6 +528,9 @@ func accessLog(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		next.ServeHTTP(rec, r)
+		if r.URL.Path == "/healthz" {
+			return // the healthcheck runs every 30s; keep it out of the access log
+		}
 		ip := r.Header.Get("X-Forwarded-For")
 		if ip == "" {
 			ip = r.RemoteAddr

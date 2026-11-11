@@ -88,6 +88,7 @@ func (b *Bot) Run() error {
 	// stickies aren't in memory yet.
 	b.loadStickies()
 
+	b.ServeHealth()
 	if err := b.OpenGateway(ctx); err != nil {
 		b.shutdown()
 		return err

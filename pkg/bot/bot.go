@@ -373,6 +373,7 @@ func (b *Bot) Run() error {
 	// finishes.
 	go b.loadProfileOwners(botutil.AllowedGuildIDs)
 
+	b.ServeHealth()
 	if err := b.OpenGateway(ctx); err != nil {
 		return err
 	}
