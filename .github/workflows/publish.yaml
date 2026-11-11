@@ -4,18 +4,14 @@ on:
   push:
     branches:
       - main
-    # Only what goes into the images (the Dockerfile copies go.mod, go.sum,
-    # cmd/ and pkg/). bonnet's podman-auto-update restarts a bot whenever its
-    # :latest moves, so docs, scripts and CI-only pushes must not publish.
-    paths:
-      - cmd/**
-      - pkg/**
-      - go.mod
-      - go.sum
-      - Dockerfile
-      - .dockerignore
-      - .github/workflows/publish.yaml
-      - .github/workflows/test.yaml
+    # Skip pushes that only touch docs: bonnet's podman-auto-update restarts
+    # a bot whenever its :latest moves, and a docs-only push would rebuild
+    # identical binaries into new images. An ignore list, not an allowlist:
+    # anything not listed here (new code anywhere) still publishes.
+    paths-ignore:
+      - "**.md"
+      - docs/**
+      - LICENSE
   workflow_dispatch:
 
 permissions:
