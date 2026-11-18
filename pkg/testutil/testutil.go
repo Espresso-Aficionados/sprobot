@@ -1,10 +1,12 @@
 package testutil
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -38,6 +40,11 @@ type FakeS3 struct {
 	Requests []string
 	// PageSize caps the keys in one listing page; 0 means S3's 1000.
 	PageSize int
+	// BucketHost is a hostname that is a bucket's own, "{bucket}.{host}". A
+	// request to it addresses the object named by its whole path, as on real
+	// S3, so the path /{bucket}/k is the object "{bucket}/k" (stored here as
+	// /{bucket}/{bucket}/k) and only the path / lists the bucket.
+	BucketHost string
 }
 
 func NewFakeS3() *FakeS3 {
@@ -49,6 +56,11 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer f.Mu.Unlock()
 
 	key := r.URL.Path
+	listing := r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2"
+	if bucket, _, _ := strings.Cut(f.BucketHost, "."); f.BucketHost != "" && r.Host == f.BucketHost {
+		listing = listing && key == "/"
+		key = "/" + bucket + key
+	}
 	f.Requests = append(f.Requests, r.Method+" "+key)
 
 	if status, ok := f.Fail[key]; ok {
@@ -60,8 +72,8 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
-		f.list(w, r)
+	if listing {
+		f.list(w, key, r.URL.Query())
 		return
 	}
 
@@ -135,11 +147,10 @@ func (f *FakeS3) touch(key string) {
 	f.Modified[key] = time.Now()
 }
 
-// list answers ListObjectsV2 for the bucket in the path, in key order, a page
-// at a time. The continuation token is the last key of the previous page.
-func (f *FakeS3) list(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	bucketPath := "/" + strings.Trim(r.URL.Path, "/") + "/"
+// list answers ListObjectsV2 for the bucket at bucketPath, in key order, a
+// page at a time. The continuation token is the last key of the previous page.
+func (f *FakeS3) list(w http.ResponseWriter, bucketPath string, q url.Values) {
+	bucketPath = "/" + strings.Trim(bucketPath, "/") + "/"
 	var keys []string
 	for path := range f.Objects {
 		key, ok := strings.CutPrefix(path, bucketPath)
@@ -198,7 +209,30 @@ func writeError(w http.ResponseWriter, status int, code string) {
 
 func NewTestS3Client(t *testing.T, server *httptest.Server) *s3client.Client {
 	t.Helper()
-	endpoint := server.URL
+	return newTestS3Client(t, server.URL, nil)
+}
+
+// TestBucketHost is the bucket hostname NewTestS3ClientBucketHost uses as its
+// endpoint; set FakeS3.BucketHost to it.
+const TestBucketHost = "test-bucket.s3.test"
+
+// NewTestS3ClientBucketHost is NewTestS3Client configured the way production
+// is: the endpoint is the bucket's own hostname. Every hostname it requests
+// is served by server.
+func NewTestS3ClientBucketHost(t *testing.T, server *httptest.Server) *s3client.Client {
+	t.Helper()
+	addr := server.Listener.Addr().String()
+	httpClient := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	}}
+	t.Cleanup(httpClient.CloseIdleConnections)
+	return newTestS3Client(t, "http://"+TestBucketHost+"/", httpClient)
+}
+
+func newTestS3Client(t *testing.T, endpoint string, httpClient *http.Client) *s3client.Client {
+	t.Helper()
 	bucket := "test-bucket"
 
 	cache, err := lru.New[string, map[string]string](500)
@@ -206,14 +240,17 @@ func NewTestS3Client(t *testing.T, server *httptest.Server) *s3client.Client {
 		t.Fatalf("creating cache: %v", err)
 	}
 
-	client := s3.New(s3.Options{
+	opts := s3.Options{
 		Region:       "us-east-1",
 		BaseEndpoint: &endpoint,
 		Credentials:  credentials.NewStaticCredentialsProvider("key", "secret", ""),
 		UsePathStyle: true,
-	})
+	}
+	if httpClient != nil {
+		opts.HTTPClient = httpClient
+	}
 
-	return s3client.NewDirect(client, bucket, endpoint, cache, DiscardLogger())
+	return s3client.NewDirect(s3.New(opts), bucket, endpoint, cache, DiscardLogger())
 }
 
 func DiscardLogger() *slog.Logger {

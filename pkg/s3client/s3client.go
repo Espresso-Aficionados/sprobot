@@ -192,6 +192,38 @@ type Client struct {
 	webEndpoint string
 	cache       *lru.Cache[string, map[string]string]
 	log         *slog.Logger
+
+	// Set when the endpoint is the bucket's own hostname; see bucketHostLayout.
+	bucketEndpoint string
+	keyPrefix      string
+}
+
+// bucketHostLayout handles an endpoint that is the bucket's own hostname,
+// https://{bucket}.{host}/, as production's is. Requests are path-style, so
+// through such an endpoint the path /{bucket}/{key} is an object named
+// "{bucket}/{key}" in the bucket, and every key we use is really stored under
+// "{bucket}/". Object requests are unaffected, but one that names the bucket
+// itself or a full key is not: a listing sent to /{bucket} is answered as a
+// GET of an object named after the bucket (404 NoSuchKey), and a copy source
+// has to give the stored key.
+//
+// It returns the endpoint through which /{bucket} is the bucket, and the
+// prefix the stored keys carry. Both are empty for any other endpoint.
+func bucketHostLayout(endpoint, bucket string) (bucketEndpoint, keyPrefix string) {
+	u, err := url.Parse(endpoint)
+	if err != nil || bucket == "" {
+		return "", ""
+	}
+	host, ok := strings.CutPrefix(u.Host, bucket+".")
+	if !ok || host == "" || strings.Trim(u.Path, "/") != "" {
+		return "", ""
+	}
+	return u.Scheme + "://" + host, bucket + "/"
+}
+
+// copySource is key as the source of a CopyObject, unescaped.
+func (c *Client) copySource(key string) string {
+	return c.bucket + "/" + c.keyPrefix + key
 }
 
 func New() (*Client, error) {
@@ -228,27 +260,24 @@ func New() (*Client, error) {
 		RetryMaxAttempts: 5,
 	})
 
-	return &Client{
-		s3:          client,
-		presigner:   s3.NewPresignClient(client),
-		bucket:      bucket,
-		endpoint:    endpoint,
-		webEndpoint: sprobot.WebEndpointFromEnv(),
-		cache:       cache,
-		log:         slog.Default(),
-	}, nil
+	c := NewDirect(client, bucket, endpoint, cache, slog.Default())
+	c.webEndpoint = sprobot.WebEndpointFromEnv()
+	return c, nil
 }
 
 // NewDirect creates a Client with explicitly provided dependencies.
 func NewDirect(s3Client *s3.Client, bucket, endpoint string, cache *lru.Cache[string, map[string]string], log *slog.Logger) *Client {
+	bucketEndpoint, keyPrefix := bucketHostLayout(endpoint, bucket)
 	return &Client{
-		s3:          s3Client,
-		presigner:   s3.NewPresignClient(s3Client),
-		bucket:      bucket,
-		endpoint:    endpoint,
-		webEndpoint: sprobot.WebEndpoint,
-		cache:       cache,
-		log:         log,
+		s3:             s3Client,
+		presigner:      s3.NewPresignClient(s3Client),
+		bucket:         bucket,
+		endpoint:       endpoint,
+		webEndpoint:    sprobot.WebEndpoint,
+		cache:          cache,
+		log:            log,
+		bucketEndpoint: bucketEndpoint,
+		keyPrefix:      keyPrefix,
 	}
 }
 
@@ -907,7 +936,7 @@ func (c *Client) CopyShortcutFile(ctx context.Context, guildID, srcKey string) (
 	}
 	// Saved-file keys are ASCII letters, digits, '.', '_' and '/', so the copy
 	// source needs no escaping.
-	source := c.bucket + "/" + srcKey
+	source := c.copySource(srcKey)
 	if _, err := c.s3.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     &c.bucket,
 		Key:        &s3Path,
@@ -1084,7 +1113,7 @@ func (c *Client) CopyStickyFile(ctx context.Context, guildID, key string) (strin
 	if !ok {
 		return "", fmt.Errorf("invalid guild ID %q", guildID)
 	}
-	source := (&url.URL{Path: c.bucket + "/" + key}).EscapedPath()
+	source := (&url.URL{Path: c.copySource(key)}).EscapedPath()
 	_, err := c.s3.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     &c.bucket,
 		Key:        &s3Path,
