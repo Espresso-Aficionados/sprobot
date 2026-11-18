@@ -24,11 +24,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
@@ -77,12 +77,13 @@ func main() {
 	del := flag.Bool("delete", false, "delete the orphans found instead of only reporting them")
 	flag.Parse()
 
+	logsetup.Init()
 	c, err := s3client.New()
 	if err != nil {
-		log.Fatal(err)
+		logsetup.Fatal("Failed to create S3 client", "error", err)
 	}
 	if err := run(context.Background(), c, os.Stdout, *del, time.Now()); err != nil {
-		log.Fatal(err)
+		logsetup.Fatal("Finding orphans", "error", err)
 	}
 }
 
