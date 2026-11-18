@@ -3,6 +3,7 @@ package s3client
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -19,12 +20,18 @@ type Object struct {
 // bucket listing a page (up to 1000 keys) at a time.
 func (c *Client) ListObjects(ctx context.Context, prefix string) ([]Object, error) {
 	var objects []Object
+	stored := c.keyPrefix + prefix
 	pages := s3.NewListObjectsV2Paginator(c.s3, &s3.ListObjectsV2Input{
 		Bucket: &c.bucket,
-		Prefix: &prefix,
+		Prefix: &stored,
 	})
 	for pages.HasMorePages() {
-		page, err := pages.NextPage(ctx)
+		page, err := pages.NextPage(ctx, func(o *s3.Options) {
+			// See bucketHostLayout: the configured endpoint can't list.
+			if c.bucketEndpoint != "" {
+				o.BaseEndpoint = &c.bucketEndpoint
+			}
+		})
 		if err != nil {
 			return nil, fmt.Errorf("listing %s: %w", prefix, err)
 		}
@@ -32,7 +39,7 @@ func (c *Client) ListObjects(ctx context.Context, prefix string) ([]Object, erro
 			if o.Key == nil {
 				continue
 			}
-			obj := Object{Key: *o.Key}
+			obj := Object{Key: strings.TrimPrefix(*o.Key, c.keyPrefix)}
 			if o.Size != nil {
 				obj.Size = *o.Size
 			}
