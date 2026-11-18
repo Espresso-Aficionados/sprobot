@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/healthcheck"
+	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
@@ -92,13 +93,14 @@ func main() {
 	if healthcheck.Requested() {
 		os.Exit(healthcheck.Run("http://127.0.0.1:" + listenPort() + "/healthz"))
 	}
+	logsetup.Init()
 	if err := loadTemplates(); err != nil {
-		log.Fatal(err)
+		logsetup.Fatal("Failed to load templates", "error", err)
 	}
 
 	s3, err := s3client.New()
 	if err != nil {
-		log.Fatalf("Failed to create S3 client: %v", err)
+		logsetup.Fatal("Failed to create S3 client", "error", err)
 	}
 
 	port := listenPort()
@@ -112,21 +114,21 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Listening on :%s", port)
+		slog.Info("Listening", "port", port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("Server error: %v", err)
+			logsetup.Fatal("Server error", "error", err)
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Shutting down...")
+	slog.Info("Shutting down")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server shutdown error: %v", err)
+		logsetup.Fatal("Server shutdown error", "error", err)
 	}
 }
 
@@ -284,7 +286,7 @@ func serveImageToDiscord(w http.ResponseWriter, r *http.Request, s3 *s3client.Cl
 	}
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	if _, err := io.Copy(w, body); err != nil {
-		log.Printf("Image stream error: %v", err)
+		slog.Error("Image stream error", "error", err)
 	}
 }
 
@@ -334,7 +336,7 @@ func handleFileView(s3 *s3client.Client) http.HandlerFunc {
 		download := `attachment; filename="` + name + `"` // name is validated to [A-Za-z0-9.]
 		data.DownloadURL, err = s3.PresignFile(r.Context(), key, s3client.PresignTTLPage, "application/octet-stream", download)
 		if err != nil {
-			log.Printf("Presign error: %v", err)
+			slog.Error("Presign error", "error", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
@@ -342,7 +344,7 @@ func handleFileView(s3 *s3client.Client) http.HandlerFunc {
 			data.Media, _, _ = strings.Cut(contentType, "/")
 			data.ViewURL, err = s3.PresignFile(r.Context(), key, s3client.PresignTTLPage, contentType, "inline")
 			if err != nil {
-				log.Printf("Presign error: %v", err)
+				slog.Error("Presign error", "error", err)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				return
 			}
@@ -491,7 +493,7 @@ func renderPage(w http.ResponseWriter, name string, data any) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, "base.html", data); err != nil {
-		log.Printf("Template execution error: %v", err)
+		slog.Error("Template execution error", "error", err)
 	}
 }
 
@@ -507,7 +509,7 @@ func renderS3Error(w http.ResponseWriter, what string, err error) {
 		render404(w)
 		return
 	}
-	log.Printf("%s: %v", what, err)
+	slog.Error(what, "error", err)
 	http.Error(w, "Bad Gateway", http.StatusBadGateway)
 }
 
@@ -535,7 +537,7 @@ func accessLog(next http.Handler) http.Handler {
 		if ip == "" {
 			ip = r.RemoteAddr
 		}
-		log.Printf("%s %s %s %d %s %q", sanitizeLog(ip), r.Method, sanitizeLog(r.URL.RequestURI()), rec.status, time.Since(start), sanitizeLog(r.UserAgent()))
+		slog.Info("request", "remote", sanitizeLog(ip), "method", r.Method, "uri", sanitizeLog(r.URL.RequestURI()), "status", rec.status, "duration", time.Since(start), "user_agent", sanitizeLog(r.UserAgent()))
 	})
 }
 
