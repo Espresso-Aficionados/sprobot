@@ -24,10 +24,8 @@ FROM base AS build-threadbot
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /threadbot ./cmd/threadbot
 
-# The distroless base is untagged so the Mon/Wed/Fri publish rebuilds pick up
-# its updates. Dependabot skips FROM lines with no tag or digest, so it does
-# not track this base; pinning a digest would let it, but would stop those
-# rebuilds from refreshing the base until its PRs merge.
+# The distroless base is pinned as :latest@sha256 (index digest). Dependabot
+# tracks it: a refreshed :latest arrives as a digest-bump PR.
 FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS prod
 COPY --from=build-sprobot /sprobot /sprobot
 COPY --from=base --chown=nonroot:nonroot /empty-dir /sprobot-cache

@@ -1,10 +1,11 @@
 # Daily. Go, npm and Actions version updates wait out a 3-day cooldown (a
 # release has to be 3 days old, so a compromised or broken one can be caught
 # and yanked first); their security updates skip it and open as soon as an
-# advisory lands. Docker gets no cooldown: Dependabot has no advisories for
-# base images, so a patched image only ever arrives as a version/digest
-# update, and it should go out right away. The "dependabot review" Claude
-# routine reviews and merges what's safe (majors wait for a human).
+# advisory lands. Docker has no cooldown key, so it gets Dependabot's default
+# 3-day cooldown. For images that is measured from the tag's last push, so a
+# Docker update can arrive later than 3 days after a release. The "dependabot
+# review" Claude routine reviews and merges what's safe (majors wait for a
+# human).
 version: 2
 updates:
   - package-ecosystem: "docker"
@@ -12,7 +13,7 @@ updates:
     schedule:
       interval: "daily"
     # Base images are pinned by digest (tag@sha256): a refreshed image under
-    # the same tag is a PR too. One PR per week for all of them.
+    # the same tag is a PR too. One PR for all of them.
     groups:
       docker:
         patterns: ["*"]
