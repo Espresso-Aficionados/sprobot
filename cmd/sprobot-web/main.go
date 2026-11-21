@@ -25,6 +25,7 @@ import (
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/statever"
 )
 
 //go:embed templates/*.html
@@ -94,6 +95,11 @@ func loadTemplates() error {
 func main() {
 	healthcheck.Main(healthcheck.ListenURL(":" + listenPort()))
 	logsetup.Init()
+	if checkState, asJSON := statever.ParseFlags("nothing: sprobot-web keeps no state of its own"); checkState {
+		// It writes nothing: profiles and files are sprobot's and
+		// stickybot's, which check them.
+		os.Exit(statever.Report{Program: "sprobot-web"}.Print(os.Stdout, os.Stderr, asJSON))
+	}
 	// Before anything listens or connects: a bad environment exits 1 here.
 	cfg, err := envconfig.LoadWeb()
 	if err != nil {

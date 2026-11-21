@@ -11,6 +11,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/statever"
 )
 
 const (
@@ -428,15 +429,28 @@ func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
 
 func (b *Bot) handleRefreshCounts(e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
+	if err := b.resetMemberCounts(guildID, func() {
+		b.Log.Info("Member count cache cleared", "user_id", e.User().ID, "guild_id", guildID)
+		botutil.RespondEphemeral(e, "Thread member count cache cleared. Counts will refresh on the next reminder post or `/threads` command.")
+	}); err != nil {
+		b.Log.Error("Refusing to clear thread member counts a newer build wrote", "guild_id", guildID, "error", err)
+		botutil.RespondEphemeral(e, "These member counts were saved by a newer version of the bot, so this one leaves them alone.")
+	}
+}
 
-	// Replaced, not deleted, and saved: saves skip a guild with no cache, so
-	// a restart would bring the old counts back. This also replaces stored
-	// counts that failed to load.
+// resetMemberCounts replaces the guild's member counts with none, calls
+// cleared, and saves. Replaced, not deleted, and saved: saves skip a guild
+// with no cache, so a restart would bring the old counts back. This also
+// replaces stored counts that failed to load, unless a newer build wrote
+// them: that is refused.
+func (b *Bot) resetMemberCounts(guildID snowflake.ID, cleared func()) error {
+	if err := b.ensureMemberCountsLoaded(guildID); statever.IsNewer(err) {
+		return err
+	}
 	b.mu.Lock()
 	b.memberCounts[guildID] = newMemberCountCache()
 	b.mu.Unlock()
-
-	b.Log.Info("Member count cache cleared", "user_id", e.User().ID, "guild_id", guildID)
-	botutil.RespondEphemeral(e, "Thread member count cache cleared. Counts will refresh on the next reminder post or `/threads` command.")
+	cleared()
 	b.saveMemberCountsForGuild(guildID)
+	return nil
 }

@@ -2,6 +2,7 @@ package threadbot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -97,10 +98,12 @@ func (b *Bot) Run() error {
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
 
 	// State loads before the gateway opens, so no event or command runs
-	// against a guild whose stored state isn't in place yet.
-	b.loadReminders()
-	b.loadMemberCounts()
-	b.loadHiddenThreads()
+	// against a guild whose stored state isn't in place yet. Nothing has
+	// been saved, and nothing will be: a newer build's state is left as it
+	// is.
+	if err := errors.Join(b.loadReminders(), b.loadMemberCounts(), b.loadHiddenThreads()); err != nil {
+		return err
+	}
 
 	b.ServeHealth()
 	if err := b.OpenGateway(ctx); err != nil {
@@ -117,7 +120,7 @@ func (b *Bot) Run() error {
 	}
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, func() {
-		b.loadReminders() // retries guilds whose load failed
+		b.loadReminders() // retries guilds whose load failed; refusals are logged
 		b.saveAllReminders()
 	})
 	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCounts)

@@ -12,6 +12,7 @@ import (
 func main() {
 	healthcheck.Main(botutil.HealthURL)
 	logsetup.Init()
+	botutil.CheckStateMain(bot.CheckState)
 	// Before anything connects or writes: a bad environment exits 1 here.
 	cfg, err := envconfig.LoadBot("SPROBOT")
 	if err != nil {

@@ -1057,36 +1057,45 @@ func (c *Client) SaveGuildJSON(ctx context.Context, prefix, guildID string, data
 	return nil
 }
 
+// The prefixes stickybot's and threadbot's per-guild state is stored under,
+// as {prefix}/{guildID}.json.
+const (
+	StickiesPrefix           = "stickies"
+	ThreadRemindersPrefix    = "threadreminders"
+	ThreadMemberCountsPrefix = "threadmembercounts"
+	HiddenThreadsPrefix      = "threadhidden"
+)
+
 func (c *Client) FetchStickies(ctx context.Context, guildID string) ([]byte, error) {
-	return c.FetchGuildJSON(ctx, "stickies", guildID)
+	return c.FetchGuildJSON(ctx, StickiesPrefix, guildID)
 }
 
 func (c *Client) SaveStickies(ctx context.Context, guildID string, data []byte) error {
-	return c.SaveGuildJSON(ctx, "stickies", guildID, data)
+	return c.SaveGuildJSON(ctx, StickiesPrefix, guildID, data)
 }
 
 func (c *Client) FetchThreadReminders(ctx context.Context, guildID string) ([]byte, error) {
-	return c.FetchGuildJSON(ctx, "threadreminders", guildID)
+	return c.FetchGuildJSON(ctx, ThreadRemindersPrefix, guildID)
 }
 
 func (c *Client) SaveThreadReminders(ctx context.Context, guildID string, data []byte) error {
-	return c.SaveGuildJSON(ctx, "threadreminders", guildID, data)
+	return c.SaveGuildJSON(ctx, ThreadRemindersPrefix, guildID, data)
 }
 
 func (c *Client) FetchThreadMemberCounts(ctx context.Context, guildID string) ([]byte, error) {
-	return c.FetchGuildJSON(ctx, "threadmembercounts", guildID)
+	return c.FetchGuildJSON(ctx, ThreadMemberCountsPrefix, guildID)
 }
 
 func (c *Client) SaveThreadMemberCounts(ctx context.Context, guildID string, data []byte) error {
-	return c.SaveGuildJSON(ctx, "threadmembercounts", guildID, data)
+	return c.SaveGuildJSON(ctx, ThreadMemberCountsPrefix, guildID, data)
 }
 
 func (c *Client) FetchHiddenThreads(ctx context.Context, guildID string) ([]byte, error) {
-	return c.FetchGuildJSON(ctx, "threadhidden", guildID)
+	return c.FetchGuildJSON(ctx, HiddenThreadsPrefix, guildID)
 }
 
 func (c *Client) SaveHiddenThreads(ctx context.Context, guildID string, data []byte) error {
-	return c.SaveGuildJSON(ctx, "threadhidden", guildID, data)
+	return c.SaveGuildJSON(ctx, HiddenThreadsPrefix, guildID, data)
 }
 
 func (c *Client) SaveStickyFile(ctx context.Context, guildID, fileURL string) (string, error) {

@@ -20,6 +20,7 @@ import (
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 	"github.com/Espresso-Aficionados/sprobot/pkg/idleloop"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/statever"
 )
 
 // memberCountCap is where Discord's thread member_count stops counting. Below
@@ -169,13 +170,21 @@ func (r *threadReminder) settingsError() string {
 // loadReminders loads the stored reminders of every allowed guild that hasn't
 // loaded yet. Run calls it before the gateway opens and again from the save
 // loop, so a failed load is retried; so does the next command that needs the
-// guild's reminders.
-func (b *Bot) loadReminders() {
+// guild's reminders. It returns the refusals of reminders a newer build
+// wrote, which startup exits on.
+func (b *Bot) loadReminders() error {
+	var refused []error
 	for _, guildID := range botutil.AllowedGuildIDs {
-		if err := b.ensureRemindersLoaded(guildID); err != nil {
+		err := b.ensureRemindersLoaded(guildID)
+		switch {
+		case statever.IsNewer(err):
+			refused = append(refused, err)
+			b.Log.Error("Refusing thread reminders a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
+		case err != nil:
 			b.Log.Error("Failed to load thread reminders; will retry", "guild_id", guildID, "error", err)
 		}
 	}
+	return errors.Join(refused...)
 }
 
 // ensureRemindersLoaded loads a guild's stored reminders, unless they have
@@ -198,8 +207,13 @@ func (b *Bot) ensureRemindersLoaded(guildID snowflake.ID) error {
 	case err != nil:
 		return err
 	default:
-		var stored map[string]*threadReminder
-		if err := json.Unmarshal(data, &stored); err != nil {
+		// A map of channel IDs: written without a version (see
+		// statever.Stamp), but read with one.
+		if _, err := statever.Of(fmt.Sprintf("%s/%d.json", s3client.ThreadRemindersPrefix, guildID), data); err != nil {
+			return err
+		}
+		stored, err := statever.UnmarshalMap[*threadReminder](data)
+		if err != nil {
 			return fmt.Errorf("decoding thread reminders: %w", err)
 		}
 		for _, r := range stored {
@@ -613,13 +627,21 @@ func (b *Bot) editReminder(r *threadReminder, embed discord.Embed) bool {
 }
 
 // loadMemberCounts loads the stored member counts of every allowed guild. A
-// failed load is retried the next time the guild's counts are needed.
-func (b *Bot) loadMemberCounts() {
+// failed load is retried the next time the guild's counts are needed. It
+// returns the refusals of counts a newer build wrote.
+func (b *Bot) loadMemberCounts() error {
+	var refused []error
 	for _, guildID := range botutil.AllowedGuildIDs {
-		if err := b.ensureMemberCountsLoaded(guildID); err != nil {
+		err := b.ensureMemberCountsLoaded(guildID)
+		switch {
+		case statever.IsNewer(err):
+			refused = append(refused, err)
+			b.Log.Error("Refusing thread member counts a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
+		case err != nil:
 			b.Log.Error("Failed to load thread member counts; will retry on next use", "guild_id", guildID, "error", err)
 		}
 	}
+	return errors.Join(refused...)
 }
 
 // ensureMemberCountsLoaded loads a guild's stored member counts unless they
@@ -642,6 +664,9 @@ func (b *Bot) ensureMemberCountsLoaded(guildID snowflake.ID) error {
 	case err != nil:
 		return err
 	default:
+		if _, err := statever.Of(fmt.Sprintf("%s/%d.json", s3client.ThreadMemberCountsPrefix, guildID), data); err != nil {
+			return err
+		}
 		if err := json.Unmarshal(data, cache); err != nil {
 			return fmt.Errorf("decoding thread member counts: %w", err)
 		}
@@ -685,6 +710,9 @@ func (b *Bot) saveMemberCountsForGuild(guildID snowflake.ID) {
 	}
 	data, err := json.Marshal(cache)
 	b.mu.Unlock()
+	if err == nil {
+		data, err = statever.Stamp(data)
+	}
 	if err != nil {
 		b.Log.Error("Failed to marshal thread member counts", "guild_id", guildID, "error", err)
 		return

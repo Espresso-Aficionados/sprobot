@@ -12,6 +12,7 @@ import (
 func main() {
 	healthcheck.Main(botutil.HealthURL)
 	logsetup.Init()
+	botutil.CheckStateMain(stickybot.CheckState)
 	// Before anything connects or writes: a bad environment exits 1 here.
 	cfg, err := envconfig.LoadBot("STICKYBOT")
 	if err != nil {

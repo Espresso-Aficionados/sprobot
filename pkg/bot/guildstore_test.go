@@ -247,7 +247,7 @@ func TestGuildStateStoreFetchErrorRefusesWritesUntilRetry(t *testing.T) {
 	if err := store.persist(testGuild); err != nil {
 		t.Fatalf("persist after retry: %v", err)
 	}
-	if got, _ := h.object(testObject(testGuild)); got != `{"value":"updated"}` {
+	if got, _ := h.object(testObject(testGuild)); got != `{"version":1,"value":"updated"}` {
 		t.Errorf("stored data after retry = %q, want the update", got)
 	}
 }
@@ -441,7 +441,7 @@ func TestGuildStateStorePersistLandsInOrder(t *testing.T) {
 		}
 	}
 
-	if got, _ := h.object(testObject(testGuild)); got != `{"value":"new"}` {
+	if got, _ := h.object(testObject(testGuild)); got != `{"version":1,"value":"new"}` {
 		t.Errorf("stored data = %q, want the newer state", got)
 	}
 }

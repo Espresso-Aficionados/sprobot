@@ -20,6 +20,7 @@ import (
 	"github.com/Espresso-Aficionados/sprobot/pkg/idleloop"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/statever"
 )
 
 type stickyMessage struct {
@@ -63,21 +64,32 @@ func (s *stickyMessage) messageCreate(fileURL func(string) string) discord.Messa
 // starts their repost loops. Run calls it before the gateway opens, so no
 // command or event sees a guild whose stickies aren't in memory yet. A guild
 // that fails to load stays out of b.stickies; retryFailed calls this again,
-// and guildLoaded retries it when it is next used.
-func (b *Bot) loadStickies() {
+// and guildLoaded retries it when it is next used. It returns the refusals
+// of stickies a newer build wrote, which startup exits on.
+func (b *Bot) loadStickies() error {
+	var refused []error
 	for _, guildID := range botutil.AllowedGuildIDs {
+		b.mu.Lock()
+		_, loaded := b.stickies[guildID]
+		b.mu.Unlock()
+		if loaded {
+			continue
+		}
 		// Bounded, since the bot isn't online until the boot load returns,
 		// and per guild, so one slow fetch doesn't fail the others.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		b.guildLoaded(ctx, guildID)
+		if err := b.loadGuild(ctx, guildID); statever.IsNewer(err) {
+			refused = append(refused, err)
+		}
 		cancel()
 	}
+	return errors.Join(refused...)
 }
 
 // retryFailed retries what failed against S3: loads, saves and file
 // deletions.
 func (b *Bot) retryFailed() {
-	b.loadStickies()
+	b.loadStickies() // refusals are logged; only startup exits on them
 	b.saveUnsavedStickies()
 	b.retryFileDeletes()
 }
@@ -95,15 +107,24 @@ func (b *Bot) guildLoaded(ctx context.Context, guildID snowflake.ID) bool {
 // loadGuildStickies reads guildID's stored stickies into b.stickies and
 // starts their loops, reporting whether the guild is now loaded.
 func (b *Bot) loadGuildStickies(ctx context.Context, guildID snowflake.ID) bool {
+	return b.loadGuild(ctx, guildID) == nil
+}
+
+// loadGuild is loadGuildStickies, returning why the guild didn't load.
+func (b *Bot) loadGuild(ctx context.Context, guildID snowflake.ID) error {
 	channels, err := b.fetchStickies(ctx, guildID)
+	if statever.IsNewer(err) {
+		b.Log.Error("Refusing stickies a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
+		return err
+	}
 	if err != nil {
 		b.Log.Error("Failed to load stickies; they can't be changed until a retry succeeds", "guild_id", guildID, "error", err)
-		return false
+		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if _, loaded := b.stickies[guildID]; loaded {
-		return true // a concurrent retry got there first
+		return nil // a concurrent retry got there first
 	}
 	b.stickies[guildID] = channels
 	for _, s := range channels {
@@ -115,7 +136,7 @@ func (b *Bot) loadGuildStickies(ctx context.Context, guildID snowflake.ID) bool 
 		// a command whose load this is isn't held up by the checks.
 		go b.dropStickiesOfDeletedChannels(guildID)
 	}
-	return true
+	return nil
 }
 
 // fetchStickies reads guildID's stored stickies, keyed by channel. A guild
@@ -129,8 +150,13 @@ func (b *Bot) fetchStickies(ctx context.Context, guildID snowflake.ID) (map[snow
 	if err != nil {
 		return nil, err
 	}
-	var loaded map[string]*stickyMessage
-	if err := json.Unmarshal(data, &loaded); err != nil {
+	// A map of channel IDs: written without a version (see statever.Stamp),
+	// but read with one.
+	if _, err := statever.Of(fmt.Sprintf("%s/%d.json", s3client.StickiesPrefix, guildID), data); err != nil {
+		return nil, err
+	}
+	loaded, err := statever.UnmarshalMap[*stickyMessage](data)
+	if err != nil {
 		return nil, fmt.Errorf("decoding stickies: %w", err)
 	}
 	for _, s := range loaded {

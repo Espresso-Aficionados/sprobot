@@ -86,8 +86,11 @@ func (b *Bot) Run() error {
 	ctx := context.Background()
 
 	// Before the gateway opens, so no command or event sees a guild whose
-	// stickies aren't in memory yet.
-	b.loadStickies()
+	// stickies aren't in memory yet. Nothing has been saved, and nothing
+	// will be: a newer build's stickies are left as they are.
+	if err := b.loadStickies(); err != nil {
+		return err
+	}
 
 	b.ServeHealth()
 	if err := b.OpenGateway(ctx); err != nil {
