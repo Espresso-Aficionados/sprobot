@@ -2,9 +2,11 @@ package botutil
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,10 +69,21 @@ func (b *BaseBot) PingHealthcheck() {
 	}
 	resp, err := b.httpClient.Get(b.healthcheckEndpoint)
 	if err != nil {
-		b.Log.Info("Healthcheck ping failed", "error", err)
+		b.Log.Info("Healthcheck ping failed", "error", pingError(err))
 		return
 	}
 	resp.Body.Close()
+}
+
+// pingError strips the URL from a failed ping's error. The heartbeat URL is
+// a secret (anyone holding it can report the bot healthy), and *url.Error
+// prints it in full.
+func pingError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }
 
 func (b *BaseBot) gatewayStatus() gateway.Status {

@@ -1,13 +1,16 @@
 package botutil
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -157,5 +160,30 @@ func TestOpenGatewayHoldsAfterFatalClose(t *testing.T) {
 				t.Errorf("held before returning = %v, want %v", held, tt.hold)
 			}
 		})
+	}
+}
+
+// TestPingHealthcheckFailureHidesURL: the heartbeat URL is a secret, so a
+// failed ping must not log it.
+func TestPingHealthcheckFailureHidesURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	endpoint := srv.URL + "/s3cr3t-heartbeat-token"
+	srv.Close() // the ping now fails: connection refused
+
+	var logs bytes.Buffer
+	b := &BaseBot{
+		Client:              &bot.Client{Gateway: fakeGateway{status: gateway.StatusReady}},
+		Log:                 slog.New(slog.NewTextHandler(&logs, nil)),
+		healthcheckEndpoint: endpoint,
+		httpClient:          &http.Client{Timeout: time.Second},
+	}
+	b.PingHealthcheck()
+
+	out := logs.String()
+	if !strings.Contains(out, "Healthcheck ping failed") {
+		t.Fatalf("no failure logged: %q", out)
+	}
+	if strings.Contains(out, "s3cr3t-heartbeat-token") {
+		t.Fatalf("the heartbeat URL leaked into the log: %q", out)
 	}
 }
