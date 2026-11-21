@@ -80,6 +80,11 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
     commit that already has one (a scheduled rebuild or a re-run) is tagged
     `sha-<short>-<UTC time>` instead. Images carry the
     `org.opencontainers.image.revision` label.
+  - Every image carries BuildKit provenance (`mode=max`) and an SBOM, and the
+    `attest` job adds a GitHub build-provenance attestation, pushed to GHCR,
+    for each multi-arch index (`gh attestation verify
+    oci://ghcr.io/espresso-aficionados/<image>:<tag> -R
+    Espresso-Aficionados/sprobot`).
   - **Merging to `main` publishes images.** Treat a merge as a release.
 - The Dockerfile builder is pinned to `golang:1.27.3`. The `go` directive in
   `go.mod` is `1.26.0`.
