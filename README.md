@@ -144,7 +144,7 @@ See `config/example.env` for the full list. Each program checks its whole enviro
 
 Pull requests run the gofmt check, `go vet` and the tests on amd64 and arm64, and build the prod images for amd64 without pushing them.
 
-Multiarch images are built and pushed to the GitHub Container Registry on every push to `main` and on a Mon/Wed/Fri 05:00 UTC schedule, which picks up base image updates:
+Multiarch images are built and pushed to the GitHub Container Registry on every push to `main` that changes more than docs (`*.md`, `docs`, `LICENSE`), and when run by hand. Base image updates arrive as Dependabot PRs (the images are pinned by digest):
 
 - `ghcr.io/espresso-aficionados/sprobot`
 - `ghcr.io/espresso-aficionados/sprobot-web`
@@ -153,7 +153,7 @@ Multiarch images are built and pushed to the GitHub Container Registry on every 
 
 They were published to Docker Hub as `sadbox/*` until November 2026; those images are no longer updated.
 
-A publish moves `latest` for all four images only if its commit is still the tip of `main`. The first images built from a commit are tagged `sha-<short commit SHA>`, and that tag never moves; later builds of the same commit (scheduled rebuilds with refreshed base images, re-runs) are tagged `sha-<short commit SHA>-<UTC build time>` instead. Images carry the full commit SHA in the `org.opencontainers.image.revision` label, so a running image can be traced to its commit and rolled back by tag.
+A publish moves `latest` for all four images only if its commit is still the tip of `main`. The first images built from a commit are tagged `sha-<short commit SHA>`, and that tag never moves; later builds of the same commit (re-runs, manual runs) are tagged `sha-<short commit SHA>-<UTC build time>` instead. Images carry the full commit SHA in the `org.opencontainers.image.revision` label, so a running image can be traced to its commit and rolled back by tag.
 
 Every state document the bots persist (the per-guild JSON in S3, and sprobot's `/sprobot-cache`) has a state version; one without a `"version"` is version 1. A build refuses state a newer build wrote: it logs which document and exits 1 at startup, and never rewrites, backs up or deletes it. Before rolling an image back, or as a start gate, run its `-check-state` (add `-json` for one JSON object). It reads that bot's state read-only: S3 GETs for every allowed guild, plus sprobot's cache dir. It prints each document's version and exits 0 if the build can run on it, 3 if a newer build wrote some of it, or 1 if some can't be read. It needs the S3 variables (`S3_*`, and `OP_SERVICE_ACCOUNT_TOKEN` for `op://` values) and network, but not the Discord token. sprobot-web keeps no state, so its `-check-state` always exits 0. Images from before state versions ignore their arguments: `-check-state` on one starts the bot.
 
