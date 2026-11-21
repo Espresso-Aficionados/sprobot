@@ -10,6 +10,7 @@ require (
 	github.com/disgoorg/omit v1.0.0
 	github.com/disgoorg/snowflake/v2 v2.0.3
 	github.com/hashicorp/golang-lru/v2 v2.0.7
+	github.com/sadbox/svc v0.1.0
 )
 
 require (

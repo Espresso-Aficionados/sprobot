@@ -155,6 +155,8 @@ They were published to Docker Hub as `sadbox/*` until November 2026; those image
 
 A publish moves `latest` for all four images only if its commit is still the tip of `main`. The first images built from a commit are tagged `sha-<short commit SHA>`, and that tag never moves; later builds of the same commit (scheduled rebuilds with refreshed base images, re-runs) are tagged `sha-<short commit SHA>-<UTC build time>` instead. Images carry the full commit SHA in the `org.opencontainers.image.revision` label, so a running image can be traced to its commit and rolled back by tag.
 
+Each image carries BuildKit provenance and an SBOM, plus a GitHub build-provenance attestation: `gh attestation verify oci://ghcr.io/espresso-aficionados/sprobot:latest -R Espresso-Aficionados/sprobot`.
+
 ## Style
 
 Code must pass `gofmt`. This is checked automatically in CI.
