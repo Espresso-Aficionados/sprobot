@@ -3,7 +3,6 @@ package sprobot
 import (
 	"fmt"
 	"net/url"
-	"os"
 )
 
 const ImageField = "Gear Picture"
@@ -18,19 +17,11 @@ const (
 	ImageVersionKey = "_image_version"
 )
 
+// WebEndpoint is the production web server, WEB_ENDPOINT's default.
 const WebEndpoint = "https://bot.espressoaf.com/"
 
 // AvatarWebPath is the bot's avatar, served by the web server.
 const AvatarWebPath = "static/sprobot.png"
-
-// WebEndpointFromEnv returns the web endpoint URL.
-// It reads the WEB_ENDPOINT env var, defaulting to the production URL.
-func WebEndpointFromEnv() string {
-	if v := os.Getenv("WEB_ENDPOINT"); v != "" {
-		return v
-	}
-	return WebEndpoint
-}
 
 func ProfileS3Path(guildID, templateName, userID string) string {
 	return fmt.Sprintf("profiles/%s/%s/%s.json", guildID, templateName, userID)

@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
@@ -78,7 +79,11 @@ func main() {
 	flag.Parse()
 
 	logsetup.Init()
-	c, err := s3client.New()
+	cfg, err := envconfig.LoadStorage()
+	if err != nil {
+		envconfig.Fatal(err)
+	}
+	c, err := s3client.New(cfg)
 	if err != nil {
 		logsetup.Fatal("Failed to create S3 client", "error", err)
 	}

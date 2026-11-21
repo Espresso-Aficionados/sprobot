@@ -10,7 +10,7 @@ import (
 const footerIconURL = sprobot.WebEndpoint + sprobot.AvatarWebPath
 
 func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[string]string, guildID, userID string, s3 *s3client.Client) discord.Embed {
-	profileURL := buildProfileURL(tmpl, guildID, userID)
+	profileURL := s3.ProfileURL(tmpl, guildID, userID)
 
 	embed := discord.Embed{
 		Title: tmpl.Name + " for " + username,
@@ -46,10 +46,6 @@ func buildProfileEmbed(tmpl sprobot.Template, username string, profile map[strin
 	}
 
 	return embed
-}
-
-func buildProfileURL(tmpl sprobot.Template, guildID, userID string) string {
-	return sprobot.WebEndpointFromEnv() + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
 }
 
 func rgbToInt(r, g, b int) int {

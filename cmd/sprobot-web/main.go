@@ -21,6 +21,7 @@ import (
 
 	"github.com/sadbox/svc/healthcheck"
 
+	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
@@ -93,16 +94,21 @@ func loadTemplates() error {
 func main() {
 	healthcheck.Main(healthcheck.ListenURL(":" + listenPort()))
 	logsetup.Init()
+	// Before anything listens or connects: a bad environment exits 1 here.
+	cfg, err := envconfig.LoadWeb()
+	if err != nil {
+		envconfig.Fatal(err)
+	}
 	if err := loadTemplates(); err != nil {
 		logsetup.Fatal("Failed to load templates", "error", err)
 	}
 
-	s3, err := s3client.New()
+	s3, err := s3client.New(cfg.Storage)
 	if err != nil {
 		logsetup.Fatal("Failed to create S3 client", "error", err)
 	}
 
-	port := listenPort()
+	port := cfg.Port
 
 	server := &http.Server{
 		Addr:         ":" + port,
@@ -131,7 +137,8 @@ func main() {
 	}
 }
 
-// listenPort is $PORT (9001 in the prod image), else 8080.
+// listenPort is $PORT (9001 in the prod image), else 8080, unchecked: only
+// the healthcheck uses it, before envconfig.LoadWeb checks it.
 func listenPort() string {
 	if port := os.Getenv("PORT"); port != "" {
 		return port

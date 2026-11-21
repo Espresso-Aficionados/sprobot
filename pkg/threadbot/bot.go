@@ -14,6 +14,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 )
 
 type Bot struct {
@@ -37,8 +38,8 @@ type Bot struct {
 	readyGuilds map[snowflake.ID]bool // guilds whose GuildReady has arrived: the bot is in them
 }
 
-func New(token string) (*Bot, error) {
-	base, err := botutil.NewBaseBot("THREADBOT")
+func New(cfg envconfig.Bot) (*Bot, error) {
+	base, err := botutil.NewBaseBot(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +52,7 @@ func New(token string) (*Bot, error) {
 		hidden:       make(map[snowflake.ID]map[snowflake.ID]struct{}),
 	}
 
-	client, err := disgo.New(token,
+	client, err := disgo.New(cfg.Token,
 		// Handlers run off the gateway goroutine: stopping a repost loop
 		// waits out a repost in flight, which must not stall other events or
 		// heartbeat ACKs.

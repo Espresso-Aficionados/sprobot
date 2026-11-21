@@ -23,6 +23,8 @@ Shared packages:
   `PostWithRetry`, `FollowupEphemeral`, `MessageStash`, `RegisterGuildCommands`,
   `PrivacyPolicyStatus`.
 - `pkg/idleloop`: the idle-repost loop used by stickybot and threadbot.
+- `pkg/envconfig`: reads and checks each program's whole environment at
+  startup.
 - `pkg/opsecrets`: reads secret env vars, resolving 1Password `op://` references.
 - `pkg/s3client`: all S3 persistence.
 - `pkg/sprobot`: shared types such as templates.
@@ -46,7 +48,14 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
 - **Config:** `config/config.env`, copied from `config/example.env`. It holds
   the bot tokens and S3 credentials. Never commit it, and never print tokens
   from it.
-  - Read secrets with `opsecrets.Getenv`, not `os.Getenv`: a value of the form
+  - Every environment variable is read once, by `pkg/envconfig`, first thing
+    in `main` (after `healthcheck.Main`): before anything connects to
+    Discord or S3 or writes a file. It checks every variable and, on any
+    problem, logs each one by name (never a value) and exits 1. Programs get
+    the checked values as a struct and read no variable themselves (the
+    one exception: `sprobot-web -healthcheck` reads `PORT` before the check).
+    A new variable goes there, with a check.
+  - Secrets go through `opsecrets` (envconfig does this): a value of the form
     `op://vault/item/field` is resolved through 1Password using
     `OP_SERVICE_ACCOUNT_TOKEN`, and plain values pass through. The SDK loads
     only on the first `op://` value. In dev, `run*.sh` resolve the references
