@@ -25,8 +25,10 @@ Shared packages:
 - `pkg/idleloop`: the idle-repost loop used by stickybot and threadbot.
 - `pkg/envconfig`: reads and checks each program's whole environment at
   startup.
+- `pkg/logsetup`: one log format for every program (slog text, stderr).
 - `pkg/opsecrets`: reads secret env vars, resolving 1Password `op://` references.
 - `pkg/s3client`: all S3 persistence.
+- `pkg/statever`: persisted-state versions and `-check-state`.
 - `pkg/sprobot`: shared types such as templates.
 - `pkg/testutil`: fake S3 and a test client.
 
@@ -37,10 +39,10 @@ any more. It never touches `mod_files/`.
 ## Build, test, run
 
 ```
-go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt check
-./test.sh                                         # same thing inside the Docker `test` target
+go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a gofmt check
+./test.sh                                               # same thing inside the Docker `test` target
 ./run.sh | ./run-sticky.sh | ./run-thread.sh | ./run-web.sh   # one bot in dev mode
-./run-all.sh                                      # everything via docker-compose.dev.yml
+./run-all.sh                                            # everything via docker-compose.dev.yml
 ```
 
 - **Formatting:** code must be `gofmt`-clean. The CI test image fails on
@@ -49,12 +51,13 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
   the bot tokens and S3 credentials. Never commit it, and never print tokens
   from it.
   - Every environment variable is read once, by `pkg/envconfig`, first thing
-    in `main` (after `healthcheck.Main`): before anything connects to
-    Discord or S3 or writes a file. It checks every variable and, on any
-    problem, logs each one by name (never a value) and exits 1. Programs get
-    the checked values as a struct and read no variable themselves (the
-    one exception: `sprobot-web -healthcheck` reads `PORT` before the check).
-    A new variable goes there, with a check.
+    in `main` (after `healthcheck.Main` and `-check-state`, which reads only
+    the storage variables): before anything connects to Discord or S3 or
+    writes a file. It checks every variable and, on any problem, logs each
+    one by name (never a value) and exits 1. Programs get the checked values
+    as a struct and read no variable themselves (the one exception:
+    `sprobot-web -healthcheck` reads `PORT` before the check). A new
+    variable goes there, with a check.
   - Secrets go through `opsecrets` (envconfig does this): a value of the form
     `op://vault/item/field` is resolved through 1Password using
     `OP_SERVICE_ACCOUNT_TOKEN`, and plain values pass through. The SDK loads
@@ -64,7 +67,7 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
     Resolve at startup only, and use `opsecrets.GetenvAll` where one call site
     needs several secrets: the 1Password account allows 1,000
     service-account requests a day, shared across every prod service.
-    towngear and oncall-sync import this package too, so keep its API stable.
+    oncall-sync imports this package too, so keep its API stable.
 
 ## CI and deploy
 
@@ -78,27 +81,43 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
   from amd64 also build the four prod images (not pushed), to catch a broken
   prod stage before merge. `depcheck.yaml` runs dependency
   review on PRs.
-- `.github/workflows/publish.yaml` runs on pushes to `main` and a Mon/Wed/Fri
-  cron. It calls the tests, then builds per-arch images and combines them into
-  the multiarch images `ghcr.io/espresso-aficionados/{sprobot,sprobot-web,
+- `.github/workflows/publish.yaml` runs on pushes to `main` (and by hand,
+  `workflow_dispatch`, which always builds). Unless only docs (`*.md`,
+  `docs`, `LICENSE`) changed since the commit `:latest` was built from, it
+  calls the tests, then builds per-arch images and combines them into the
+  multiarch images `ghcr.io/espresso-aficionados/{sprobot,sprobot-web,
   stickybot,threadbot}`, pushed with the workflow token.
   - Runs are serialized (one publish at a time, none cancelled once running).
   - `:latest` moves only if the commit is still the tip of `main`, checked once
     per run for all four images.
-  - Every pushed image also gets a write-once `sha-<short>` tag. A rebuild of a
-    commit that already has one (a scheduled rebuild or a re-run) is tagged
-    `sha-<short>-<UTC time>` instead. Images carry the
+  - Every pushed image also gets a write-once `sha-<short>` tag (never a bare
+    `<short>`). A rebuild of a commit that already has one (a re-run or a
+    manual run) is tagged `sha-<short>-<UTC time>` instead. Images carry the
     `org.opencontainers.image.revision` label.
   - Every image carries BuildKit provenance (`mode=max`) and an SBOM, and the
     `attest` job adds a GitHub build-provenance attestation, pushed to GHCR,
     for each multi-arch index (`gh attestation verify
     oci://ghcr.io/espresso-aficionados/<image>:<tag> -R
     Espresso-Aficionados/sprobot`).
-  - **Merging to `main` publishes images.** Treat a merge as a release.
-- The Dockerfile builder is pinned to `golang:1.27.3`. The `go` directive in
-  `go.mod` is `1.26.0`.
-- Dependabot opens weekly dependency PRs. A scheduled agent reviews and merges
-  them.
+  - **Merging to `main` publishes images, and production runs `:latest`**
+    with podman-auto-update, which restarts each bot on its new image (and
+    rolls back one that never turns healthy). Treat a merge as a release.
+- **Runtime images** are distroless `static-debian12:nonroot`, pinned by
+  digest: uid 65532, no shell, no package manager. The container health
+  check is each binary's own `-healthcheck` flag (`github.com/sadbox/svc`
+  `healthcheck.Main`, first in `main`), which asks the program's `/healthz`
+  (the bots' on `127.0.0.1:8099`, 200 while the gateway is ready). The
+  production units (Quadlet, in the private homelab-configs repo) run them
+  read-only, with no capabilities and a user namespace of their own;
+  sprobot's `/sprobot-cache` is `/var/lib/sprobot` on the host, owned by
+  65532. A change must work with the unit as it is: its `HealthCmd`, its
+  mounts, its environment.
+- The Dockerfile builder is pinned to `golang:1.27.4` (tag and digest). The
+  `go` directive in `go.mod` is `1.26.0`.
+- Dependabot opens daily dependency PRs, each version waiting out a 3-day
+  cooldown. The dep-review gate (`dep-review.yaml`, sadbox/dep-review)
+  reviews and merges what's safe; majors and anything it flags wait for a
+  human.
 
 ## Conventions
 
@@ -173,9 +192,13 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
   (`bot.WithAsyncEventsEnabled`), because stopping a repost loop waits out a
   repost in flight (`idleloop.Handle.Stop` blocks until it ends, so never call
   it from inside the repost callback).
-- **Gateway health:** the healthcheck pings only while the gateway is ready. A
-  gateway close that disgo won't reconnect from (e.g. 4004 bad token, 4014
-  disallowed intents) makes the bot save, wait 10 minutes, and exit non-zero.
+- **Gateway health:** the heartbeat pings (`*_HEALTHCHECK_ENDPOINT`) and
+  `/healthz` report healthy only while the gateway is ready. A gateway close
+  that disgo won't reconnect from (e.g. 4004 bad token, 4014 disallowed
+  intents) makes the bot save, wait 10 minutes, and exit non-zero.
+- **Never log a secret**, the heartbeat URLs included (anyone holding one
+  can report the bot healthy): `*url.Error` prints its URL in full, so a
+  failed ping logs `pingError(err)` (`pkg/botutil/base.go`).
 - **Slash commands are registered per guild**, not globally.
 - **Component custom IDs** for sprobot are routed in
   `handleComponentInteraction` (`pkg/bot/deleteprofile.go`).
