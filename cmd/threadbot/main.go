@@ -1,19 +1,16 @@
 package main
 
 import (
-	"os"
+	"github.com/sadbox/svc/healthcheck"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
-	"github.com/Espresso-Aficionados/sprobot/pkg/healthcheck"
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
 	"github.com/Espresso-Aficionados/sprobot/pkg/threadbot"
 )
 
 func main() {
-	if healthcheck.Requested() {
-		os.Exit(healthcheck.Run(botutil.HealthURL))
-	}
+	healthcheck.Main(botutil.HealthURL)
 	logsetup.Init()
 	token, err := opsecrets.Getenv("THREADBOT_DISCORD_TOKEN")
 	if err != nil {

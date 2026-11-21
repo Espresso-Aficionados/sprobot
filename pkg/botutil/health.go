@@ -14,7 +14,7 @@ import (
 // inside the bot's own container.
 const HealthAddr = "127.0.0.1:8099"
 
-// HealthURL is what `<bot> -healthcheck` (healthcheck.Run) asks.
+// HealthURL is what `<bot> -healthcheck` (svc healthcheck.Main) asks.
 const HealthURL = "http://" + HealthAddr + "/healthz"
 
 // ServeHealth serves GET /healthz on HealthAddr until the process exits. It

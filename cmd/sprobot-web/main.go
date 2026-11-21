@@ -19,7 +19,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/Espresso-Aficionados/sprobot/pkg/healthcheck"
+	"github.com/sadbox/svc/healthcheck"
+
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
@@ -90,9 +91,7 @@ func loadTemplates() error {
 }
 
 func main() {
-	if healthcheck.Requested() {
-		os.Exit(healthcheck.Run("http://127.0.0.1:" + listenPort() + "/healthz"))
-	}
+	healthcheck.Main(healthcheck.ListenURL(":" + listenPort()))
 	logsetup.Init()
 	if err := loadTemplates(); err != nil {
 		logsetup.Fatal("Failed to load templates", "error", err)
