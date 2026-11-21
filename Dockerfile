@@ -24,16 +24,18 @@ FROM base AS build-threadbot
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /threadbot ./cmd/threadbot
 
-# The distroless base is pinned as :latest@sha256 (index digest). Dependabot
-# tracks it: a refreshed :latest arrives as a digest-bump PR.
-FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS prod
+# The distroless base is pinned as :nonroot@sha256 (index digest). Dependabot
+# tracks it: a refreshed :nonroot arrives as a digest-bump PR. :nonroot
+# already runs as nonroot (uid/gid 65532); USER below says so explicitly, and
+# /sprobot-cache is owned by that uid, as on bonnet's volume.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS prod
 COPY --from=build-sprobot /sprobot /sprobot
 COPY --from=base --chown=nonroot:nonroot /empty-dir /sprobot-cache
 VOLUME /sprobot-cache
 USER nonroot:nonroot
 CMD ["/sprobot"]
 
-FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS prodweb
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS prodweb
 ENV PORT=9001
 COPY --from=build-sprobot-web /sprobot-web /sprobot-web
 USER nonroot:nonroot
@@ -48,7 +50,7 @@ ENV WEB_ENDPOINT=http://localhost:8080/
 ENV PORT=8080
 CMD ["/sprobot-web"]
 
-FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS prodstickybot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS prodstickybot
 COPY --from=build-stickybot /stickybot /stickybot
 USER nonroot:nonroot
 CMD ["/stickybot"]
@@ -56,7 +58,7 @@ CMD ["/stickybot"]
 FROM build-stickybot AS devstickybot
 CMD ["/stickybot"]
 
-FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2 AS prodthreadbot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS prodthreadbot
 COPY --from=build-threadbot /threadbot /threadbot
 USER nonroot:nonroot
 CMD ["/threadbot"]
