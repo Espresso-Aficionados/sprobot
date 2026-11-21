@@ -4,8 +4,8 @@ go 1.26.0
 
 require (
 	github.com/1password/onepassword-sdk-go v0.4.1
-	github.com/aws/aws-sdk-go-v2/credentials v1.21.0
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10
+	github.com/aws/aws-sdk-go-v2/credentials v1.21.1
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.115.0
 	github.com/disgoorg/disgo v0.20.0
 	github.com/disgoorg/omit v1.0.0
 	github.com/disgoorg/snowflake/v2 v2.0.3
