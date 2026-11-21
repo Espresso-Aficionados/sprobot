@@ -1,0 +1,19 @@
+# Does nothing itself: its completion starts dep-review.yaml, for every PR
+# whatever paths it touches. The gate re-checks everything; the `if` only
+# saves runner minutes on PRs that aren't Dependabot's.
+name: dep-review-trigger
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  noop:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 1
+    steps:
+      - name: Nothing to do
+        run: "true"
