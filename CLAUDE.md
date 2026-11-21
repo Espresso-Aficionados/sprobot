@@ -127,6 +127,23 @@ go build ./... && go vet ./... && go test ./...   # what CI runs, plus a gofmt c
   - threadbot and stickybot follow the same rule with their own loaders: a
     guild is in memory only once its stored data loaded, and nothing is saved
     for a guild that never loaded.
+  - **Persisted state is versioned** (`pkg/statever`, `statever.Current`).
+    A document's version is its top-level `"version"`, first when present;
+    none means version 1. Objects of fields (every `guildStateStore`,
+    threadbot's member counts and hidden threads) are written with it
+    (`statever.Stamp`), since older builds ignore it. Maps keyed by ID
+    (stickies, thread reminders) and the cache files (JSON arrays) can't
+    carry one without breaking older builds, so they are still written
+    without one: they are read with or without it, and the cache dir's
+    version is `/sprobot-cache/version.json`. State newer than the build
+    is refused, never treated as corrupt: startup exits 1 before the
+    gateway opens, and a later retry leaves the guild unloaded. Bump
+    `Current` for any change an older build would misread or destroy by
+    rewriting (see its comment), and with it start writing the version
+    into the maps and cache files. Each binary's `-check-state [-json]`
+    reads its state read-only (sprobot's `bot.CheckState` uses
+    `stateStores` and `cacheFiles`; keep both complete) and exits 0, 3
+    (newer) or 1 (unreadable).
 - **sprobot's disgo caches are persisted** to `/sprobot-cache/*.json`
   (`pkg/bot/groupedcache.go`) with size caps that evict oldest first. Files are
   written atomically (temp file, fsync, rename) with mode `0600`. The message

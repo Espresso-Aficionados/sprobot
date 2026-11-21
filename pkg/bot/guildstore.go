@@ -17,6 +17,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/statever"
 )
 
 // errNotLoaded is returned by persist for a guild whose state failed to load.
@@ -152,6 +153,9 @@ func (s *guildStateStore[T]) persist(guildID snowflake.ID) error {
 	mu.Lock()
 	data, err := json.Marshal(st)
 	mu.Unlock()
+	if err == nil {
+		data, err = statever.Stamp(data)
+	}
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
@@ -170,8 +174,11 @@ func (s *guildStateStore[T]) save() {
 }
 
 // load fetches each guild's state from S3. A guild that fails to load is
-// left without state and marked for retryFailedLoads.
-func (s *guildStateStore[T]) load(guildIDs []snowflake.ID) {
+// left without state and marked for retryFailedLoads. It returns the
+// refusals of state a newer build wrote (statever.NewerError), which
+// startup exits on.
+func (s *guildStateStore[T]) load(guildIDs []snowflake.ID) error {
+	var refused []error
 	for _, guildID := range guildIDs {
 		st, err := s.fetch(guildID)
 		s.mu.Lock()
@@ -185,12 +192,16 @@ func (s *guildStateStore[T]) load(guildIDs []snowflake.ID) {
 		s.mu.Unlock()
 
 		switch {
+		case statever.IsNewer(err):
+			refused = append(refused, err)
+			s.log.Error("Refusing "+s.s3Key+" state a newer build wrote; leaving it untouched", "guild_id", guildID, "error", err)
 		case err != nil:
 			s.log.Error("Failed to load "+s.s3Key+", will retry", "guild_id", guildID, "error", err)
 		case retried:
 			s.log.Info("Loaded "+s.s3Key+" after an earlier failure", "guild_id", guildID)
 		}
 	}
+	return errors.Join(refused...)
 }
 
 // retryFailedLoads loads again every guild whose load failed.
@@ -198,12 +209,14 @@ func (s *guildStateStore[T]) retryFailedLoads() {
 	s.mu.RLock()
 	guildIDs := slices.Collect(maps.Keys(s.failed))
 	s.mu.RUnlock()
-	s.load(guildIDs)
+	s.load(guildIDs) // refusals are logged; only startup exits on them
 }
 
 // fetch reads a guild's state from S3. A missing key gives fresh state.
-// Undecodable data is copied under corruptPrefix and then also replaced by
-// fresh state, so the feature keeps working; recovering it is left to a human.
+// State a newer build wrote, or with a version that makes no sense, is an
+// error: the guild stays unloaded, so nothing saves over it. Undecodable
+// data is copied under corruptPrefix and then also replaced by fresh state,
+// so the feature keeps working; recovering it is left to a human.
 func (s *guildStateStore[T]) fetch(guildID snowflake.ID) (*T, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeS3Timeout)
 	data, err := s.s3.FetchGuildJSON(ctx, s.s3Key, guildID.String())
@@ -213,6 +226,9 @@ func (s *guildStateStore[T]) fetch(guildID snowflake.ID) (*T, error) {
 		return s.fresh(guildID), nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	if _, err := statever.Of(s.docName(guildID), data); err != nil && !errors.Is(err, statever.ErrCorrupt) {
 		return nil, err
 	}
 
@@ -233,6 +249,18 @@ func (s *guildStateStore[T]) fetch(guildID snowflake.ID) (*T, error) {
 		s.postLoad(st)
 	}
 	return st, nil
+}
+
+// prefix is the S3 prefix the store's objects are under.
+func (s *guildStateStore[T]) prefix() string { return s.s3Key }
+
+// docName is the S3 key of a guild's state, as errors name it.
+func (s *guildStateStore[T]) docName(guildID snowflake.ID) string {
+	return guildDocName(s.s3Key, guildID)
+}
+
+func guildDocName(prefix string, guildID snowflake.ID) string {
+	return fmt.Sprintf("%s/%d.json", prefix, guildID)
 }
 
 func (s *guildStateStore[T]) fresh(guildID snowflake.ID) *T {

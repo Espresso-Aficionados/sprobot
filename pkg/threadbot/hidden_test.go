@@ -24,10 +24,10 @@ func TestHiddenThreadsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(data), `{"thread_ids":["10","20","30"]}`; got != want {
+	if got, want := string(data), `{"version":1,"thread_ids":["10","20","30"]}`; got != want {
 		t.Errorf("encoded %s, want %s (sorted, stable)", got, want)
 	}
-	back, err := decodeHiddenThreads(data)
+	back, err := decodeHiddenThreads(1, data)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/statever"
 )
 
 type Bot struct {
@@ -82,6 +84,12 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 	b.initStateStores()
 
 	b.initCaches()
+	// Before anything in the cache dir is read, removed or rewritten.
+	if _, _, err := cacheDirVersion(b.cacheDir); statever.IsNewer(err) {
+		return nil, err
+	} else if err != nil {
+		b.Log.Error("Failed to read the cache dir's version; the next save rewrites it", "error", err)
+	}
 	b.removeRetiredCacheFiles()
 	b.loadCaches()
 
@@ -299,8 +307,9 @@ func (b *Bot) servedGuilds() []snowflake.ID {
 // guildStateLoader is the part of a guildStateStore that doesn't depend on
 // its state type.
 type guildStateLoader interface {
-	load(guildIDs []snowflake.ID)
+	load(guildIDs []snowflake.ID) error
 	retryFailedLoads()
+	prefix() string
 	setGuilds(guilds func() []snowflake.ID)
 }
 
@@ -315,13 +324,17 @@ func (b *Bot) stateStores() []guildStateLoader {
 // loadState loads every store for every allowed guild, the stores
 // concurrently. It needs only S3, so Run calls it before opening the gateway:
 // handlers start as soon as it opens, and one that found no state could save
-// fresh state over the real one.
-func (b *Bot) loadState() {
+// fresh state over the real one. It returns the refusals of state a newer
+// build wrote.
+func (b *Bot) loadState() error {
+	stores := b.stateStores()
+	refused := make([]error, len(stores))
 	var wg sync.WaitGroup
-	for _, s := range b.stateStores() {
-		wg.Go(func() { s.load(botutil.AllowedGuildIDs) })
+	for i, s := range stores {
+		wg.Go(func() { refused[i] = s.load(botutil.AllowedGuildIDs) })
 	}
 	wg.Wait()
+	return errors.Join(refused...)
 }
 
 // retryFailedLoads retries every failed load, the stores concurrently as in
@@ -369,7 +382,11 @@ func (b *Bot) Run() error {
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045773440", b.Client.ApplicationID))
 
-	b.loadState()
+	// Nothing has been saved yet, and nothing will be: a newer build's state
+	// is left as it is.
+	if err := b.loadState(); err != nil {
+		return err
+	}
 	// Lists stored profiles from S3 only; name updates probe authors until it
 	// finishes.
 	go b.loadProfileOwners(botutil.AllowedGuildIDs)

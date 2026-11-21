@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -37,6 +38,19 @@ func TestBadEnvironmentExits(t *testing.T) {
 	}
 	if strings.Contains(stderr, "sekrit") || strings.Contains(stderr, "Listening") {
 		t.Errorf("a value leaked, or it listened:\n%s", stderr)
+	}
+}
+
+// sprobot-web keeps no state: -check-state needs no environment and passes.
+func TestCheckState(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^$", "-check-state", "-json")
+	cmd.Env = []string{"SPROBOT_TEST_RUN_MAIN=1"}
+	out, err := cmd.Output()
+	if err != nil || !strings.Contains(string(out), `"compatible":true`) {
+		t.Errorf("-check-state -json: %v, %s", err, out)
+	}
+	if code, stderr := testutil.RunMain(t, nil, "-json"); code != 2 {
+		t.Errorf("-json alone: exit %d, want 2; stderr:\n%s", code, stderr)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/statever"
 )
 
 // Hidden threads are never promoted: they are left out of channel reminders
@@ -33,10 +34,17 @@ func encodeHiddenThreads(set map[snowflake.ID]struct{}) ([]byte, error) {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	return json.Marshal(hiddenThreadsFile{ThreadIDs: ids})
+	data, err := json.Marshal(hiddenThreadsFile{ThreadIDs: ids})
+	if err != nil {
+		return nil, err
+	}
+	return statever.Stamp(data)
 }
 
-func decodeHiddenThreads(data []byte) (map[snowflake.ID]struct{}, error) {
+func decodeHiddenThreads(guildID snowflake.ID, data []byte) (map[snowflake.ID]struct{}, error) {
+	if _, err := statever.Of(fmt.Sprintf("%s/%d.json", s3client.HiddenThreadsPrefix, guildID), data); err != nil {
+		return nil, err
+	}
 	var f hiddenThreadsFile
 	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, err
@@ -67,7 +75,7 @@ func (b *Bot) ensureHiddenLoaded(guildID snowflake.ID) error {
 	case err != nil:
 		return fmt.Errorf("%w: %w", errHiddenNotLoaded, err)
 	default:
-		if set, err = decodeHiddenThreads(data); err != nil {
+		if set, err = decodeHiddenThreads(guildID, data); err != nil {
 			return fmt.Errorf("%w: %w", errHiddenNotLoaded, err)
 		}
 	}
@@ -147,16 +155,23 @@ func (b *Bot) setHidden(guildID, threadID snowflake.ID, hidden bool) (bool, erro
 }
 
 // loadHiddenThreads loads the hidden list of every allowed guild. Guilds that
-// fail here load on first use.
-func (b *Bot) loadHiddenThreads() {
+// fail here load on first use. It returns the refusals of lists a newer
+// build wrote.
+func (b *Bot) loadHiddenThreads() error {
+	var refused []error
 	for _, guildID := range botutil.AllowedGuildIDs {
 		b.hiddenSaveMu.Lock()
 		err := b.ensureHiddenLoaded(guildID)
 		b.hiddenSaveMu.Unlock()
-		if err != nil {
+		switch {
+		case statever.IsNewer(err):
+			refused = append(refused, err)
+			b.Log.Error("Refusing hidden threads a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
+		case err != nil:
 			b.Log.Error("Failed to load hidden threads; will retry on next use", "guild_id", guildID, "error", err)
 		}
 	}
+	return errors.Join(refused...)
 }
 
 func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
