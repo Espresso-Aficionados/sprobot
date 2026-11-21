@@ -21,6 +21,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/statever"
 )
 
 // messageRetention bounds how long cached message content is kept, per the
@@ -96,6 +97,50 @@ const voiceStateCacheFile = "voicestatecache.json"
 const stageInstanceCacheFile = "stageinstancecache.json"
 const scheduledEventCacheFile = "scheduledeventcache.json"
 const soundboardSoundCacheFile = "soundboardsoundcache.json"
+
+// cacheFiles lists every file saveCaches writes, for -check-state.
+var cacheFiles = []string{
+	messageCacheFile, memberCacheFile, guildCacheFile, channelCacheFile, roleCacheFile, emojiCacheFile,
+	stickerCacheFile, voiceStateCacheFile, stageInstanceCacheFile, scheduledEventCacheFile, soundboardSoundCacheFile,
+}
+
+// cacheVersionFile holds the cache dir's state version (pkg/statever), the
+// layout of every cache file in it: the files are bare JSON arrays, which
+// can't carry one without breaking the builds from before versions. A dir
+// without it is version 1. Builds from before versions ignore it.
+const cacheVersionFile = "version.json"
+
+// cacheDirVersion reads the cache dir's version file. A dir without one is
+// version 1; one a newer build wrote gives a *statever.NewerError.
+func cacheDirVersion(dir string) (version int, exists bool, err error) {
+	path := filepath.Join(dir, cacheVersionFile)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 1, false, nil
+	}
+	if err != nil {
+		return 0, true, err
+	}
+	version, err = statever.Of(path, data)
+	return version, true, err
+}
+
+// stampCacheDir records this build's version in the cache dir before a cache
+// file is written there, and refuses the write if a newer build's version is
+// there. One that can't be read is replaced: only this build writes the dir.
+func stampCacheDir(dir string) error {
+	v, exists, err := cacheDirVersion(dir)
+	switch {
+	case statever.IsNewer(err):
+		return err
+	case exists && err == nil && v == statever.Current:
+		return nil
+	}
+	return writeFileAtomic(dir, cacheVersionFile, func(w *bufio.Writer) error {
+		_, err := fmt.Fprintf(w, "{\"version\":%d}\n", statever.Current)
+		return err
+	})
+}
 
 // initCaches creates the capped caches behind disgo's.
 func (b *Bot) initCaches() {
@@ -788,19 +833,20 @@ func (b *Bot) saveCaches() {
 	saveCache(b, soundboardSoundCacheFile, b.soundboardSoundCache.snapshot())
 }
 
-func saveCache[T any](b *Bot, file string, items []T) bool {
-	if err := writeCacheFile(b.cacheDir, file, items); err != nil {
+func saveCache[T any](b *Bot, file string, items []T) error {
+	err := writeCacheFile(b.cacheDir, file, items)
+	if err != nil {
 		b.Log.Error("Failed to save cache file", "file", file, "error", err)
-		return false
 	}
-	return true
+	return err
 }
 
 // saveMessageCache writes the message cache, or deletes the file if that
 // fails: a failed write leaves the old file in place, and while writes keep
-// failing (a full disk, say) it would age past messageRetention.
+// failing (a full disk, say) it would age past messageRetention. A newer
+// build's file is the exception: it is that build's to prune.
 func (b *Bot) saveMessageCache() {
-	if saveCache(b, messageCacheFile, b.msgCache.snapshot()) {
+	if err := saveCache(b, messageCacheFile, b.msgCache.snapshot()); err == nil || statever.IsNewer(err) {
 		return
 	}
 	err := os.Remove(filepath.Join(b.cacheDir, messageCacheFile))
@@ -856,13 +902,25 @@ func writeCacheFile[T any](dir, name string, items []T) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	if err := stampCacheDir(dir); err != nil {
+		return err
+	}
+	return writeFileAtomic(dir, name, func(w *bufio.Writer) error { return writeJSONArray(w, items) })
+}
+
+// writeFileAtomic writes dir/name through write, as writeCacheFile does.
+func writeFileAtomic(dir, name string, write func(*bufio.Writer) error) error {
 	path := filepath.Join(dir, name)
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
-	err = writeJSONArray(f, items)
+	w := bufio.NewWriter(f)
+	err = write(w)
+	if err == nil {
+		err = w.Flush()
+	}
 	if err == nil {
 		err = f.Sync()
 	}
@@ -880,8 +938,7 @@ func writeCacheFile[T any](dir, name string, items []T) error {
 
 // writeJSONArray encodes items one at a time, so the whole array is never in
 // memory as JSON.
-func writeJSONArray[T any](f *os.File, items []T) error {
-	w := bufio.NewWriter(f)
+func writeJSONArray[T any](w *bufio.Writer, items []T) error {
 	enc := json.NewEncoder(w)
 	w.WriteByte('[')
 	for i, item := range items {
@@ -892,6 +949,5 @@ func writeJSONArray[T any](f *os.File, items []T) error {
 			return err
 		}
 	}
-	w.WriteByte(']')
-	return w.Flush()
+	return w.WriteByte(']')
 }

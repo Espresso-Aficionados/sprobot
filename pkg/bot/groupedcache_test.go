@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1290,8 +1291,18 @@ func TestCachesRoundTrip(t *testing.T) {
 			t.Errorf("%s has mode %o, want 600", file, perm)
 		}
 	}
-	if entries, _ := os.ReadDir(b.cacheDir); len(entries) != len(persistedCacheFiles) {
-		t.Errorf("cache dir has %d files, want %d (temp files left behind?)", len(entries), len(persistedCacheFiles))
+	// The cache files and the dir's version file, which -check-state reads
+	// as cacheFiles lists them.
+	entries, _ := os.ReadDir(b.cacheDir)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if want := append(slices.Sorted(maps.Values(persistedCacheFiles)), cacheVersionFile); !slices.Equal(slices.Sorted(slices.Values(names)), slices.Sorted(slices.Values(want))) {
+		t.Errorf("cache dir has %q, want %q (temp files left behind?)", names, want)
+	}
+	if !slices.Equal(slices.Sorted(slices.Values(cacheFiles)), slices.Sorted(maps.Values(persistedCacheFiles))) {
+		t.Errorf("cacheFiles = %q, want every persisted cache file", cacheFiles)
 	}
 
 	got := newCacheTestBot(t)

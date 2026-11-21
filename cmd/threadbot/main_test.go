@@ -33,3 +33,16 @@ func TestBadEnvironmentExits(t *testing.T) {
 		t.Errorf("a value leaked:\n%s", stderr)
 	}
 }
+
+// -check-state needs only the storage environment, not the Discord token.
+func TestCheckStateFlags(t *testing.T) {
+	code, stderr := testutil.RunMain(t, nil, "-check-state")
+	if code != 1 || !strings.Contains(stderr, "S3_KEY is not set") || strings.Contains(stderr, "THREADBOT_DISCORD_TOKEN") {
+		t.Errorf("-check-state without S3: exit %d, stderr:\n%s", code, stderr)
+	}
+	for _, args := range [][]string{{"-json"}, {"-bogus"}, {"-check-state", "extra"}} {
+		if code, stderr := testutil.RunMain(t, nil, args...); code != 2 {
+			t.Errorf("%q: exit %d, want 2; stderr:\n%s", args, code, stderr)
+		}
+	}
+}
