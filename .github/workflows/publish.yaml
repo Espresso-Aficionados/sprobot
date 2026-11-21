@@ -151,6 +151,11 @@ jobs:
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          # BuildKit attestations: full provenance and an SBOM, pushed with
+          # the image as an attestation manifest (unknown/unknown) in its
+          # index; publish-merge carries them into each multi-arch index.
+          provenance: mode=max
+          sbom: true
           # source links each GHCR package to this repo (access inheritance).
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
@@ -186,6 +191,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      subjects: ${{ steps.merge.outputs.subjects }} # [{name, digest}] per pushed index
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
@@ -213,16 +220,22 @@ jobs:
       # the push. sha-<short> is write-once: a later build of the same commit
       # (a re-run) is tagged sha-<short>-<UTC time>
       # instead, so every pushed image keeps a tag of its own. A failed
-      # lookup counts as not pushed yet.
+      # lookup counts as not pushed yet. Every index pushed is recorded
+      # (image + digest, once per digest) for the attest job.
       - name: Create manifests and push
+        id: merge
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          subjects=/tmp/subjects.jsonl
+          : > "$subjects"
           create() { # image tag
-            local dir="/tmp/digests/digest-${1//\//-}" amd64 arm64
+            local dir="/tmp/digests/digest-${1//\//-}" amd64 arm64 digest
             amd64=$(cat "${dir}-linux-amd64/digest.txt")
             arm64=$(cat "${dir}-linux-arm64/digest.txt")
             docker buildx imagetools create -t "${1}:${2}" "${1}@${amd64}" "${1}@${arm64}"
+            digest=$(docker buildx imagetools inspect "${1}:${2}" --format '{{json .Manifest}}' | jq -r .digest)
+            jq -cn --arg name "$1" --arg digest "$digest" '{name: $name, digest: $digest}' >> "$subjects"
           }
           registry=ghcr.io/espresso-aficionados
           images=("$registry/sprobot" "$registry/sprobot-web" "$registry/stickybot" "$registry/threadbot")
@@ -238,8 +251,44 @@ jobs:
           done
           if [ "$tip" != "$GITHUB_SHA" ]; then
             echo "::notice::main is at ${tip}, not ${GITHUB_SHA}; not moving :latest (its run builds whatever :latest lacks)"
-            exit 0
+          else
+            for image in "${images[@]}"; do
+              create "$image" latest
+            done
           fi
-          for image in "${images[@]}"; do
-            create "$image" latest
-          done
+          echo "subjects=$(jq -sc 'unique_by(.digest)' "$subjects")" >> "$GITHUB_OUTPUT"
+
+  # GitHub artifact attestations (build provenance, signed through the
+  # workflow's OIDC token) for each multi-arch index publish-merge pushed,
+  # also pushed to GHCR next to the image. Its own job, so only it holds
+  # id-token/attestations, and a failed attestation can be re-run without
+  # rebuilding or re-tagging anything. No storage record (that needs
+  # artifact-metadata: write). Verify with
+  #   gh attestation verify oci://ghcr.io/espresso-aficionados/<image>:<tag> -R Espresso-Aficionados/sprobot
+  attest:
+    needs: [publish-merge]
+    permissions:
+      contents: read
+      id-token: write # sign the attestation (Sigstore, via the OIDC token)
+      attestations: write # store it in this repository's attestations
+      packages: write # push it to ghcr.io next to the image
+    strategy:
+      matrix:
+        subject: ${{ fromJSON(needs.publish-merge.outputs.subjects) }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ matrix.subject.name }}
+          subject-digest: ${{ matrix.subject.digest }}
+          push-to-registry: true
+          create-storage-record: false
