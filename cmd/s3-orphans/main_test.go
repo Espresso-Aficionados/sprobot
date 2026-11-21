@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Espresso-Aficionados/sprobot/pkg/statever"
 	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
@@ -115,6 +116,27 @@ func TestFindOrphans(t *testing.T) {
 // The bots keep running during a sweep, so what changed after the listing is
 // kept: an image re-uploaded under the same key, and one a profile points at
 // again.
+// State a newer build wrote stops the sweep: what it refers to can't be
+// known, so nothing is reported or deleted.
+func TestNewerStateStopsSweep(t *testing.T) {
+	fake := testutil.NewFakeS3()
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	c := testutil.NewTestS3Client(t, server)
+	now := time.Now()
+	seedBucket(t, fake, now)
+	fake.Objects["/test-bucket/shortcuts/1.json"] = []byte(`{"version":2}`)
+	before := len(fake.Objects)
+
+	var out bytes.Buffer
+	if err := run(context.Background(), c, &out, true, now); !statever.IsNewer(err) {
+		t.Fatalf("run = %v, want a refusal", err)
+	}
+	if len(fake.Objects) != before {
+		t.Fatalf("objects %d -> %d: something was deleted", before, len(fake.Objects))
+	}
+}
+
 func TestDeleteKeepsWhatChangedSinceListed(t *testing.T) {
 	fake := testutil.NewFakeS3()
 	server := httptest.NewServer(fake)

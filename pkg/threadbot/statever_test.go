@@ -37,6 +37,9 @@ func TestLoadRefusesNewer(t *testing.T) {
 			}
 			b.saveAllReminders()
 			b.saveMemberCounts()
+			if err := b.resetMemberCounts(testGuild, func() {}); obj == memberCountsObject && !statever.IsNewer(err) {
+				t.Errorf("/threadbot refreshcounts: %v, want a refusal", err)
+			}
 			if _, err := b.setHidden(testGuild, 5, true); obj == hiddenObject && err == nil {
 				t.Error("setHidden saved over a newer build's list")
 			}

@@ -32,6 +32,7 @@ import (
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
+	"github.com/Espresso-Aficionados/sprobot/pkg/statever"
 )
 
 const minAge = 24 * time.Hour
@@ -298,6 +299,11 @@ func stateText(ctx context.Context, c *s3client.Client) (string, error) {
 			data, err := c.FetchGuildJSON(ctx, dir, name)
 			if err != nil {
 				return "", fmt.Errorf("reading %s: %w", o.Key, err)
+			}
+			// A newer build's layout may refer to files in ways this
+			// one can't see.
+			if _, err := statever.Of(o.Key, data); statever.IsNewer(err) {
+				return "", err
 			}
 			b.Write(data)
 			b.WriteByte('\n')
