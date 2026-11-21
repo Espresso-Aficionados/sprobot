@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	lru "github.com/hashicorp/golang-lru/v2"
 
+	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
@@ -1049,36 +1050,20 @@ func TestSaveStickyFileUnreachable(t *testing.T) {
 	}
 }
 
-func TestNewMissingEnvVars(t *testing.T) {
-	tests := []struct {
-		name string
-		envs map[string]string
-		want string
-	}{
-		{"missing key", map[string]string{}, "S3_KEY"},
-		{"missing secret", map[string]string{"S3_KEY": "k"}, "S3_SECRET"},
-		{"missing endpoint", map[string]string{"S3_KEY": "k", "S3_SECRET": "s"}, "S3_ENDPOINT"},
-		{"missing bucket", map[string]string{"S3_KEY": "k", "S3_SECRET": "s", "S3_ENDPOINT": "e"}, "S3_BUCKET"},
+// New takes everything from its config; envconfig has checked it.
+func TestNewUsesConfig(t *testing.T) {
+	c, err := New(envconfig.Storage{
+		S3Key: "k", S3Secret: "s", S3Endpoint: "https://s3.example.com/", S3Bucket: "b",
+		WebEndpoint: "http://localhost:8080/",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Clear all
-			for _, k := range []string{"S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_BUCKET"} {
-				t.Setenv(k, "")
-			}
-			for k, v := range tt.envs {
-				t.Setenv(k, v)
-			}
-
-			_, err := New()
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Errorf("error %q should mention %q", err.Error(), tt.want)
-			}
-		})
+	if c.Bucket() != "b" || c.Origin() != "https://s3.example.com" {
+		t.Errorf("bucket %q, origin %q", c.Bucket(), c.Origin())
+	}
+	if got, want := c.ProfileURL(sprobot.ProfileTemplate, "1", "2"), "http://localhost:8080/profiles/1/Coffee%20Setup/2"; got != want {
+		t.Errorf("ProfileURL = %q, want %q", got, want)
 	}
 }
 

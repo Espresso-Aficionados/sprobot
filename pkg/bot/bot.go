@@ -15,6 +15,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
@@ -61,8 +62,8 @@ type Bot struct {
 	linkMigrations       sync.Map // guild ID -> running; temporary: remove with migratelinks.go
 }
 
-func New(token string) (*Bot, error) {
-	base, err := botutil.NewBaseBot("SPROBOT")
+func New(cfg envconfig.Bot) (*Bot, error) {
+	base, err := botutil.NewBaseBot(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +85,7 @@ func New(token string) (*Bot, error) {
 	b.removeRetiredCacheFiles()
 	b.loadCaches()
 
-	client, err := disgo.New(token,
+	client, err := disgo.New(cfg.Token,
 		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
 		bot.WithCacheConfigOpts(b.cacheConfig()...),
 		bot.WithGatewayConfigOpts(

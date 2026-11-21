@@ -147,3 +147,18 @@ func GetenvAll(names ...string) (map[string]string, error) {
 	}
 	return vals, nil
 }
+
+// ResolveForTesting replaces 1Password with fn, which maps references to
+// secrets, and empties the cache, until restore is called. Only tests may
+// call it.
+func ResolveForTesting(fn func(refs []string) (map[string]string, error)) (restore func()) {
+	mu.Lock()
+	defer mu.Unlock()
+	origResolve, origCache := resolve, cache
+	resolve, cache = fn, map[string]string{}
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		resolve, cache = origResolve, origCache
+	}
+}

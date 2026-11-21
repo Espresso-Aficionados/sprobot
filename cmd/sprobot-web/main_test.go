@@ -16,10 +16,28 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	testutil.RunMainIfAsked(main)
 	if err := loadTemplates(); err != nil {
 		log.Fatal(err)
 	}
 	os.Exit(m.Run())
+}
+
+// A bad environment exits 1 before the server listens, naming every
+// problem and no value.
+func TestBadEnvironmentExits(t *testing.T) {
+	code, stderr := testutil.RunMain(t, []string{"PORT=sekrit", "S3_KEY=k", "S3_SECRET=s", "S3_BUCKET=b"})
+	if code != 1 {
+		t.Fatalf("exit code %d, want 1; stderr:\n%s", code, stderr)
+	}
+	for _, name := range []string{"PORT", "S3_ENDPOINT", "S3_BUCKET"} {
+		if !strings.Contains(stderr, "problem=\""+name+" ") {
+			t.Errorf("no problem logged for %s:\n%s", name, stderr)
+		}
+	}
+	if strings.Contains(stderr, "sekrit") || strings.Contains(stderr, "Listening") {
+		t.Errorf("a value leaked, or it listened:\n%s", stderr)
+	}
 }
 
 func TestIndexTemplate(t *testing.T) {

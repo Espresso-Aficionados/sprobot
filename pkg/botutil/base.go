@@ -15,7 +15,7 @@ import (
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
+	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 )
 
@@ -38,15 +38,9 @@ type BaseBot struct {
 	ignoredGuilds   map[snowflake.ID]bool // guilds outside AllowedGuildIDs already warned about
 }
 
-// NewBaseBot creates a BaseBot by reading env vars and initializing S3.
-// envVarPrefix is the prefix for env vars (e.g. "SPROBOT").
-// The healthcheck endpoint is read from {envVarPrefix}_HEALTHCHECK_ENDPOINT.
-func NewBaseBot(envVarPrefix string) (*BaseBot, error) {
-	s3, err := s3client.New()
-	if err != nil {
-		return nil, err
-	}
-	healthcheckEndpoint, err := opsecrets.Getenv(envVarPrefix + "_HEALTHCHECK_ENDPOINT")
+// NewBaseBot creates a BaseBot from the bot's checked environment.
+func NewBaseBot(cfg envconfig.Bot) (*BaseBot, error) {
+	s3, err := s3client.New(cfg.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +48,7 @@ func NewBaseBot(envVarPrefix string) (*BaseBot, error) {
 	return &BaseBot{
 		S3:                  s3,
 		Log:                 slog.Default(),
-		healthcheckEndpoint: healthcheckEndpoint,
+		healthcheckEndpoint: cfg.HealthcheckEndpoint,
 		httpClient:          &http.Client{Timeout: 10 * time.Second},
 		gatewayFailed:       make(chan error, 1),
 	}, nil

@@ -4,23 +4,21 @@ import (
 	"github.com/sadbox/svc/healthcheck"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
-	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
 	"github.com/Espresso-Aficionados/sprobot/pkg/stickybot"
 )
 
 func main() {
 	healthcheck.Main(botutil.HealthURL)
 	logsetup.Init()
-	token, err := opsecrets.Getenv("STICKYBOT_DISCORD_TOKEN")
+	// Before anything connects or writes: a bad environment exits 1 here.
+	cfg, err := envconfig.LoadBot("STICKYBOT")
 	if err != nil {
-		logsetup.Fatal("Reading bot token", "error", err)
-	}
-	if token == "" {
-		logsetup.Fatal("Missing bot token: STICKYBOT_DISCORD_TOKEN")
+		envconfig.Fatal(err)
 	}
 
-	b, err := stickybot.New(token)
+	b, err := stickybot.New(cfg)
 	if err != nil {
 		logsetup.Fatal("Failed to create bot", "error", err)
 	}

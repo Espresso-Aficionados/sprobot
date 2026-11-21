@@ -17,6 +17,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 )
 
 type Bot struct {
@@ -36,8 +37,8 @@ type Bot struct {
 	unsaved map[snowflake.ID]bool // guilds whose last save failed; guarded by saveMu
 }
 
-func New(token string) (*Bot, error) {
-	base, err := botutil.NewBaseBot("STICKYBOT")
+func New(cfg envconfig.Bot) (*Bot, error) {
+	base, err := botutil.NewBaseBot(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +51,7 @@ func New(token string) (*Bot, error) {
 		unsaved:     make(map[snowflake.ID]bool),
 	}
 
-	client, err := disgo.New(token,
+	client, err := disgo.New(cfg.Token,
 		// Handlers run off the gateway goroutine: stopping a repost loop
 		// waits out a repost in flight, which must not stall other events or
 		// heartbeat ACKs.

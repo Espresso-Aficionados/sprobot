@@ -27,7 +27,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	lru "github.com/hashicorp/golang-lru/v2"
 
-	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
+	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
@@ -226,27 +226,9 @@ func (c *Client) copySource(key string) string {
 	return c.bucket + "/" + c.keyPrefix + key
 }
 
-func New() (*Client, error) {
-	creds, err := opsecrets.GetenvAll("S3_KEY", "S3_SECRET")
-	if err != nil {
-		return nil, err
-	}
-	key, secret := creds["S3_KEY"], creds["S3_SECRET"]
-	if key == "" {
-		return nil, fmt.Errorf("S3_KEY env var is undefined")
-	}
-	if secret == "" {
-		return nil, fmt.Errorf("S3_SECRET env var is undefined")
-	}
-	endpoint := os.Getenv("S3_ENDPOINT")
-	if endpoint == "" {
-		return nil, fmt.Errorf("S3_ENDPOINT env var is undefined")
-	}
-	bucket := os.Getenv("S3_BUCKET")
-	if bucket == "" {
-		return nil, fmt.Errorf("S3_BUCKET env var is undefined")
-	}
-
+// New is a Client for the bucket cfg names. cfg comes from envconfig, which
+// has checked it.
+func New(cfg envconfig.Storage) (*Client, error) {
 	cache, err := lru.New[string, map[string]string](500)
 	if err != nil {
 		return nil, fmt.Errorf("creating LRU cache: %w", err)
@@ -254,14 +236,14 @@ func New() (*Client, error) {
 
 	client := s3.New(s3.Options{
 		Region:           "us-southeast-1",
-		BaseEndpoint:     &endpoint,
-		Credentials:      credentials.NewStaticCredentialsProvider(key, secret, ""),
+		BaseEndpoint:     &cfg.S3Endpoint,
+		Credentials:      credentials.NewStaticCredentialsProvider(cfg.S3Key, cfg.S3Secret, ""),
 		UsePathStyle:     true,
 		RetryMaxAttempts: 5,
 	})
 
-	c := NewDirect(client, bucket, endpoint, cache, slog.Default())
-	c.webEndpoint = sprobot.WebEndpointFromEnv()
+	c := NewDirect(client, cfg.S3Bucket, cfg.S3Endpoint, cache, slog.Default())
+	c.webEndpoint = cfg.WebEndpoint
 	return c, nil
 }
 
@@ -693,10 +675,15 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 		}
 	}
 
-	webURL = c.webEndpoint + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
+	webURL = c.ProfileURL(tmpl, guildID, userID)
 	c.log.Info("Profile saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "profile_url", webURL)
 
 	return webURL, userErr, nil
+}
+
+// ProfileURL is the profile's page on the web server.
+func (c *Client) ProfileURL(tmpl sprobot.Template, guildID, userID string) string {
+	return c.webEndpoint + sprobot.ProfileWebPath(guildID, tmpl.Name, userID)
 }
 
 // SetProfileDisplayName changes only the stored display name of an existing

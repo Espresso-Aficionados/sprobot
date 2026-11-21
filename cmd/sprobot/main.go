@@ -5,22 +5,20 @@ import (
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/bot"
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
-	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
 )
 
 func main() {
 	healthcheck.Main(botutil.HealthURL)
 	logsetup.Init()
-	token, err := opsecrets.Getenv("SPROBOT_DISCORD_TOKEN")
+	// Before anything connects or writes: a bad environment exits 1 here.
+	cfg, err := envconfig.LoadBot("SPROBOT")
 	if err != nil {
-		logsetup.Fatal("Reading bot token", "error", err)
-	}
-	if token == "" {
-		logsetup.Fatal("Missing bot token: SPROBOT_DISCORD_TOKEN")
+		envconfig.Fatal(err)
 	}
 
-	b, err := bot.New(token)
+	b, err := bot.New(cfg)
 	if err != nil {
 		logsetup.Fatal("Failed to create bot", "error", err)
 	}
