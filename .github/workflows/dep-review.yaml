@@ -1,0 +1,42 @@
+# Dependabot merge gate (sadbox/dep-review). Runs when dep-review-trigger
+# completes, and on a schedule to merge approved PRs whose CI finished later.
+# Needs the `dep-review` environment (default branch only) with variable
+# DEP_REVIEW_APP_ID and secret DEP_REVIEW_APP_KEY. The Anthropic values below
+# are identifiers, not secrets.
+name: dep-review
+
+on:
+  workflow_run:
+    workflows: [dep-review-trigger]
+    types: [completed]
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+# Keyed on the head repository too, so a fork PR on a same-named branch can't
+# share (and displace a queued run in) a Dependabot PR's group.
+concurrency:
+  group: dep-review-${{ github.event.workflow_run.head_repository.full_name || 'sweep' }}-${{ github.event.workflow_run.head_branch || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    uses: sadbox/dep-review/.github/workflows/gate.yml@9fe007b3653f3ccb0b328e70e1bf6f13e45cedaf # v0.1.0
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    # Only the gate's own secrets; never `secrets: inherit`.
+    secrets:
+      DEP_REVIEW_APP_KEY: ${{ secrets.DEP_REVIEW_APP_KEY }}
+      PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+      PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+    with:
+      anthropic_federation_rule_id: fdrl_012wV5ykPZk8GgpufmkZUJft
+      anthropic_organization_id: e5c4105d-c8e0-46bb-8e22-e172c5526e4e
+      anthropic_workspace_id: wrkspc_01L9rZApihjXPgpNmmtrPb1A
+      anthropic_service_account_id: svac_01GthwZKH3KkYC9pTBvrkGh3
+      # Exactly the platforms publish.yaml builds.
+      docker_platforms: linux/amd64,linux/arm64

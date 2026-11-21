@@ -2,8 +2,9 @@
 # release has to be 3 days old, so a compromised or broken one can be caught
 # and yanked first), set explicitly on each entry below, Docker included (for
 # an image it counts from the tag's last push). Security updates skip it and
-# open as soon as an advisory lands. The "dependabot review" Claude routine
-# reviews and merges what's safe (majors wait for a human).
+# open as soon as an advisory lands. The dep-review gate
+# (.github/workflows/dep-review.yaml, sadbox/dep-review) reviews and merges
+# what's safe; majors and anything it flags wait for a human.
 version: 2
 updates:
   - package-ecosystem: "docker"
