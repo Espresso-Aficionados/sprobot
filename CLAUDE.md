@@ -30,6 +30,7 @@ Shared packages:
 - `pkg/statever`: persisted-state versions and `-check-state`.
 - `pkg/sprobot`: shared types such as templates.
 - `pkg/testutil`: fake S3 and a test client.
+- `pkg/telemetrytest`: records spans and metrics in memory for tests.
 
 `cmd/s3-orphans` is a maintenance tool, not a bot. It reports (and with
 `-delete` removes) bucket objects that no profile, sticky or shortcut refers to
@@ -55,8 +56,9 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
     writes a file. It checks every variable and, on any problem, logs each
     one by name (never a value) and exits 1. Programs get the checked values
     as a struct and read no variable themselves (the one exception:
-    `sprobot-web -healthcheck` reads `PORT` before the check). A new
-    variable goes there, with a check.
+    `sprobot-web -healthcheck` reads `PORT` before the check; and the
+    `OTEL_*` variables, which the OpenTelemetry SDK reads itself, see
+    Telemetry below). A new variable goes there, with a check.
   - Every value is plain; the binaries never talk to 1Password. In prod the
     host renders secrets before the container starts (homelab-configs
     `quadlet/render-env.sh`); in dev, `run*.sh` resolve `config.env`'s
@@ -195,6 +197,18 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
 - **Never log a secret**, the heartbeat URLs included (anyone holding one
   can report the bot healthy): `*url.Error` prints its URL in full, so a
   failed ping logs `pingError(err)` (`pkg/botutil/base.go`).
+- **Telemetry** goes through `github.com/sadbox/svc/telemetry` (its README
+  is the standard): metrics and traces over OTLP to the host's Alloy, off
+  without `OTEL_EXPORTER_OTLP_ENDPOINT`. `telemetry.Start` runs only in a
+  program's long-running mode, after `-healthcheck`, `-check-state` and
+  envconfig, and a failure there only logs a warning. sprobot-web's whole
+  handler chain is inside `telemetry.Handler` (routes are the mux patterns;
+  a middleware must pass the request on, not an `r.WithContext` copy, or
+  the route is lost). Every outbound client has a fixed peer name (`s3`);
+  logsetup's handler adds `trace_id` to `*Context` log calls made inside a
+  span. **No Discord ID, name, message content or request data in a span
+  attribute or metric label**; label values are a small fixed set. Test
+  with `pkg/telemetrytest`.
 - **Slash commands are registered per guild**, not globally.
 - **Component custom IDs** for sprobot are routed in
   `handleComponentInteraction` (`pkg/bot/deleteprofile.go`).

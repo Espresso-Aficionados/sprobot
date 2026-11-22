@@ -22,10 +22,12 @@ import (
 	"syscall"
 	"time"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/sadbox/svc/telemetry"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
@@ -240,11 +242,23 @@ func New(cfg envconfig.Storage) (*Client, error) {
 		Credentials:      credentials.NewStaticCredentialsProvider(cfg.S3Key, cfg.S3Secret, ""),
 		UsePathStyle:     true,
 		RetryMaxAttempts: 5,
+		HTTPClient:       s3HTTPClient(),
 	})
 
 	c := NewDirect(client, cfg.S3Bucket, cfg.S3Endpoint, cache, slog.Default())
 	c.webEndpoint = cfg.WebEndpoint
 	return c, nil
+}
+
+// s3HTTPClient is the SDK's default HTTP client (its transport, timeouts and
+// redirect handling), traced and timed as calls to the "s3" dependency.
+func s3HTTPClient() s3.HTTPClient {
+	def := awshttp.NewBuildableClient().Freeze()
+	c, ok := def.(*http.Client)
+	if !ok {
+		return def // a future SDK's client: uninstrumented rather than replaced
+	}
+	return telemetry.Client("s3", c)
 }
 
 // NewDirect creates a Client with explicitly provided dependencies.

@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sadbox/svc/healthcheck"
+	"github.com/sadbox/svc/telemetry"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
@@ -105,6 +106,16 @@ func main() {
 	if err != nil {
 		envconfig.Fatal(err)
 	}
+	// The server only: -healthcheck and -check-state have exited by now.
+	// Without OTEL_EXPORTER_OTLP_ENDPOINT this does nothing, and a bad OTEL_*
+	// setting costs only the telemetry.
+	shutdownTelemetry, err := telemetry.Start(context.Background(), "sprobot-web")
+	if err != nil {
+		slog.Warn("Telemetry off", "error", err)
+		shutdownTelemetry = func() {}
+	}
+	defer shutdownTelemetry()
+
 	if err := loadTemplates(); err != nil {
 		logsetup.Fatal("Failed to load templates", "error", err)
 	}
@@ -118,7 +129,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:         ":" + port,
-		Handler:      securityHeaders(accessLog(newMux(s3))),
+		Handler:      handler(s3),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -150,6 +161,14 @@ func listenPort() string {
 		return port
 	}
 	return "8080"
+}
+
+// handler is the server's whole handler chain. telemetry.Handler is
+// outermost and the middlewares pass its request on as it is, so the route it
+// records is the pattern the mux matched, and the access log line carries the
+// request's trace.
+func handler(s3 *s3client.Client) http.Handler {
+	return telemetry.Handler(securityHeaders(accessLog(newMux(s3))), "sprobot-web")
 }
 
 func newMux(s3 *s3client.Client) *http.ServeMux {
@@ -208,7 +227,7 @@ func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 
 		profile, err := s3.FetchProfileSimple(r.Context(), guildID, tmpl.Name, userID)
 		if err != nil {
-			renderS3Error(w, "Profile fetch error", err)
+			renderS3Error(r.Context(), w, "Profile fetch error", err)
 			return
 		}
 
@@ -266,7 +285,7 @@ func handleProfileImage(s3 *s3client.Client) http.HandlerFunc {
 
 		profile, err := s3.FetchProfileSimple(r.Context(), guildID, tmpl.Name, userID)
 		if err != nil {
-			renderS3Error(w, "Profile fetch error", err)
+			renderS3Error(r.Context(), w, "Profile fetch error", err)
 			return
 		}
 		// The URL carries an image version, so a new upload gets a new URL.
@@ -286,7 +305,7 @@ func serveImageToDiscord(w http.ResponseWriter, r *http.Request, s3 *s3client.Cl
 
 	body, size, err := s3.OpenImage(r.Context(), urlOrKey)
 	if err != nil {
-		renderS3Error(w, "Image fetch error", err)
+		renderS3Error(r.Context(), w, "Image fetch error", err)
 		return
 	}
 	defer body.Close()
@@ -298,7 +317,7 @@ func serveImageToDiscord(w http.ResponseWriter, r *http.Request, s3 *s3client.Cl
 	}
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	if _, err := io.Copy(w, body); err != nil {
-		slog.Error("Image stream error", "error", err)
+		slog.ErrorContext(r.Context(), "Image stream error", "error", err)
 	}
 }
 
@@ -340,7 +359,7 @@ func handleFileView(s3 *s3client.Client) http.HandlerFunc {
 
 		size, err := s3.StatFile(r.Context(), key)
 		if err != nil {
-			renderS3Error(w, "File stat error", err)
+			renderS3Error(r.Context(), w, "File stat error", err)
 			return
 		}
 
@@ -348,7 +367,7 @@ func handleFileView(s3 *s3client.Client) http.HandlerFunc {
 		download := `attachment; filename="` + name + `"` // name is validated to [A-Za-z0-9.]
 		data.DownloadURL, err = s3.PresignFile(r.Context(), key, s3client.PresignTTLPage, "application/octet-stream", download)
 		if err != nil {
-			slog.Error("Presign error", "error", err)
+			slog.ErrorContext(r.Context(), "Presign error", "error", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
@@ -356,7 +375,7 @@ func handleFileView(s3 *s3client.Client) http.HandlerFunc {
 			data.Media, _, _ = strings.Cut(contentType, "/")
 			data.ViewURL, err = s3.PresignFile(r.Context(), key, s3client.PresignTTLPage, contentType, "inline")
 			if err != nil {
-				slog.Error("Presign error", "error", err)
+				slog.ErrorContext(r.Context(), "Presign error", "error", err)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				return
 			}
@@ -516,12 +535,12 @@ func render404(w http.ResponseWriter) {
 
 // renderS3Error answers a failed S3 read: 404 if the object doesn't exist,
 // otherwise a logged 502, since the fault is upstream and may pass.
-func renderS3Error(w http.ResponseWriter, what string, err error) {
+func renderS3Error(ctx context.Context, w http.ResponseWriter, what string, err error) {
 	if errors.Is(err, s3client.ErrNotFound) {
 		render404(w)
 		return
 	}
-	slog.Error(what, "error", err)
+	slog.ErrorContext(ctx, what, "error", err)
 	http.Error(w, "Bad Gateway", http.StatusBadGateway)
 }
 
@@ -549,7 +568,7 @@ func accessLog(next http.Handler) http.Handler {
 		if ip == "" {
 			ip = r.RemoteAddr
 		}
-		slog.Info("request", "remote", sanitizeLog(ip), "method", r.Method, "uri", sanitizeLog(r.URL.RequestURI()), "status", rec.status, "duration", time.Since(start), "user_agent", sanitizeLog(r.UserAgent()))
+		slog.InfoContext(r.Context(), "request", "remote", sanitizeLog(ip), "method", r.Method, "uri", sanitizeLog(r.URL.RequestURI()), "status", rec.status, "duration", time.Since(start), "user_agent", sanitizeLog(r.UserAgent()))
 	})
 }
 

@@ -13,6 +13,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+
+	"github.com/sadbox/svc/telemetry"
 )
 
 // Init makes that format the program's default, on stderr. Call it first in
@@ -22,9 +24,11 @@ func Init() {
 	slog.SetDefault(New(os.Stderr))
 }
 
-// New is a logger in that format writing to w.
+// New is a logger in that format writing to w. A record logged with a
+// context inside a span (slog.InfoContext(ctx, ...)) also carries trace_id
+// and span_id, linking the line to its trace (svc/telemetry).
 func New(w io.Writer) *slog.Logger {
-	return slog.New(slog.NewTextHandler(w, nil))
+	return slog.New(telemetry.LogHandler(slog.NewTextHandler(w, nil)))
 }
 
 // Fatal logs at error level and exits 1: log.Fatal's job, with a level.
