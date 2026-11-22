@@ -1,3 +1,4 @@
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_RESOURCE_ATTRIBUTES`, other `OTEL_*` | OpenTelemetry metrics and traces over OTLP/HTTP (optional; sprobot-web only for now). Read by the OpenTelemetry SDK, not checked at startup; unset means no export. A bad value turns telemetry off with a warning, never the program. |
 # sprobot
 [![publish](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/publish.yaml/badge.svg?branch=main)](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/publish.yaml)
 
@@ -84,6 +85,7 @@ Web server that renders profile pages and serves files saved by the bots (mod lo
 - `pkg/botutil/` — shared bot utilities (base struct, guild config, retry helpers)
 - `pkg/idleloop/` — shared idle-repost loop used by stickybot and threadbot
 - `pkg/testutil/` — shared test helpers (fake S3, test client)
+- `pkg/telemetrytest/` — in-memory OpenTelemetry recorder for tests
 - `pkg/sprobot/` — shared types (templates, links, config)
 - `pkg/s3client/` — S3 storage client
 - `docs/` — project documentation, including Discord privileged-intent evidence

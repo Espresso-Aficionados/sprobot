@@ -118,6 +118,9 @@ public URLs by design — do not put anything in a profile you do not want visib
 outside Discord. Links to saved files are unguessable, but work for anyone who has them.
 The bots and sprobot-web write operational logs for troubleshooting; these include
 user IDs and, for sprobot-web, visitors' IP addresses and user agents.
+They also send operational metrics and traces (request and command counts and
+timings, background-task outcomes) to our monitoring service, Grafana Cloud;
+these carry no user, server or channel IDs, names, IP addresses or message content.
 
 If sprobot finds stored data it cannot read back (for example top-poster counts or
 temporary-role assignments saved in a format it no longer understands), it keeps a
