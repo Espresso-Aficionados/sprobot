@@ -13,6 +13,7 @@ import (
 	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
+	"github.com/sadbox/svc/telemetry"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
@@ -145,10 +146,10 @@ func TestStopLoopsWaitsForRunningLoop(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	runs := 0
-	b.startLoop(time.Millisecond, func() {
+	b.startLoop(time.Millisecond, telemetry.NewJob("test_stop_loops"), func() error {
 		runs++
 		if runs > 1 {
-			return
+			return nil
 		}
 		close(started)
 		<-release
@@ -156,6 +157,7 @@ func TestStopLoopsWaitsForRunningLoop(t *testing.T) {
 		st.mu.Lock()
 		st.Counter = 42
 		st.mu.Unlock()
+		return nil
 	})
 	<-started
 

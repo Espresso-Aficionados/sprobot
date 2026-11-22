@@ -19,7 +19,8 @@ a **separate Discord application** with its own token.
 
 Shared packages:
 - `pkg/botutil`: `BaseBot`, the guild allowlist (`AllowedGuildIDs`,
-  `GuildAllowed`), healthcheck pings, gateway-close handling, `RunSaveLoop`,
+  `GuildAllowed`), healthcheck pings, gateway-close handling, `RunSaveLoop`
+  and `RunJobLoop`, the bots' telemetry (`telemetry.go`),
   `PostWithRetry`, `FollowupEphemeral`, `MessageStash`, `RegisterGuildCommands`,
   `PrivacyPolicyStatus`.
 - `pkg/idleloop`: the idle-repost loop used by stickybot and threadbot.
@@ -132,7 +133,7 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
   and in every per-guild config.
 - **Runtime state lives in S3, per guild.** In sprobot, use
   `guildStateStore[T]` (`pkg/bot/guildstore.go`): load before the gateway
-  opens, persist on change and/or through `botutil.RunSaveLoop`, and save on
+  opens, persist on change and/or through a periodic save loop, and save on
   shutdown (after the loops are drained). Missing a step loses state across
   restarts.
   - **Never overwrite data that failed to load.** A guild whose load failed has
@@ -201,18 +202,33 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
   is the standard): metrics and traces over OTLP to the host's Alloy, off
   without `OTEL_EXPORTER_OTLP_ENDPOINT`. `telemetry.Start` runs only in a
   program's long-running mode, after `-healthcheck`, `-check-state` and
-  envconfig, and a failure there only logs a warning. sprobot-web's whole
-  handler chain is inside `telemetry.Handler` (routes are the mux patterns;
-  a middleware must pass the request on, not an `r.WithContext` copy, or
-  the route is lost). Every outbound client has a fixed peer name (`s3`);
+  envconfig (the bots: `botutil.StartTelemetry`), and a failure there only
+  logs a warning. sprobot-web's whole handler chain is inside
+  `telemetry.Handler` (routes are the mux patterns; a middleware must pass
+  the request on, not an `r.WithContext` copy, or the route is lost). Every
+  outbound client has a fixed peer name: `discord` (disgo's REST client,
+  `botutil.RESTClient`, and sprobot's search client), `s3`, `fetch`
+  (user-supplied URLs, wrapped outside the dial check) and `heartbeat`.
   logsetup's handler adds `trace_id` to `*Context` log calls made inside a
-  span. **No Discord ID, name, message content or request data in a span
-  attribute or metric label**; label values are a small fixed set. Test
-  with `pkg/telemetrytest`.
+  span.
+  - **Bots:** each periodic loop is a `telemetry.Job`, a package-level var
+    (so it exists before `Start`), run by `botutil.RunJobLoop` (sprobot:
+    `startLoop`) with the pass's real error; a callee that only logged its
+    failures returns them too. The 30s heartbeat tick records
+    `gateway_ready` while the gateway is ready, endpoint or not. Interaction
+    listeners go through `botutil.TraceCommands`/`TraceAutocomplete`/
+    `TraceComponents`/`TraceModals`: labelled by registered command name, or
+    by a custom-ID prefix from the bot's fixed list (sprobot's
+    `componentNames`/`modalNames` in `pkg/bot/telemetry.go`; a new route's
+    prefix goes there, else it is `other`). Gateway events are counted by
+    disgo type (`botutil.CountEvents`).
+  - **No Discord ID, name, message content, custom ID or request data in a
+    span attribute or metric label**; label values are a small fixed set.
+    Test with `pkg/telemetrytest`.
 - **Slash commands are registered per guild**, not globally.
 - **Component custom IDs** for sprobot are routed in
   `handleComponentInteraction` (`pkg/bot/deleteprofile.go`).
-  - A new button needs a route there.
+  - A new button needs a route there, and its prefix in `componentNames`.
   - Changing a custom ID must keep the old one working: buttons already posted
     in Discord keep their old IDs forever.
 - **Shared state** is guarded by a mutex on the state struct. Copy what you need

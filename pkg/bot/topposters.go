@@ -166,14 +166,14 @@ func (gc *guildPostCounts) prune(cutoff string) {
 	}
 }
 
-func (b *Bot) saveTopPosters() {
+func (b *Bot) saveTopPosters() error {
 	cutoff := time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02")
 	b.topPosters.each(func(_ snowflake.ID, gc *guildPostCounts) {
 		gc.mu.Lock()
 		gc.prune(cutoff)
 		gc.mu.Unlock()
 	})
-	b.topPosters.save()
+	return b.topPosters.save()
 }
 
 func pruneOldDays(counts map[string]map[string]int, cutoff string) {

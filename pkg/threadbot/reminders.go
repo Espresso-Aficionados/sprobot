@@ -294,14 +294,14 @@ func (b *Bot) startGuildReminders(guildID snowflake.ID) {
 	}
 }
 
-func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) {
+func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) error {
 	b.saveMu.Lock()
 	defer b.saveMu.Unlock()
 	b.mu.Lock()
 	channels, ok := b.reminders[guildID]
 	if !ok {
 		b.mu.Unlock()
-		return
+		return nil
 	}
 	toSave := make(map[string]*threadReminder, len(channels))
 	for chID, r := range channels {
@@ -312,15 +312,16 @@ func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) {
 
 	if err != nil {
 		b.Log.Error("Failed to marshal thread reminders", "guild_id", guildID, "error", err)
-		return
+		return err
 	}
 
 	ctx := context.Background()
 	if err := b.S3.SaveThreadReminders(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
 		b.Log.Error("Failed to save thread reminders", "guild_id", guildID, "error", err)
-	} else {
-		b.Log.Info("Saved thread reminders", "guild_id", guildID, "count", len(toSave))
+		return err
 	}
+	b.Log.Info("Saved thread reminders", "guild_id", guildID, "count", len(toSave))
+	return nil
 }
 
 // saveAllReminders saves the reminders of the guilds the bot is in. Every
@@ -328,10 +329,32 @@ func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) {
 // another deployment of the bot (prod or dev) may be the one changing a guild
 // this one isn't in, so its copy from startup is never written back. Changes
 // in the bot's own guilds are saved as they happen; this is the backstop.
-func (b *Bot) saveAllReminders() {
+func (b *Bot) saveAllReminders() error {
+	var errs []error
 	for _, guildID := range b.GuildIDs() {
-		b.saveRemindersForGuild(guildID)
+		errs = append(errs, b.saveRemindersForGuild(guildID))
 	}
+	return errors.Join(errs...)
+}
+
+// retryAndSaveReminders is the 5-minute reminders pass: it retries the
+// guilds whose load failed and saves the rest, and fails while a guild is
+// unloaded or a save fails.
+func (b *Bot) retryAndSaveReminders() error {
+	_ = b.loadReminders() // refusals are logged; only startup exits on them
+	err := b.saveAllReminders()
+	b.mu.Lock()
+	unloaded := 0
+	for _, guildID := range botutil.AllowedGuildIDs {
+		if _, ok := b.reminders[guildID]; !ok {
+			unloaded++
+		}
+	}
+	b.mu.Unlock()
+	if unloaded > 0 {
+		err = errors.Join(err, fmt.Errorf("thread reminders of %d guild(s) not loaded", unloaded))
+	}
+	return err
 }
 
 // startReminderGoroutine starts r's repost loop, unless r is no longer its
@@ -691,22 +714,24 @@ func (b *Bot) ensureMemberCountsLoaded(guildID snowflake.ID) error {
 
 // saveMemberCounts saves the member counts of the guilds the bot is in, for
 // the reason given at saveAllReminders.
-func (b *Bot) saveMemberCounts() {
+func (b *Bot) saveMemberCounts() error {
+	var errs []error
 	for _, guildID := range b.GuildIDs() {
-		b.saveMemberCountsForGuild(guildID)
+		errs = append(errs, b.saveMemberCountsForGuild(guildID))
 	}
+	return errors.Join(errs...)
 }
 
 // saveMemberCountsForGuild persists a guild's member counts. A guild whose
 // counts haven't loaded has nothing to save.
-func (b *Bot) saveMemberCountsForGuild(guildID snowflake.ID) {
+func (b *Bot) saveMemberCountsForGuild(guildID snowflake.ID) error {
 	b.saveMu.Lock()
 	defer b.saveMu.Unlock()
 	b.mu.Lock()
 	cache, ok := b.memberCounts[guildID]
 	if !ok {
 		b.mu.Unlock()
-		return
+		return nil
 	}
 	data, err := json.Marshal(cache)
 	b.mu.Unlock()
@@ -715,14 +740,15 @@ func (b *Bot) saveMemberCountsForGuild(guildID snowflake.ID) {
 	}
 	if err != nil {
 		b.Log.Error("Failed to marshal thread member counts", "guild_id", guildID, "error", err)
-		return
+		return err
 	}
 
 	if err := b.S3.SaveThreadMemberCounts(context.Background(), fmt.Sprintf("%d", guildID), data); err != nil {
 		b.Log.Error("Failed to save thread member counts", "guild_id", guildID, "error", err)
-	} else {
-		b.Log.Info("Saved thread member counts", "guild_id", guildID)
+		return err
 	}
+	b.Log.Info("Saved thread member counts", "guild_id", guildID)
+	return nil
 }
 
 func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID) {

@@ -635,6 +635,9 @@ func (b *Bot) registerAllCommands() error {
 			},
 		})
 
+		// Commands differ per guild here, so not RegisterGuildCommands; their
+		// names still label the interactions.
+		botutil.RegisterCommandNames(commands)
 		if _, err := b.Client.Rest.SetGuildCommands(b.Client.ApplicationID, guildID, commands); err != nil {
 			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
 		}

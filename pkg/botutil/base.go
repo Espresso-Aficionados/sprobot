@@ -16,6 +16,7 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
+	"github.com/sadbox/svc/telemetry"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
@@ -51,19 +52,30 @@ func NewBaseBot(cfg envconfig.Bot) (*BaseBot, error) {
 		S3:                  s3,
 		Log:                 slog.Default(),
 		healthcheckEndpoint: cfg.HealthcheckEndpoint,
-		httpClient:          &http.Client{Timeout: 10 * time.Second},
+		httpClient:          telemetry.Client("heartbeat", &http.Client{Timeout: 10 * time.Second}),
 		gatewayFailed:       make(chan error, 1),
 	}, nil
 }
 
-// PingHealthcheck sends a GET to the configured healthcheck endpoint, but only
-// while the gateway is connected and ready, so a bot that has lost Discord
-// stops reporting healthy. It is a no-op if no endpoint is configured.
-func (b *BaseBot) PingHealthcheck() {
+// Heartbeat is the 30-second heartbeat tick: while the gateway is
+// connected and ready it records a gateway_ready success and pings the
+// healthcheck endpoint, so a bot that has lost Discord stops reporting
+// healthy. The success is recorded whether or not an endpoint is set.
+func (b *BaseBot) Heartbeat() {
+	status := b.gatewayStatus()
+	if status == gateway.StatusReady {
+		gatewayReadyJob.Succeeded()
+	}
+	b.pingHealthcheck(status)
+}
+
+// pingHealthcheck sends a GET to the configured healthcheck endpoint if
+// status is ready. It is a no-op if no endpoint is configured.
+func (b *BaseBot) pingHealthcheck(status gateway.Status) {
 	if b.healthcheckEndpoint == "" {
 		return
 	}
-	if status := b.gatewayStatus(); status != gateway.StatusReady {
+	if status != gateway.StatusReady {
 		b.Log.Warn("Skipping healthcheck ping, gateway not ready", "status", status)
 		return
 	}

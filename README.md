@@ -1,4 +1,4 @@
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_RESOURCE_ATTRIBUTES`, other `OTEL_*` | OpenTelemetry metrics and traces over OTLP/HTTP (optional; sprobot-web only for now). Read by the OpenTelemetry SDK, not checked at startup; unset means no export. A bad value turns telemetry off with a warning, never the program. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_RESOURCE_ATTRIBUTES`, other `OTEL_*` | OpenTelemetry metrics and traces over OTLP/HTTP (optional; the bots and sprobot-web, not `s3-orphans` or `-check-state`). Read by the OpenTelemetry SDK, not checked at startup; unset means no export. A bad value turns telemetry off with a warning, never the program. |
 # sprobot
 [![publish](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/publish.yaml/badge.svg?branch=main)](https://github.com/Espresso-Aficionados/sprobot/actions/workflows/publish.yaml)
 

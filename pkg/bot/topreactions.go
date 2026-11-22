@@ -349,13 +349,13 @@ func reactionCount(reactions []discord.MessageReaction, emoji string) int {
 
 // --- Load / Save / Persist ---
 
-func (b *Bot) saveStarboard() {
+func (b *Bot) saveStarboard() error {
 	b.starboard.each(func(_ snowflake.ID, st *starboardState) {
 		st.mu.Lock()
 		pruneStarboardEntries(st, time.Now())
 		st.mu.Unlock()
 	})
-	b.starboard.save()
+	return b.starboard.save()
 }
 
 // pruneStarboardEntries removes unposted entries older than
@@ -554,8 +554,9 @@ func (b *Bot) removeDeletedEntry(guildID, msgID snowflake.ID, st *starboardState
 }
 
 // retryStarboardDeletes retries deleting the posts of deleted messages whose
-// first delete failed.
-func (b *Bot) retryStarboardDeletes() {
+// first delete failed. It fails if a guild's state couldn't be saved after.
+func (b *Bot) retryStarboardDeletes() error {
+	var errs []error
 	b.starboard.each(func(guildID snowflake.ID, st *starboardState) {
 		var pending []snowflake.ID
 		st.mu.Lock()
@@ -574,8 +575,10 @@ func (b *Bot) retryStarboardDeletes() {
 		}
 		if err := b.starboard.persist(guildID); err != nil {
 			b.Log.Error("Failed to persist starboard after delete", "guild_id", guildID, "error", err)
+			errs = append(errs, err)
 		}
 	})
+	return errors.Join(errs...)
 }
 
 // deleteStarboardPost deletes a post and reports whether it is gone, counting

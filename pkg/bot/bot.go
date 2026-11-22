@@ -14,6 +14,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
+	"github.com/sadbox/svc/telemetry"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
@@ -73,7 +74,7 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 	b := &Bot{
 		BaseBot:          base,
 		stop:             make(chan struct{}),
-		searchClient:     &http.Client{Timeout: 30 * time.Second},
+		searchClient:     telemetry.Client("discord", &http.Client{Timeout: 30 * time.Second}),
 		welcomeSent:      make(map[snowflake.ID]time.Time),
 		templates:        sprobot.AllTemplates(),
 		selfroles:        getSelfroleConfig(),
@@ -94,6 +95,8 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 	b.loadCaches()
 
 	client, err := disgo.New(cfg.Token,
+		botutil.RESTClient(),
+		botutil.CountEvents(),
 		bot.WithEventManagerConfigOpts(bot.WithAsyncEventsEnabled()),
 		bot.WithCacheConfigOpts(b.cacheConfig()...),
 		bot.WithGatewayConfigOpts(
@@ -114,10 +117,10 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.OnGuildJoin),
 		bot.WithEventListenerFunc(b.onGuildLeave),
-		bot.WithEventListenerFunc(b.onCommand),
-		bot.WithEventListenerFunc(b.onModal),
-		bot.WithEventListenerFunc(b.onComponent),
-		bot.WithEventListenerFunc(b.onAutocomplete),
+		bot.WithEventListenerFunc(botutil.TraceCommands(b.onCommand)),
+		bot.WithEventListenerFunc(botutil.TraceModals(modalNames, b.onModal)),
+		bot.WithEventListenerFunc(botutil.TraceComponents(componentNames, b.onComponent)),
+		bot.WithEventListenerFunc(botutil.TraceAutocomplete(b.onAutocomplete)),
 		bot.WithEventListenerFunc(b.onMessage),
 		bot.WithEventListenerFunc(b.onMemberJoin),
 		bot.WithEventListenerFunc(b.onMessageDelete),
@@ -308,7 +311,7 @@ func (b *Bot) servedGuilds() []snowflake.ID {
 // its state type.
 type guildStateLoader interface {
 	load(guildIDs []snowflake.ID) error
-	retryFailedLoads()
+	retryFailedLoads() error
 	prefix() string
 	setGuilds(guilds func() []snowflake.ID)
 }
@@ -340,35 +343,43 @@ func (b *Bot) loadState() error {
 // retryFailedLoads retries every failed load, the stores concurrently as in
 // loadState, so a hung S3 holds up shutdown by about a storeS3Timeout per
 // guild rather than per guild and store.
-func (b *Bot) retryFailedLoads() {
+func (b *Bot) retryFailedLoads() error {
+	stores := b.stateStores()
+	errs := make([]error, len(stores))
 	var wg sync.WaitGroup
-	for _, s := range b.stateStores() {
-		wg.Go(s.retryFailedLoads)
+	for i, s := range stores {
+		wg.Go(func() { errs[i] = s.retryFailedLoads() })
 	}
 	wg.Wait()
+	return errors.Join(errs...)
 }
 
-// saveState saves every per-guild state store.
+// saveState saves every per-guild state store. Each logs its own failures.
 func (b *Bot) saveState() {
-	b.autoRole.save()
-	b.eventLog.save()
-	b.modLog.save()
-	b.topPostersConfig.save()
-	b.saveTopPosters()
-	b.posterRole.save()
-	b.tickets.save()
-	b.shortcuts.save()
-	b.welcome.save()
-	b.saveStarboard()
-	b.renameLogs.save()
-	b.tempRoleConfig.save()
-	b.tempRoles.save()
+	_ = errors.Join(
+		b.autoRole.save(),
+		b.eventLog.save(),
+		b.modLog.save(),
+		b.topPostersConfig.save(),
+		b.saveTopPosters(),
+		b.posterRole.save(),
+		b.tickets.save(),
+		b.shortcuts.save(),
+		b.welcome.save(),
+		b.saveStarboard(),
+		b.renameLogs.save(),
+		b.tempRoleConfig.save(),
+		b.tempRoles.save(),
+	)
 }
 
-// startLoop runs fn every interval until b.stop is closed. stopLoops waits
-// for it, so a run in progress finishes before the final saves.
-func (b *Bot) startLoop(interval time.Duration, fn func()) {
-	b.loops.Go(func() { botutil.RunSaveLoop(&b.Ready, interval, b.stop, fn) })
+// startLoop runs fn every interval, each run a run of job, until b.stop is
+// closed. stopLoops waits for it, so a run in progress finishes before the
+// final saves.
+func (b *Bot) startLoop(interval time.Duration, job *telemetry.Job, fn func() error) {
+	b.loops.Go(func() {
+		botutil.RunJobLoop(&b.Ready, interval, b.stop, job, func(context.Context) error { return fn() })
+	})
 }
 
 // stopLoops stops the loops started by startLoop and waits for them to return.
@@ -406,24 +417,24 @@ func (b *Bot) Run() error {
 	}
 	go b.forumReminderLoop()
 	// Not a startLoop: it saves nothing, and a hung ping would hold up shutdown.
-	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
-	b.startLoop(1*time.Minute, b.retryFailedLoads)
-	b.startLoop(5*time.Minute, b.saveTopPosters)
-	b.startLoop(5*time.Minute, b.posterRole.save)
-	b.startLoop(5*time.Minute, b.shortcuts.save)
-	b.startLoop(5*time.Minute, b.tickets.save)
-	b.startLoop(5*time.Minute, b.welcome.save)
-	b.startLoop(5*time.Minute, b.saveCaches) // also prunes expired messages
-	b.startLoop(1*time.Hour, func() { pruneCorruptBackups(b.S3, b.Log, time.Now()) })
-	b.startLoop(5*time.Minute, b.saveStarboard)
-	b.startLoop(5*time.Minute, b.retryStarboardDeletes)
-	b.startLoop(5*time.Minute, b.renameLogs.save)
-	b.startLoop(5*time.Minute, b.tempRoles.save)
-	b.startLoop(1*time.Minute, b.processTempRoleExpiries)
+	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.Heartbeat)
+	b.startLoop(1*time.Minute, retryFailedLoadsJob, b.retryFailedLoads)
+	b.startLoop(5*time.Minute, saveTopPostersJob, b.saveTopPosters)
+	b.startLoop(5*time.Minute, savePosterRoleJob, b.posterRole.save)
+	b.startLoop(5*time.Minute, saveShortcutsJob, b.shortcuts.save)
+	b.startLoop(5*time.Minute, saveTicketsJob, b.tickets.save)
+	b.startLoop(5*time.Minute, saveWelcomeJob, b.welcome.save)
+	b.startLoop(5*time.Minute, saveCachesJob, b.saveCaches) // also prunes expired messages
+	b.startLoop(1*time.Hour, pruneCorruptBackupsJob, func() error { return pruneCorruptBackups(b.S3, b.Log, time.Now()) })
+	b.startLoop(5*time.Minute, saveStarboardJob, b.saveStarboard)
+	b.startLoop(5*time.Minute, retryStarboardDeletesJob, b.retryStarboardDeletes)
+	b.startLoop(5*time.Minute, saveRenameLogsJob, b.renameLogs.save)
+	b.startLoop(5*time.Minute, saveTempRolesJob, b.tempRoles.save)
+	b.startLoop(1*time.Minute, processTempRoleExpiriesJob, b.processTempRoleExpiries)
 
 	shutdownErr := b.WaitForShutdown("Bot")
 	b.stopLoops()
 	b.saveState()
-	b.saveCaches()
+	_ = b.saveCaches() // it logs its own failures
 	return shutdownErr
 }

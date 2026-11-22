@@ -54,6 +54,8 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 	}
 
 	client, err := disgo.New(cfg.Token,
+		botutil.RESTClient(),
+		botutil.CountEvents(),
 		// Handlers run off the gateway goroutine: stopping a repost loop
 		// waits out a repost in flight, which must not stall other events or
 		// heartbeat ACKs.
@@ -76,7 +78,7 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.OnGuildJoin),
 		bot.WithEventListenerFunc(b.onGuildReady),
-		bot.WithEventListenerFunc(b.onCommand),
+		bot.WithEventListenerFunc(botutil.TraceCommands(b.onCommand)),
 		bot.WithEventListenerFunc(b.onMessage),
 		bot.WithEventListenerFunc(b.onSessionReady),
 		bot.WithEventListenerFunc(b.onThreadMemberAdd),
@@ -118,12 +120,9 @@ func (b *Bot) Run() error {
 		b.shutdown()
 		return fmt.Errorf("registering commands: %w", err)
 	}
-	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, func() {
-		b.loadReminders() // retries guilds whose load failed; refusals are logged
-		b.saveAllReminders()
-	})
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.saveMemberCounts)
+	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.Heartbeat)
+	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, saveRemindersJob, func(context.Context) error { return b.retryAndSaveReminders() })
+	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, saveMemberCountsJob, func(context.Context) error { return b.saveMemberCounts() })
 
 	shutdownErr := b.WaitForShutdown("Threadbot")
 	b.shutdown()
@@ -135,8 +134,7 @@ func (b *Bot) Run() error {
 func (b *Bot) shutdown() {
 	close(b.stop)
 	b.stopAllReminderGoroutines()
-	b.saveAllReminders()
-	b.saveMemberCounts()
+	_ = errors.Join(b.saveAllReminders(), b.saveMemberCounts()) // each failure is logged
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {

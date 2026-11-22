@@ -120,6 +120,7 @@ func OnlyBotsAfter(restClient rest.Rest, channelID, lastMsgID snowflake.ID, log 
 
 // RegisterGuildCommands registers the given commands for each of the provided guilds.
 func RegisterGuildCommands(client *bot.Client, guildIDs []snowflake.ID, commands []discord.ApplicationCommandCreate, log *slog.Logger) error {
+	RegisterCommandNames(commands)
 	for _, guildID := range guildIDs {
 		if _, err := client.Rest.SetGuildCommands(client.ApplicationID, guildID, commands); err != nil {
 			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)

@@ -55,6 +55,9 @@ var downloadClient = newFetchClient(0, 30*time.Second)
 // connection, including each redirect hop, is checked against blockedIP at
 // dial time, so redirects and DNS rebinding can't reach internal addresses.
 // Proxies are disabled so the checked address is the one connected to.
+// Calls are traced and timed as "fetch", outside the checked transport. The
+// host is the user's choice: svc/telemetry's metric view drops it, but the
+// client span still carries it as server.address.
 func newFetchClient(timeout, responseHeaderTimeout time.Duration) *http.Client {
 	dialer := &net.Dialer{
 		Timeout: 30 * time.Second,
@@ -64,7 +67,7 @@ func newFetchClient(timeout, responseHeaderTimeout time.Duration) *http.Client {
 	t.Proxy = nil
 	t.DialContext = dialer.DialContext
 	t.ResponseHeaderTimeout = responseHeaderTimeout
-	return &http.Client{Timeout: timeout, Transport: t}
+	return &http.Client{Timeout: timeout, Transport: telemetry.Transport("fetch", t)}
 }
 
 // dialCheck rejects connections to blocked addresses. It is a variable so
