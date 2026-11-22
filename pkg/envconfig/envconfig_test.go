@@ -8,12 +8,11 @@ import (
 	"testing"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
-	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
 )
 
 // allVars is every variable any loader reads.
 var allVars = []string{
-	"OP_SERVICE_ACCOUNT_TOKEN", "SPROBOT_DISCORD_TOKEN", "SPROBOT_HEALTHCHECK_ENDPOINT",
+	"SPROBOT_DISCORD_TOKEN", "SPROBOT_HEALTHCHECK_ENDPOINT",
 	"S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_BUCKET", "WEB_ENDPOINT", "PORT",
 }
 
@@ -25,8 +24,8 @@ func setEnv(t *testing.T, env map[string]string) {
 	}
 }
 
-// prodLike is the environment the production units give the bots today,
-// with plain values in place of their op:// references.
+// prodLike is the environment the production units give the bots: plain
+// values, rendered on the host.
 func prodLike() map[string]string {
 	return map[string]string{
 		"SPROBOT_DISCORD_TOKEN":        "MTA.secret-token.value",
@@ -155,89 +154,55 @@ func TestLoadWeb(t *testing.T) {
 	}
 }
 
-// op:// references are resolved in one request, and their resolved values
-// are checked like plain ones.
-func TestLoadResolvesReferencesOnce(t *testing.T) {
-	var calls [][]string
-	restore := opsecrets.ResolveForTesting(func(refs []string) (map[string]string, error) {
-		calls = append(calls, slices.Clone(refs))
-		out := map[string]string{}
-		for _, ref := range refs {
-			out[ref] = "resolved-" + strings.TrimPrefix(ref, "op://v/i/")
-		}
-		out["op://v/i/badtoken"] = "has space"
-		return out, nil
-	})
-	t.Cleanup(restore)
-
+// A 1Password reference that reaches a program is refused, whichever variable
+// holds it (required, optional or not a secret) and whichever loader reads it:
+// one problem per variable, nothing past "op://" quoted, other problems still
+// reported. A leftover OP_SERVICE_ACCOUNT_TOKEN is ignored like any unused
+// variable.
+func TestLoadRefusesOPReferences(t *testing.T) {
+	refusal := func(name string) string {
+		return name + " is a 1Password reference (op://…); render it on the host (quadlet/render-env.sh)"
+	}
 	env := prodLike()
-	env["OP_SERVICE_ACCOUNT_TOKEN"] = "ops_x"
-	env["SPROBOT_DISCORD_TOKEN"] = "op://v/i/token"
-	env["S3_KEY"] = "op://v/i/key"
-	env["S3_SECRET"] = "op://v/i/secret"
-	setEnv(t, env)
-
-	cfg, err := LoadBot("SPROBOT")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Token != "resolved-token" || cfg.S3Key != "resolved-key" || cfg.S3Secret != "resolved-secret" {
-		t.Fatalf("LoadBot = %+v", cfg)
-	}
-	if len(calls) != 1 || len(calls[0]) != 3 {
-		t.Fatalf("resolve calls = %q, want one with 3 references", calls)
-	}
-
-	restore()
-	t.Cleanup(opsecrets.ResolveForTesting(func(refs []string) (map[string]string, error) {
-		return map[string]string{"op://v/i/token": "has space"}, nil
-	}))
-	t.Setenv("SPROBOT_DISCORD_TOKEN", "op://v/i/token")
-	t.Setenv("S3_KEY", "plain")
-	t.Setenv("S3_SECRET", "plain")
-	got := problems(t, func() error { _, err := LoadBot("SPROBOT"); return err }())
-	if len(got) != 1 || !strings.HasPrefix(got[0], "SPROBOT_DISCORD_TOKEN contains") {
-		t.Fatalf("problems = %q", got)
-	}
-}
-
-// Without the service-account token, references are a problem, not a
-// request, and the rest is still checked.
-func TestLoadReferencesWithoutToken(t *testing.T) {
-	restore := opsecrets.ResolveForTesting(func(refs []string) (map[string]string, error) {
-		t.Fatalf("resolve called with %q", refs)
-		return nil, nil
-	})
-	t.Cleanup(restore)
-
-	env := prodLike()
-	env["SPROBOT_DISCORD_TOKEN"] = "op://v/i/token"
-	env["S3_KEY"] = "op://v/i/key"
+	env["SPROBOT_DISCORD_TOKEN"] = "op://sekrit vault/discord-sprobot/token"
+	env["SPROBOT_HEALTHCHECK_ENDPOINT"] = "op://sekrit vault/hc/url"
+	env["S3_KEY"] = "op://sekrit vault/linode-s3/access_key"
+	env["S3_ENDPOINT"] = "op://sekrit vault/linode-s3/endpoint"
 	env["S3_BUCKET"] = ""
 	setEnv(t, env)
+	t.Setenv("OP_SERVICE_ACCOUNT_TOKEN", "ops_sekrit")
 
-	got := problems(t, func() error { _, err := LoadBot("SPROBOT"); return err }())
-	want := []string{
-		"OP_SERVICE_ACCOUNT_TOKEN is not set, but resolves the 1Password references (op://) in SPROBOT_DISCORD_TOKEN, S3_KEY",
-		"S3_BUCKET is not set",
+	storage := []string{refusal("S3_KEY"), refusal("S3_ENDPOINT"), "S3_BUCKET is not set"}
+	for _, tc := range []struct {
+		name string
+		load func() error
+		want []string
+	}{
+		{"LoadBot", func() error { _, err := LoadBot("SPROBOT"); return err },
+			append([]string{refusal("SPROBOT_DISCORD_TOKEN"), refusal("SPROBOT_HEALTHCHECK_ENDPOINT")}, storage...)},
+		{"LoadWeb", func() error { _, err := LoadWeb(); return err }, storage},
+		{"LoadStorage", func() error { _, err := LoadStorage(); return err }, storage},
+	} {
+		err := tc.load()
+		if got := problems(t, err); !slices.Equal(got, tc.want) {
+			t.Errorf("%s problems = %q, want %q", tc.name, got, tc.want)
+		}
+		var log bytes.Buffer
+		Log(logsetup.New(&log), err)
+		if strings.Contains(strings.ToLower(err.Error()+log.String()), "sekrit") {
+			t.Errorf("%s: a value leaked:\n%s\n%s", tc.name, err, log.String())
+		}
 	}
-	if !slices.Equal(got, want) {
+
+	// An optional variable holding a reference is refused, not defaulted.
+	t.Setenv("S3_KEY", "KEYVALUE")
+	t.Setenv("S3_ENDPOINT", "https://bucket.region.example.com/")
+	t.Setenv("S3_BUCKET", "profile-bot")
+	t.Setenv("WEB_ENDPOINT", "op://v/i/web")
+	t.Setenv("PORT", "op://v/i/port")
+	got := problems(t, func() error { _, err := LoadWeb(); return err }())
+	if want := []string{refusal("PORT"), refusal("WEB_ENDPOINT")}; !slices.Equal(got, want) {
 		t.Fatalf("problems = %q, want %q", got, want)
-	}
-}
-
-func TestLoadReferenceFailure(t *testing.T) {
-	t.Cleanup(opsecrets.ResolveForTesting(func(refs []string) (map[string]string, error) {
-		return nil, errors.New("rate limited")
-	}))
-	env := prodLike()
-	env["OP_SERVICE_ACCOUNT_TOKEN"] = "ops_x"
-	env["S3_SECRET"] = "op://v/i/secret"
-	setEnv(t, env)
-
-	got := problems(t, func() error { _, err := LoadStorage(); return err }())
-	if len(got) < 2 || !strings.Contains(got[0], "S3_SECRET") || !slices.Contains(got, "rate limited") {
-		t.Fatalf("problems = %q", got)
 	}
 }
 

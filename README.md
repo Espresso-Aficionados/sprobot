@@ -125,11 +125,10 @@ go test -race ./...
 
 ## Environment Variables
 
-See `config/example.env` for the full list. Each program checks its whole environment at startup, before it connects to anything: a missing or malformed variable logs one `Invalid environment` line per problem, naming the variable (never its value), and exits 1. The tokens, `S3_KEY`/`S3_SECRET` and the healthcheck URLs may be plain values or 1Password secret references (`op://vault/item/field`), resolved at startup through `OP_SERVICE_ACCOUNT_TOKEN` in prod. In dev, the run scripts resolve them before the container starts. Key variables:
+See `config/example.env` for the full list. Each program checks its whole environment at startup, before it connects to anything: a missing or malformed variable logs one `Invalid environment` line per problem, naming the variable (never its value), and exits 1. Every value must be plain: the programs don't talk to 1Password. Secrets are rendered before the container starts, in prod on the host (homelab-configs `quadlet/render-env.sh`) and in dev by the run scripts' `op run`. A value that is still a 1Password reference (`op://…`) is refused as a problem naming the variable. Key variables:
 
 | Variable | Description |
 |---|---|
-| `OP_SERVICE_ACCOUNT_TOKEN` | Prod only: 1Password service account the binaries use to resolve `op://` values that reach them |
 | `SPROBOT_DISCORD_TOKEN` | Discord token for sprobot |
 | `STICKYBOT_DISCORD_TOKEN` | Discord token for stickybot |
 | `THREADBOT_DISCORD_TOKEN` | Discord token for threadbot |
@@ -155,7 +154,7 @@ They were published to Docker Hub as `sadbox/*` until November 2026; those image
 
 A publish moves `latest` for all four images only if its commit is still the tip of `main`. The first images built from a commit are tagged `sha-<short commit SHA>`, and that tag never moves; later builds of the same commit (re-runs, manual runs) are tagged `sha-<short commit SHA>-<UTC build time>` instead. Images carry the full commit SHA in the `org.opencontainers.image.revision` label, so a running image can be traced to its commit and rolled back by tag.
 
-Every state document the bots persist (the per-guild JSON in S3, and sprobot's `/sprobot-cache`) has a state version; one without a `"version"` is version 1. A build refuses state a newer build wrote: it logs which document and exits 1 at startup, and never rewrites, backs up or deletes it. Before rolling an image back, or as a start gate, run its `-check-state` (add `-json` for one JSON object). It reads that bot's state read-only: S3 GETs for every allowed guild, plus sprobot's cache dir. It prints each document's version and exits 0 if the build can run on it, 3 if a newer build wrote some of it, or 1 if some can't be read. It needs the S3 variables (`S3_*`, and `OP_SERVICE_ACCOUNT_TOKEN` for `op://` values) and network, but not the Discord token. sprobot-web keeps no state, so its `-check-state` always exits 0. Images from before state versions ignore their arguments: `-check-state` on one starts the bot.
+Every state document the bots persist (the per-guild JSON in S3, and sprobot's `/sprobot-cache`) has a state version; one without a `"version"` is version 1. A build refuses state a newer build wrote: it logs which document and exits 1 at startup, and never rewrites, backs up or deletes it. Before rolling an image back, or as a start gate, run its `-check-state` (add `-json` for one JSON object). It reads that bot's state read-only: S3 GETs for every allowed guild, plus sprobot's cache dir. It prints each document's version and exits 0 if the build can run on it, 3 if a newer build wrote some of it, or 1 if some can't be read. It needs the S3 variables (`S3_*`) and network, but not the Discord token. sprobot-web keeps no state, so its `-check-state` always exits 0. Images from before state versions ignore their arguments: `-check-state` on one starts the bot.
 
 Each image carries BuildKit provenance and an SBOM, plus a GitHub build-provenance attestation: `gh attestation verify oci://ghcr.io/espresso-aficionados/sprobot:latest -R Espresso-Aficionados/sprobot`.
 
