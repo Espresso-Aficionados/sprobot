@@ -26,19 +26,20 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 # The distroless base is pinned as :nonroot@sha256 (index digest). Dependabot
 # tracks it: a refreshed :nonroot arrives as a digest-bump PR. :nonroot
-# already runs as nonroot (uid/gid 65532); USER below says so explicitly, and
-# /sprobot-cache is owned by that uid, as on bonnet's volume.
+# already runs as nonroot (uid/gid 65532); USER below says so explicitly, by
+# number (hadolint DL3066), and /sprobot-cache is owned by that uid, as on
+# bonnet's volume.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS prod
 COPY --from=build-sprobot /sprobot /sprobot
-COPY --from=base --chown=nonroot:nonroot /empty-dir /sprobot-cache
+COPY --from=base --chown=65532:65532 /empty-dir /sprobot-cache
 VOLUME /sprobot-cache
-USER nonroot:nonroot
+USER 65532:65532
 CMD ["/sprobot"]
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS prodweb
 ENV PORT=9001
 COPY --from=build-sprobot-web /sprobot-web /sprobot-web
-USER nonroot:nonroot
+USER 65532:65532
 CMD ["/sprobot-web"]
 
 FROM build-sprobot AS dev
@@ -52,7 +53,7 @@ CMD ["/sprobot-web"]
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS prodstickybot
 COPY --from=build-stickybot /stickybot /stickybot
-USER nonroot:nonroot
+USER 65532:65532
 CMD ["/stickybot"]
 
 FROM build-stickybot AS devstickybot
@@ -60,7 +61,7 @@ CMD ["/stickybot"]
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS prodthreadbot
 COPY --from=build-threadbot /threadbot /threadbot
-USER nonroot:nonroot
+USER 65532:65532
 CMD ["/threadbot"]
 
 FROM build-threadbot AS devthreadbot

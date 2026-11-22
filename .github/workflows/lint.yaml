@@ -1,0 +1,24 @@
+# sadbox/ci's lint.yml: actionlint, zizmor, shellcheck, hadolint and the
+# actions.lock check, each run only where it applies. Every PR and every
+# push to main, with no path filter, so each job can be a required check.
+# The Go checks stay in test.yaml.
+name: lint
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    uses: sadbox/ci/.github/workflows/lint.yml@f3098bcadaa3401017253eebe9e9f6bb19febd5b # v0.1.2
+    permissions:
+      contents: read
