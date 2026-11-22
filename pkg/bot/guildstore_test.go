@@ -221,7 +221,10 @@ func TestGuildStateStoreFetchErrorRefusesWritesUntilRetry(t *testing.T) {
 	if err := store.persist(testGuild); !errors.Is(err, errNotLoaded) {
 		t.Errorf("persist = %v, want errNotLoaded", err)
 	}
-	store.save()
+	// An unloaded guild has no state to save; retryFailedLoads reports it.
+	if err := store.save(); err != nil {
+		t.Errorf("save: %v", err)
+	}
 	if got, _ := h.object(testObject(testGuild)); got != `{"value":"real"}` {
 		t.Errorf("stored data = %q, want it untouched", got)
 	}
@@ -229,14 +232,18 @@ func TestGuildStateStoreFetchErrorRefusesWritesUntilRetry(t *testing.T) {
 		t.Errorf("other guild's state = %q, %v, want it saved", got, ok)
 	}
 
-	// Still failing: the retry changes nothing.
-	store.retryFailedLoads()
+	// Still failing: the retry changes nothing, and its job fails.
+	if err := store.retryFailedLoads(); err == nil {
+		t.Error("retryFailedLoads succeeded while a guild is still unloaded")
+	}
 	if store.get(testGuild) != nil {
 		t.Fatal("retry installed state while the fetch still fails")
 	}
 
 	h.setHook(nil)
-	store.retryFailedLoads()
+	if err := store.retryFailedLoads(); err != nil {
+		t.Errorf("retryFailedLoads after recovery: %v", err)
+	}
 	st := store.get(testGuild)
 	if value(st) != "real" {
 		t.Fatalf("Value after retry = %q, want the stored data", value(st))

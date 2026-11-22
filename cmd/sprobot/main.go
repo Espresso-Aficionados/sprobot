@@ -19,12 +19,17 @@ func main() {
 		envconfig.Fatal(err)
 	}
 
+	shutdownTelemetry := botutil.StartTelemetry("sprobot")
+
 	b, err := bot.New(cfg)
 	if err != nil {
+		shutdownTelemetry()
 		logsetup.Fatal("Failed to create bot", "error", err)
 	}
 
-	if err := b.Run(); err != nil {
+	err = b.Run()
+	shutdownTelemetry()
+	if err != nil {
 		logsetup.Fatal("Bot error", "error", err)
 	}
 }

@@ -19,7 +19,7 @@ const HealthURL = "http://" + HealthAddr + "/healthz"
 
 // ServeHealth serves GET /healthz on HealthAddr until the process exits. It
 // answers 200 while the gateway is connected and ready, the same rule as
-// PingHealthcheck, and 503 otherwise. Call it before OpenGateway, so the
+// Heartbeat, and 503 otherwise. Call it before OpenGateway, so the
 // container's healthcheck gets an answer during startup too.
 func (b *BaseBot) ServeHealth() {
 	srv := &http.Server{

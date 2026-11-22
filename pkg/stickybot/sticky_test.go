@@ -378,10 +378,16 @@ func TestRetryFailedLoadsUnloadedGuild(t *testing.T) {
 	if _, ok := b.stickies[testGuildID]; ok {
 		t.Fatal("guild loaded although its fetch failed")
 	}
+	// Its job fails while the guild is unloaded, and succeeds once loaded.
+	if err := b.retryFailed(); err == nil {
+		t.Error("retryFailed succeeded while a guild is unloaded")
+	}
 	fake.Mu.Lock()
 	delete(fake.Fail, path)
 	fake.Mu.Unlock()
-	b.retryFailed()
+	if err := b.retryFailed(); err != nil {
+		t.Errorf("retryFailed after recovery: %v", err)
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()

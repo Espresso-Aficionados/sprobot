@@ -38,3 +38,28 @@ func TestNewInstrumentsS3(t *testing.T) {
 		t.Errorf("client request peers = %q, want s3", peers)
 	}
 }
+
+// Fetches of user-supplied URLs are recorded as "fetch", and the
+// instrumentation sits outside the dial check, which still refuses
+// internal addresses.
+func TestFetchClientsInstrumented(t *testing.T) {
+	rec := telemetrytest.Install(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(srv.Close)
+
+	resp, err := httpClient.Get(srv.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("fetch of a loopback address wasn't blocked")
+	}
+
+	found := false
+	for _, p := range rec.Points(t, "http.client.request.duration") {
+		if p.Get("peer.service") == "fetch" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no client request recorded for peer fetch")
+	}
+}

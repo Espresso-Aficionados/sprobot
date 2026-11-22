@@ -46,21 +46,25 @@ func setFatalCloseDelay(t *testing.T, d time.Duration) {
 	})
 }
 
-func TestPingHealthcheckOnlyWhenGatewayReady(t *testing.T) {
+// Heartbeat pings, and records a gateway_ready success, only while the
+// gateway is ready; the success needs no endpoint.
+func TestHeartbeatOnlyWhenGatewayReady(t *testing.T) {
 	var pings atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { pings.Add(1) }))
 	defer srv.Close()
 
 	tests := []struct {
-		name   string
-		client *bot.Client
-		want   int32
+		name     string
+		client   *bot.Client
+		endpoint string
+		want     int32
 	}{
-		{"ready", &bot.Client{Gateway: fakeGateway{status: gateway.StatusReady}}, 1},
-		{"disconnected", &bot.Client{Gateway: fakeGateway{status: gateway.StatusDisconnected}}, 0},
-		{"resuming", &bot.Client{Gateway: fakeGateway{status: gateway.StatusResuming}}, 0},
-		{"no gateway", &bot.Client{}, 0},
-		{"no client", nil, 0},
+		{"ready", &bot.Client{Gateway: fakeGateway{status: gateway.StatusReady}}, srv.URL, 1},
+		{"ready, no endpoint", &bot.Client{Gateway: fakeGateway{status: gateway.StatusReady}}, "", 0},
+		{"disconnected", &bot.Client{Gateway: fakeGateway{status: gateway.StatusDisconnected}}, srv.URL, 0},
+		{"resuming", &bot.Client{Gateway: fakeGateway{status: gateway.StatusResuming}}, srv.URL, 0},
+		{"no gateway", &bot.Client{}, srv.URL, 0},
+		{"no client", nil, srv.URL, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -68,12 +72,18 @@ func TestPingHealthcheckOnlyWhenGatewayReady(t *testing.T) {
 			b := &BaseBot{
 				Client:              tt.client,
 				Log:                 testutil.DiscardLogger(),
-				healthcheckEndpoint: srv.URL,
+				healthcheckEndpoint: tt.endpoint,
 				httpClient:          srv.Client(),
 			}
-			b.PingHealthcheck()
+			before := gatewayReadyJob.LastSuccess()
+			time.Sleep(time.Millisecond) // so a success is a later time
+			b.Heartbeat()
 			if got := pings.Load(); got != tt.want {
 				t.Errorf("pings = %d, want %d", got, tt.want)
+			}
+			ready := tt.client != nil && tt.client.Gateway != nil && tt.client.Gateway.Status() == gateway.StatusReady
+			if moved := gatewayReadyJob.LastSuccess().After(before); moved != ready {
+				t.Errorf("gateway_ready moved = %v, want %v", moved, ready)
 			}
 		})
 	}
@@ -177,7 +187,7 @@ func TestPingHealthcheckFailureHidesURL(t *testing.T) {
 		healthcheckEndpoint: endpoint,
 		httpClient:          &http.Client{Timeout: time.Second},
 	}
-	b.PingHealthcheck()
+	b.Heartbeat()
 
 	out := logs.String()
 	if !strings.Contains(out, "Healthcheck ping failed") {

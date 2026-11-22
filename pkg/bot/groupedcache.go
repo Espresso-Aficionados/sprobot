@@ -818,19 +818,21 @@ func loadCache[D, T any](b *Bot, file string, c *cappedGroupedCache[T], entry fu
 // saveCaches prunes expired messages, then writes every persisted cache to
 // the cache dir. The saves run one after another, so only one snapshot is
 // held at a time.
-func (b *Bot) saveCaches() {
+func (b *Bot) saveCaches() error {
 	b.pruneMessageCache()
-	b.saveMessageCache()
-	saveCache(b, memberCacheFile, b.memberCache.snapshot())
-	saveCache(b, guildCacheFile, b.guildCache.snapshot())
-	saveCache(b, channelCacheFile, b.channelCache.snapshot())
-	saveCache(b, roleCacheFile, b.roleCache.snapshot())
-	saveCache(b, emojiCacheFile, b.emojiCache.snapshot())
-	saveCache(b, stickerCacheFile, b.stickerCache.snapshot())
-	saveCache(b, voiceStateCacheFile, b.voiceStateCache.snapshot())
-	saveCache(b, stageInstanceCacheFile, b.stageInstanceCache.snapshot())
-	saveCache(b, scheduledEventCacheFile, b.scheduledEventCache.snapshot())
-	saveCache(b, soundboardSoundCacheFile, b.soundboardSoundCache.snapshot())
+	return errors.Join(
+		b.saveMessageCache(),
+		saveCache(b, memberCacheFile, b.memberCache.snapshot()),
+		saveCache(b, guildCacheFile, b.guildCache.snapshot()),
+		saveCache(b, channelCacheFile, b.channelCache.snapshot()),
+		saveCache(b, roleCacheFile, b.roleCache.snapshot()),
+		saveCache(b, emojiCacheFile, b.emojiCache.snapshot()),
+		saveCache(b, stickerCacheFile, b.stickerCache.snapshot()),
+		saveCache(b, voiceStateCacheFile, b.voiceStateCache.snapshot()),
+		saveCache(b, stageInstanceCacheFile, b.stageInstanceCache.snapshot()),
+		saveCache(b, scheduledEventCacheFile, b.scheduledEventCache.snapshot()),
+		saveCache(b, soundboardSoundCacheFile, b.soundboardSoundCache.snapshot()),
+	)
 }
 
 func saveCache[T any](b *Bot, file string, items []T) error {
@@ -845,9 +847,11 @@ func saveCache[T any](b *Bot, file string, items []T) error {
 // fails: a failed write leaves the old file in place, and while writes keep
 // failing (a full disk, say) it would age past messageRetention. A newer
 // build's file is the exception: it is that build's to prune.
-func (b *Bot) saveMessageCache() {
-	if err := saveCache(b, messageCacheFile, b.msgCache.snapshot()); err == nil || statever.IsNewer(err) {
-		return
+// It returns the save's error.
+func (b *Bot) saveMessageCache() error {
+	saveErr := saveCache(b, messageCacheFile, b.msgCache.snapshot())
+	if saveErr == nil || statever.IsNewer(saveErr) {
+		return saveErr
 	}
 	err := os.Remove(filepath.Join(b.cacheDir, messageCacheFile))
 	switch {
@@ -856,6 +860,7 @@ func (b *Bot) saveMessageCache() {
 	case !errors.Is(err, fs.ErrNotExist):
 		b.Log.Error("Failed to remove the message cache file after a failed save", "file", messageCacheFile, "error", err)
 	}
+	return saveErr
 }
 
 // readCacheFile decodes the JSON array in dir/name one element at a time,

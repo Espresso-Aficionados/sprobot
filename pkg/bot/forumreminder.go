@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -158,7 +159,7 @@ func (b *Bot) forumReminderLoop() {
 				b.Log.Error("Panic in forum reminder", "error", r)
 			}
 		}()
-		b.sendForumReminders()
+		_ = forumRemindersJob.Run(context.Background(), func(context.Context) error { return b.sendForumReminders() })
 	}
 
 	safeRemind()
@@ -172,21 +173,24 @@ func (b *Bot) forumReminderLoop() {
 	}
 }
 
-func (b *Bot) sendForumReminders() {
+// sendForumReminders fails if a forum's active threads couldn't be listed.
+func (b *Bot) sendForumReminders() error {
 	now := time.Now()
+	var errs []error
 	fullSync := now.Sub(b.forumReminders.lastSync) >= forumReminderSync
 	if fullSync {
 		b.forumReminders.lastSync = now
 	}
 	for forumID, info := range b.threadHelpConfig {
 		if fullSync {
-			b.syncForumThreads(forumID, info.GuildID)
+			errs = append(errs, b.syncForumThreads(forumID, info.GuildID))
 		}
 		threads := b.Client.Caches.GuildThreadsInChannel(forumID)
 		for _, thread := range forumReminderCandidates(threads, forumID, info.MaxThreadAge, now, b.forumReminders.status) {
 			b.checkThread(thread, info)
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // syncForumThreads brings the channel cache's copy of a forum's threads in
@@ -194,11 +198,11 @@ func (b *Bot) sendForumReminders() {
 // current while connected, but it is saved across restarts, and nothing
 // reports threads archived or deleted while the bot was down, or a thread
 // whose create event was missed.
-func (b *Bot) syncForumThreads(forumID, guildID snowflake.ID) {
+func (b *Bot) syncForumThreads(forumID, guildID snowflake.ID) error {
 	active, err := b.Client.Rest.GetActiveGuildThreads(guildID)
 	if err != nil {
 		b.Log.Error("Failed to get active threads", "guild_id", guildID, "error", err)
-		return
+		return err
 	}
 	listed := make(map[snowflake.ID]bool)
 	for _, t := range active.Threads {
@@ -225,6 +229,7 @@ func (b *Bot) syncForumThreads(forumID, guildID snowflake.ID) {
 			b.Client.Caches.AddChannel(fresh)
 		}
 	}
+	return nil
 }
 
 // dropForumThread gives up on a thread Discord says is gone or off limits.

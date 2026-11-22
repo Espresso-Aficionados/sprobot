@@ -87,11 +87,32 @@ func (b *Bot) loadStickies() error {
 }
 
 // retryFailed retries what failed against S3: loads, saves and file
-// deletions.
-func (b *Bot) retryFailed() {
+// deletions. It fails if any of them is still outstanding.
+func (b *Bot) retryFailed() error {
 	b.loadStickies() // refusals are logged; only startup exits on them
 	b.saveUnsavedStickies()
 	b.retryFileDeletes()
+	return b.outstanding()
+}
+
+// outstanding is what retryFailed has yet to get through, or nil.
+func (b *Bot) outstanding() error {
+	b.mu.Lock()
+	unloaded := 0
+	for _, guildID := range botutil.AllowedGuildIDs {
+		if _, ok := b.stickies[guildID]; !ok {
+			unloaded++
+		}
+	}
+	undeleted := len(b.undeleted)
+	b.mu.Unlock()
+	b.saveMu.Lock()
+	unsaved := len(b.unsaved)
+	b.saveMu.Unlock()
+	if unloaded+unsaved+undeleted == 0 {
+		return nil
+	}
+	return fmt.Errorf("outstanding: %d guild(s) not loaded, %d not saved, %d file(s) not deleted", unloaded, unsaved, undeleted)
 }
 
 // guildLoaded reports whether guildID's stickies are in memory, first

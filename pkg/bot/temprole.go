@@ -232,8 +232,9 @@ func isUnknownMemberOrRole(err error) bool {
 // processTempRoleExpiries removes expired temp roles. An entry stays in the
 // state until its role is actually gone, so a failed removal is retried on the
 // next tick, and a message from the user meanwhile doesn't start a new timer.
-func (b *Bot) processTempRoleExpiries() {
+func (b *Bot) processTempRoleExpiries() error {
 	now := time.Now()
+	var errs []error
 	b.tempRoles.each(func(guildID snowflake.ID, st *tempRoleState) {
 		expired := st.expired(now)
 		if len(expired) == 0 {
@@ -263,6 +264,7 @@ func (b *Bot) processTempRoleExpiries() {
 			err := b.Client.Rest.RemoveMemberRole(guildID, entry.UserID, entry.RoleID, rest.WithReason("Temp role expired"))
 			if err != nil && !isUnknownMemberOrRole(err) {
 				b.Log.Error("Failed to remove expired temp role, will retry", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "error", err)
+				errs = append(errs, err)
 				continue
 			}
 			changed = true
@@ -287,8 +289,10 @@ func (b *Bot) processTempRoleExpiries() {
 		}
 		if err := b.tempRoles.persist(guildID); err != nil {
 			b.Log.Error("Failed to persist temp roles after expiry", "guild_id", guildID, "error", err)
+			errs = append(errs, err)
 		}
 	})
+	return errors.Join(errs...)
 }
 
 // regrantTempRole grants entry's role again after the expiry loop removed it

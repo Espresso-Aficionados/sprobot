@@ -52,6 +52,8 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 	}
 
 	client, err := disgo.New(cfg.Token,
+		botutil.RESTClient(),
+		botutil.CountEvents(),
 		// Handlers run off the gateway goroutine: stopping a repost loop
 		// waits out a repost in flight, which must not stall other events or
 		// heartbeat ACKs.
@@ -68,8 +70,8 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.OnGuildJoin),
 		bot.WithEventListenerFunc(b.onGuildReady),
-		bot.WithEventListenerFunc(b.onCommand),
-		bot.WithEventListenerFunc(b.onModal),
+		bot.WithEventListenerFunc(botutil.TraceCommands(b.onCommand)),
+		bot.WithEventListenerFunc(botutil.TraceModals(modalNames, b.onModal)),
 		bot.WithEventListenerFunc(b.onMessage),
 		bot.WithEventListenerFunc(b.onChannelDelete),
 		bot.WithEventListenerFunc(b.onThreadDelete),
@@ -105,8 +107,8 @@ func (b *Bot) Run() error {
 		b.shutdown()
 		return fmt.Errorf("registering commands: %w", err)
 	}
-	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.PingHealthcheck)
-	go botutil.RunSaveLoop(&b.Ready, 5*time.Minute, b.stop, b.retryFailed)
+	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.Heartbeat)
+	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, retryFailedJob, func(context.Context) error { return b.retryFailed() })
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
 	shutdownErr := b.WaitForShutdown("Stickybot")

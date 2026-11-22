@@ -164,13 +164,17 @@ func (s *guildStateStore[T]) persist(guildID snowflake.ID) error {
 	return s.s3.SaveGuildJSON(ctx, s.s3Key, guildID.String(), data)
 }
 
-// save persists every guild with state that this instance is in.
-func (s *guildStateStore[T]) save() {
+// save persists every guild with state that this instance is in. It logs
+// each failure and returns them all.
+func (s *guildStateStore[T]) save() error {
+	var errs []error
 	for guildID := range s.served() {
 		if err := s.persist(guildID); err != nil {
 			s.log.Error("Failed to save "+s.s3Key, "guild_id", guildID, "error", err)
+			errs = append(errs, fmt.Errorf("saving %s: %w", s.s3Key, err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // load fetches each guild's state from S3. A guild that fails to load is
@@ -204,12 +208,20 @@ func (s *guildStateStore[T]) load(guildIDs []snowflake.ID) error {
 	return errors.Join(refused...)
 }
 
-// retryFailedLoads loads again every guild whose load failed.
-func (s *guildStateStore[T]) retryFailedLoads() {
+// retryFailedLoads loads again every guild whose load failed. It fails
+// while any guild is still unloaded.
+func (s *guildStateStore[T]) retryFailedLoads() error {
 	s.mu.RLock()
 	guildIDs := slices.Collect(maps.Keys(s.failed))
 	s.mu.RUnlock()
 	s.load(guildIDs) // refusals are logged; only startup exits on them
+	s.mu.RLock()
+	unloaded := len(s.failed)
+	s.mu.RUnlock()
+	if unloaded > 0 {
+		return fmt.Errorf("%s: %d guild(s) still not loaded", s.s3Key, unloaded)
+	}
+	return nil
 }
 
 // fetch reads a guild's state from S3. A missing key gives fresh state.
@@ -293,13 +305,13 @@ func (s *guildStateStore[T]) served() map[snowflake.ID]*T {
 
 // pruneCorruptBackups deletes the copies fetch made of undecodable state once
 // they are older than corruptRetention. Keys it can't date are left alone.
-func pruneCorruptBackups(s3 *s3client.Client, log *slog.Logger, now time.Time) {
+func pruneCorruptBackups(s3 *s3client.Client, log *slog.Logger, now time.Time) error {
 	ctx, cancel := context.WithTimeout(context.Background(), storeS3Timeout)
 	defer cancel()
 	objects, err := s3.ListObjects(ctx, corruptPrefix+"/")
 	if err != nil {
 		log.Error("Failed to list corrupt state backups", "error", err)
-		return
+		return err
 	}
 	var expired []string
 	for _, o := range objects {
@@ -310,11 +322,12 @@ func pruneCorruptBackups(s3 *s3client.Client, log *slog.Logger, now time.Time) {
 		}
 	}
 	if len(expired) == 0 {
-		return
+		return nil
 	}
 	if err := s3.DeleteKeys(ctx, expired...); err != nil {
 		log.Error("Failed to delete expired corrupt state backups", "error", err)
-		return
+		return err
 	}
 	log.Info("Deleted expired corrupt state backups", "keys", expired)
+	return nil
 }

@@ -51,7 +51,10 @@ func TestRemindersNeverSavedOverFailedLoad(t *testing.T) {
 	b.S3 = testutil.NewTestS3Client(t, srv)
 	defer b.stopAllReminderGoroutines()
 	b.loadReminders()
-	b.saveAllReminders()
+	// The reminders pass's job fails while the guild is unloaded.
+	if err := b.retryAndSaveReminders(); err == nil {
+		t.Error("retryAndSaveReminders succeeded while a guild is unloaded")
+	}
 
 	e, responses := commandEvent(t, devGuild, enableData)
 	b.onCommand(e)
@@ -66,7 +69,9 @@ func TestRemindersNeverSavedOverFailedLoad(t *testing.T) {
 	// Once S3 is back, the save loop's load retry (or the next command)
 	// loads the stored reminders, and a change merges with them.
 	fs.failGet.Store(false)
-	b.loadReminders()
+	if err := b.retryAndSaveReminders(); err != nil {
+		t.Errorf("retryAndSaveReminders after recovery: %v", err)
+	}
 	b.mu.Lock()
 	_, loaded := b.reminders[devGuild][111]
 	b.mu.Unlock()
