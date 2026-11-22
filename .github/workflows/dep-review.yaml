@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   gate:
-    uses: sadbox/dep-review/.github/workflows/gate.yml@74975108e2671f857741be7e3bffd516bc41248c # v0.1.3
+    uses: sadbox/dep-review/.github/workflows/gate.yml@e2c6accafb31e5317dc03df1bb2a65be29664f97 # v0.1.4
     permissions:
       contents: read
       pull-requests: read
