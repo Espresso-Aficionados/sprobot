@@ -5,27 +5,26 @@
 // bot running half-configured. Problems name variables, never their values:
 // most of them are secrets.
 //
-// Secrets go through opsecrets, all in one call, so a process costs at most
-// one 1Password request at startup.
+// Every value is used as it is. Secrets are rendered into the environment
+// before the program starts (on bonnet, by quadlet/render-env.sh; in dev, by
+// `op run` in the run scripts), so a 1Password reference (op://...) that
+// reaches a program is a deploy mistake and is refused, not resolved.
 package envconfig
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/Espresso-Aficionados/sprobot/pkg/opsecrets"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
-// opTokenVar is what opsecrets resolves op:// references with.
-const opTokenVar = "OP_SERVICE_ACCOUNT_TOKEN"
+// opRefPrefix starts a 1Password secret reference.
+const opRefPrefix = "op://"
 
 // Storage is the S3 bucket every program uses, and the web server's public
 // URL, which links to profiles and stored files are built on.
@@ -62,7 +61,7 @@ func (e *Error) Error() string {
 // {prefix}_HEALTHCHECK_ENDPOINT, and the storage variables.
 func LoadBot(prefix string) (Bot, error) {
 	tokenVar, healthVar := prefix+"_DISCORD_TOKEN", prefix+"_HEALTHCHECK_ENDPOINT"
-	r := read(append([]string{tokenVar, healthVar}, storageSecrets...)...)
+	r := &reader{}
 	cfg := Bot{
 		Token:               r.required(tokenVar, noSpaces),
 		HealthcheckEndpoint: r.optional(healthVar, "", httpURL),
@@ -74,7 +73,7 @@ func LoadBot(prefix string) (Bot, error) {
 // LoadWeb reads sprobot-web's environment: the optional PORT (default 8080)
 // and the storage variables.
 func LoadWeb() (Web, error) {
-	r := read(storageSecrets...)
+	r := &reader{}
 	cfg := Web{
 		Port:    r.optional("PORT", "8080", port),
 		Storage: r.storage(),
@@ -84,7 +83,7 @@ func LoadWeb() (Web, error) {
 
 // LoadStorage reads only the storage variables, for tools.
 func LoadStorage() (Storage, error) {
-	r := read(storageSecrets...)
+	r := &reader{}
 	cfg := r.storage()
 	return cfg, r.err()
 }
@@ -109,9 +108,6 @@ func Log(log *slog.Logger, err error) {
 	log.Error("Not starting: fix the environment", "problems", len(e.Problems))
 }
 
-// storageSecrets are the storage variables that may be op:// references.
-var storageSecrets = []string{"S3_KEY", "S3_SECRET"}
-
 func (r *reader) storage() Storage {
 	return Storage{
 		S3Key:       r.required("S3_KEY", noSpaces),
@@ -122,60 +118,15 @@ func (r *reader) storage() Storage {
 	}
 }
 
-// reader holds the resolved secrets and the problems found so far.
+// reader holds the problems found so far.
 type reader struct {
-	secrets    map[string]string // resolved; nil if resolving failed
-	unresolved []string          // secrets not resolved, so not checked
-	problems   []string
-}
-
-// read resolves the named secrets in one opsecrets call. If they can't be
-// resolved, that is a problem, and those holding op:// references are left
-// unchecked.
-func read(secrets ...string) *reader {
-	r := &reader{}
-	var refs []string
-	for _, name := range secrets {
-		if strings.HasPrefix(os.Getenv(name), "op://") {
-			refs = append(refs, name)
-		}
-	}
-	if len(refs) > 0 && os.Getenv(opTokenVar) == "" {
-		r.problems = append(r.problems, fmt.Sprintf("%s is not set, but resolves the 1Password references (op://) in %s", opTokenVar, strings.Join(refs, ", ")))
-		r.unresolved = refs
-		return r
-	}
-	vals, err := opsecrets.GetenvAll(secrets...)
-	if err != nil {
-		// opsecrets names each variable and its reference (a vault path,
-		// not a secret), one per line.
-		for line := range strings.Lines(err.Error()) {
-			r.problems = append(r.problems, strings.TrimSpace(line))
-		}
-		r.unresolved = refs
-		return r
-	}
-	r.secrets = vals
-	return r
-}
-
-func (r *reader) get(name string) (string, bool) {
-	if slices.Contains(r.unresolved, name) {
-		return "", false
-	}
-	if v, ok := r.secrets[name]; ok {
-		return v, true
-	}
-	return os.Getenv(name), true
+	problems []string
 }
 
 // required returns the variable's value, recording a problem if it's unset
 // or fails check.
 func (r *reader) required(name string, check func(string) string) string {
-	v, ok := r.get(name)
-	if !ok {
-		return ""
-	}
+	v := os.Getenv(name)
 	if v == "" {
 		r.problems = append(r.problems, name+" is not set")
 		return ""
@@ -185,17 +136,20 @@ func (r *reader) required(name string, check func(string) string) string {
 
 // optional is required, but an unset variable gives def.
 func (r *reader) optional(name, def string, check func(string) string) string {
-	v, ok := r.get(name)
-	if !ok {
-		return ""
-	}
+	v := os.Getenv(name)
 	if v == "" {
 		return def
 	}
 	return r.checked(name, v, check)
 }
 
+// checked refuses an op:// reference, whatever the variable, before check
+// runs: one problem per variable, quoting nothing past the prefix.
 func (r *reader) checked(name, v string, check func(string) string) string {
+	if strings.HasPrefix(v, opRefPrefix) {
+		r.problems = append(r.problems, name+" is a 1Password reference ("+opRefPrefix+"…); render it on the host (quadlet/render-env.sh)")
+		return ""
+	}
 	if why := check(v); why != "" {
 		r.problems = append(r.problems, name+" "+why)
 		return ""

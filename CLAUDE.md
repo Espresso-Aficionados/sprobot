@@ -26,7 +26,6 @@ Shared packages:
 - `pkg/envconfig`: reads and checks each program's whole environment at
   startup.
 - `pkg/logsetup`: one log format for every program (slog text, stderr).
-- `pkg/opsecrets`: reads secret env vars, resolving 1Password `op://` references.
 - `pkg/s3client`: all S3 persistence.
 - `pkg/statever`: persisted-state versions and `-check-state`.
 - `pkg/sprobot`: shared types such as templates.
@@ -58,16 +57,13 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
     as a struct and read no variable themselves (the one exception:
     `sprobot-web -healthcheck` reads `PORT` before the check). A new
     variable goes there, with a check.
-  - Secrets go through `opsecrets` (envconfig does this): a value of the form
-    `op://vault/item/field` is resolved through 1Password using
-    `OP_SERVICE_ACCOUNT_TOKEN`, and plain values pass through. The SDK loads
-    only on the first `op://` value. In dev, `run*.sh` resolve the references
-    with `op run` (your own 1Password account, desktop app) and pass plain values
-    into the containers, so no service-account token is needed locally.
-    Resolve at startup only, and use `opsecrets.GetenvAll` where one call site
-    needs several secrets: the 1Password account allows 1,000
-    service-account requests a day, shared across every prod service.
-    oncall-sync imports this package too, so keep its API stable.
+  - Every value is plain; the binaries never talk to 1Password. In prod the
+    host renders secrets before the container starts (homelab-configs
+    `quadlet/render-env.sh`); in dev, `run*.sh` resolve `config.env`'s
+    `op://vault/item/field` references with `op run` (your own 1Password
+    account, desktop app) and pass plain values into the containers. A value
+    still starting with `op://` is refused by envconfig as a problem naming
+    the variable, quoting nothing past the prefix.
 
 ## CI and deploy
 
