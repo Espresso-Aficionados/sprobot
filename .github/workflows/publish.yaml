@@ -281,7 +281,7 @@ jobs:
       # bonnet runs.
       - name: Tell Grafana what :latest now is
         if: steps.merge.outputs.latest == 'true'
-        uses: sadbox/ci/report-publish@v0.3.0
+        uses: sadbox/ci/report-publish@v0.4.0
         with:
           names: sprobot sprobot-web stickybot threadbot
           url: ${{ secrets.GRAFANA_PUBLISH_URL }}

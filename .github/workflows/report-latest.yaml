@@ -1,0 +1,43 @@
+name: report-latest
+
+# What :latest is, told to Grafana Cloud once a day (sadbox/ci STANDARDS.md,
+# Publish report). A publish reports its own build as it moves :latest;
+# this reports what the registry holds, which repairs a report that was
+# missed: the "published build not running" alert never works from a wrong
+# record for more than a day.
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report-latest:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    # The default branch only (homelab-configs tofu/github/publish.tf), and where the report's two
+    # secrets are.
+    environment: publish
+    permissions:
+      contents: read # each build's place in history, from GitHub's API
+      packages: read # :latest's revision label
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Tell Grafana what :latest is
+        uses: sadbox/ci/report-publish@v0.4.0
+        with:
+          latest-of: >-
+            ghcr.io/espresso-aficionados/sprobot
+            ghcr.io/espresso-aficionados/sprobot-web
+            ghcr.io/espresso-aficionados/stickybot
+            ghcr.io/espresso-aficionados/threadbot
+          url: ${{ secrets.GRAFANA_PUBLISH_URL }}
+          auth: ${{ secrets.GRAFANA_PUBLISH_AUTH }}

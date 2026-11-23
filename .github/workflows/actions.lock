@@ -17,6 +17,10 @@ workflows:
         - 'docker/build-push-action@v7.4.0'
         - 'docker/login-action@v4.8.0'
         - 'docker/setup-buildx-action@v4.4.1'
+        - 'sadbox/ci@v0.4.0'
+    '.github/workflows/report-latest.yaml':
+        - 'docker/login-action@v4.8.0'
+        - 'sadbox/ci@v0.4.0'
     '.github/workflows/test.yaml':
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
@@ -75,3 +79,8 @@ dependencies:
         commit: 'sha1-f87e5991a6d7451dcb8d9637bfbc97413f497069'
         owner_id: 5429470
         repo_id: 288485773
+    'sadbox/ci@v0.4.0':
+        ref: 'v0.4.0'
+        commit: 'sha1-9b561c32073a80e3972e8c07fd028358e58732b0'
+        owner_id: 2502941
+        repo_id: 1465779983
