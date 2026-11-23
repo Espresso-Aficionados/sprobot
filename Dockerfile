@@ -8,21 +8,33 @@ COPY cmd/ cmd/
 COPY pkg/ pkg/
 RUN mkdir /empty-dir
 
+# VERSION is the build's short commit SHA (publish.yaml's build-args),
+# linked into every binary as pkg/buildinfo.Version: what -version prints
+# and telemetry sends as service.version. Each build stage then checks its
+# binary says so: a -X that names nothing is no error.
 FROM base AS build-sprobot
+ARG VERSION=dev
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /sprobot ./cmd/sprobot
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/Espresso-Aficionados/sprobot/pkg/buildinfo.Version=${VERSION}" -o /sprobot ./cmd/sprobot
+RUN test "$(/sprobot -version)" = "${VERSION}"
 
 FROM base AS build-sprobot-web
+ARG VERSION=dev
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /sprobot-web ./cmd/sprobot-web
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/Espresso-Aficionados/sprobot/pkg/buildinfo.Version=${VERSION}" -o /sprobot-web ./cmd/sprobot-web
+RUN test "$(/sprobot-web -version)" = "${VERSION}"
 
 FROM base AS build-stickybot
+ARG VERSION=dev
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /stickybot ./cmd/stickybot
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/Espresso-Aficionados/sprobot/pkg/buildinfo.Version=${VERSION}" -o /stickybot ./cmd/stickybot
+RUN test "$(/stickybot -version)" = "${VERSION}"
 
 FROM base AS build-threadbot
+ARG VERSION=dev
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /threadbot ./cmd/threadbot
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/Espresso-Aficionados/sprobot/pkg/buildinfo.Version=${VERSION}" -o /threadbot ./cmd/threadbot
+RUN test "$(/threadbot -version)" = "${VERSION}"
 
 # The distroless base is pinned as :nonroot@sha256 (index digest). Dependabot
 # tracks it: a refreshed :nonroot arrives as a digest-bump PR. :nonroot

@@ -27,6 +27,9 @@ Shared packages:
 - `pkg/envconfig`: reads and checks each program's whole environment at
   startup.
 - `pkg/logsetup`: one log format for every program (slog text, stderr).
+- `pkg/buildinfo`: which build a program is (`Version`, the short commit
+  SHA the Dockerfile links in): what `-version` prints and telemetry sends
+  as `service.version`.
 - `pkg/s3client`: all S3 persistence.
 - `pkg/statever`: persisted-state versions and `-check-state`.
 - `pkg/sprobot`: shared types such as templates.

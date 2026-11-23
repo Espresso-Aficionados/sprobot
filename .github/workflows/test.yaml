@@ -74,6 +74,8 @@ jobs:
       - name: Build prod images (amd64, not pushed)
         if: matrix.platform == 'linux/amd64' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
         run: |
+          # With a VERSION, as publish.yaml builds them: each build stage
+          # checks its binary prints it.
           for target in prod prodweb prodstickybot prodthreadbot; do
-            docker buildx build --platform linux/amd64 --target "$target" .
+            docker buildx build --platform linux/amd64 --target "$target" --build-arg VERSION="${GITHUB_SHA:0:7}" .
           done

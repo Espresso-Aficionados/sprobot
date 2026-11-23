@@ -146,6 +146,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      # The build's VERSION (pkg/buildinfo): what each binary's -version
+      # prints and its telemetry sends as service.version. The Dockerfile
+      # fails the build if the binary doesn't print it.
+      - name: Short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v7.4.0
@@ -153,6 +160,7 @@ jobs:
           context: .
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
+          build-args: VERSION=${{ steps.sha.outputs.short }}
           outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           # BuildKit attestations: full provenance and an SBOM, pushed with
           # the image as an attestation manifest (unknown/unknown) in its

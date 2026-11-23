@@ -22,6 +22,7 @@ import (
 	"github.com/sadbox/svc/healthcheck"
 	"github.com/sadbox/svc/telemetry"
 
+	"github.com/Espresso-Aficionados/sprobot/pkg/buildinfo"
 	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
@@ -109,7 +110,7 @@ func main() {
 	// The server only: -healthcheck and -check-state have exited by now.
 	// Without OTEL_EXPORTER_OTLP_ENDPOINT this does nothing, and a bad OTEL_*
 	// setting costs only the telemetry.
-	shutdownTelemetry, err := telemetry.Start(context.Background(), "sprobot-web")
+	shutdownTelemetry, err := telemetry.Start(context.Background(), "sprobot-web", telemetry.WithVersion(buildinfo.Version))
 	if err != nil {
 		slog.Warn("Telemetry off", "error", err)
 		shutdownTelemetry = func() {}
