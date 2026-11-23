@@ -27,9 +27,16 @@ func (c *Client) ListObjects(ctx context.Context, prefix string) ([]Object, erro
 	})
 	for pages.HasMorePages() {
 		page, err := pages.NextPage(ctx, func(o *s3.Options) {
-			// See bucketHostLayout: the configured endpoint can't list.
+			// See bucketHostLayout: the configured endpoint can't list
+			// path-style, so the listing is virtual-hosted instead: the
+			// region's endpoint as the base, which the SDK addresses as
+			// {bucket}.{host}, the bucket's own hostname again. Never the
+			// region's bare hostname: through that, path-style requests
+			// reach any bucket in the region, so the egress proxy allows
+			// only the bucket's own.
 			if c.bucketEndpoint != "" {
 				o.BaseEndpoint = &c.bucketEndpoint
+				o.UsePathStyle = false
 			}
 		})
 		if err != nil {

@@ -212,8 +212,10 @@ type Client struct {
 // GET of an object named after the bucket (404 NoSuchKey), and a copy source
 // has to give the stored key.
 //
-// It returns the endpoint through which /{bucket} is the bucket, and the
-// prefix the stored keys carry. Both are empty for any other endpoint.
+// It returns the region's endpoint (the bucket's hostname without the
+// bucket), which ListObjects uses virtual-hosted, so a listing is sent to
+// the bucket's own hostname as / with list-type=2, and the prefix the
+// stored keys carry. Both are empty for any other endpoint.
 func bucketHostLayout(endpoint, bucket string) (bucketEndpoint, keyPrefix string) {
 	u, err := url.Parse(endpoint)
 	if err != nil || bucket == "" {

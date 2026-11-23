@@ -64,6 +64,16 @@ func TestBucketHostEndpoint(t *testing.T) {
 		}
 	}
 
+	// Every request, listings included, went to the bucket's own hostname:
+	// the egress proxy allows that one, not the region's bare hostname.
+	fake.Mu.Lock()
+	for i, h := range fake.Hosts {
+		if h != testutil.TestBucketHost {
+			t.Errorf("request %d (%s) went to %q, want the bucket's own host %q", i, fake.Requests[i], h, testutil.TestBucketHost)
+		}
+	}
+	fake.Mu.Unlock()
+
 	// Listed keys are the keys the other calls take.
 	if err := c.DeleteKeys(ctx, sticky, shortcut); err != nil {
 		t.Fatalf("DeleteKeys: %v", err)
