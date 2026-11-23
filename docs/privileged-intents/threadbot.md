@@ -91,7 +91,8 @@ its state, **waits 10 minutes** (`fatalCloseDelay`, so a restart loop doesn't
 re-identify often enough to get the token reset), then exits non-zero. The
 code expects the container runtime to restart it, which then fails the same
 way. The restart policy is deployment configuration, outside this repo. The
-healthcheck pings only while the gateway is ready.
+container healthcheck (`/healthz`) and the `gateway_ready` liveness metric
+report healthy only while the gateway is ready.
 
 To drop the intent, follow the deploy-then-toggle order:
 1. Ship a build without `IntentGuildMembers` and without the REST counts.

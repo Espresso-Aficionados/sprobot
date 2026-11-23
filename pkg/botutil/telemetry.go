@@ -29,14 +29,14 @@ import (
 //	    or "other"
 //	sprobot_gateway_events_total{event}   gateway events by disgo event type
 //	sadbox_job_*{job_name="gateway_ready"}   one success per 30s tick while
-//	    the gateway is ready: the heartbeat's replacement
+//	    the gateway is ready: the bot's liveness signal
 //
-// plus http_client_* for peer_service discord, s3, fetch and heartbeat. No
+// plus http_client_* for peer_service discord, s3 and fetch. No
 // Discord ID, name or content goes into a label or a span attribute.
 const scope = "github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 
 // gatewayReadyJob succeeds on every heartbeat tick that finds the gateway
-// ready, whether or not a heartbeat URL is set.
+// ready.
 var gatewayReadyJob = telemetry.NewJob("gateway_ready")
 
 var (

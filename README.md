@@ -136,9 +136,6 @@ See `config/example.env` for the full list. Each program checks its whole enviro
 | `THREADBOT_DISCORD_TOKEN` | Discord token for threadbot |
 | `S3_KEY` / `S3_SECRET` / `S3_ENDPOINT` / `S3_BUCKET` | S3-compatible storage credentials (shared by all bots) |
 | `WEB_ENDPOINT` | Profile web URL base, ending in `/` (defaults to `https://bot.espressoaf.com/`; set to `http://localhost:8080/` for dev) |
-| `SPROBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for sprobot (optional) |
-| `STICKYBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for stickybot (optional) |
-| `THREADBOT_HEALTHCHECK_ENDPOINT` | Healthcheck ping URL for threadbot (optional) |
 | `PORT` | Web server port (default 8080; the prod `sprobot-web` image sets `PORT=9001`) |
 
 ## Deployment

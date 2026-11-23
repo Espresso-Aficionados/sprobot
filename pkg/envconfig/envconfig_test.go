@@ -10,7 +10,8 @@ import (
 	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 )
 
-// allVars is every variable any loader reads.
+// allVars is every variable any loader reads, and the retired
+// SPROBOT_HEALTHCHECK_ENDPOINT, which production still sets.
 var allVars = []string{
 	"SPROBOT_DISCORD_TOKEN", "SPROBOT_HEALTHCHECK_ENDPOINT",
 	"S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_BUCKET", "WEB_ENDPOINT", "PORT",
@@ -25,7 +26,7 @@ func setEnv(t *testing.T, env map[string]string) {
 }
 
 // prodLike is the environment the production units give the bots: plain
-// values, rendered on the host.
+// values, rendered on the host. It still includes the retired heartbeat URL.
 func prodLike() map[string]string {
 	return map[string]string{
 		"SPROBOT_DISCORD_TOKEN":        "MTA.secret-token.value",
@@ -49,7 +50,8 @@ func problems(t *testing.T, err error) []string {
 func TestLoadBotValid(t *testing.T) {
 	env := prodLike()
 	setEnv(t, env)
-	// A variable nothing reads any more is ignored.
+	// A variable nothing reads any more is ignored: SPROBOT_HEALTHCHECK_ENDPOINT
+	// (set, by prodLike) too.
 	t.Setenv("SPROBOT_POSTER_ROLE_THRESHOLD", "200")
 
 	cfg, err := LoadBot("SPROBOT")
@@ -57,8 +59,7 @@ func TestLoadBotValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Bot{
-		Token:               env["SPROBOT_DISCORD_TOKEN"],
-		HealthcheckEndpoint: env["SPROBOT_HEALTHCHECK_ENDPOINT"],
+		Token: env["SPROBOT_DISCORD_TOKEN"],
 		Storage: Storage{
 			S3Key: "KEYVALUE", S3Secret: "SECRETVALUE",
 			S3Endpoint: env["S3_ENDPOINT"], S3Bucket: "profile-bot",
@@ -80,8 +81,21 @@ func TestLoadBotOptionalUnset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.HealthcheckEndpoint != "" || cfg.WebEndpoint != "http://localhost:8080/" {
+	if cfg.WebEndpoint != "http://localhost:8080/" {
 		t.Fatalf("LoadBot = %+v", cfg)
+	}
+}
+
+// The retired SPROBOT_HEALTHCHECK_ENDPOINT never stops a bot starting,
+// whatever the deploy still sets it to.
+func TestLoadBotIgnoresHealthcheckEndpoint(t *testing.T) {
+	for _, v := range []string{"https://hc.example/ping/abc", "not a url", "op://vault/hc/url"} {
+		env := prodLike()
+		env["SPROBOT_HEALTHCHECK_ENDPOINT"] = v
+		setEnv(t, env)
+		if _, err := LoadBot("SPROBOT"); err != nil {
+			t.Errorf("SPROBOT_HEALTHCHECK_ENDPOINT=%q: %v", v, err)
+		}
 	}
 }
 
@@ -99,21 +113,21 @@ func TestLoadBotReportsEveryProblemWithoutValues(t *testing.T) {
 
 	_, err := LoadBot("SPROBOT")
 	got := problems(t, err)
-	for _, name := range []string{"SPROBOT_DISCORD_TOKEN", "SPROBOT_HEALTHCHECK_ENDPOINT", "S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_BUCKET", "WEB_ENDPOINT"} {
+	for _, name := range []string{"SPROBOT_DISCORD_TOKEN", "S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_BUCKET", "WEB_ENDPOINT"} {
 		if !slices.ContainsFunc(got, func(p string) bool { return strings.HasPrefix(p, name+" ") }) {
 			t.Errorf("no problem for %s in %q", name, got)
 		}
 	}
-	if len(got) != 7 {
-		t.Errorf("got %d problems, want 7: %q", len(got), got)
+	if len(got) != 6 {
+		t.Errorf("got %d problems, want 6 (none for the retired heartbeat URL): %q", len(got), got)
 	}
 	var log bytes.Buffer
 	Log(logsetup.New(&log), err)
 	if strings.Contains(strings.ToLower(err.Error()+log.String()), "sekrit") {
 		t.Fatalf("a value leaked:\n%s\n%s", err, log.String())
 	}
-	if n := strings.Count(log.String(), "problem="); n != 7 {
-		t.Errorf("logged %d problem lines, want 7:\n%s", n, log.String())
+	if n := strings.Count(log.String(), "problem="); n != 6 {
+		t.Errorf("logged %d problem lines, want 6:\n%s", n, log.String())
 	}
 }
 
@@ -157,8 +171,8 @@ func TestLoadWeb(t *testing.T) {
 // A 1Password reference that reaches a program is refused, whichever variable
 // holds it (required, optional or not a secret) and whichever loader reads it:
 // one problem per variable, nothing past "op://" quoted, other problems still
-// reported. A leftover OP_SERVICE_ACCOUNT_TOKEN is ignored like any unused
-// variable.
+// reported. A leftover OP_SERVICE_ACCOUNT_TOKEN, or a reference in the
+// retired SPROBOT_HEALTHCHECK_ENDPOINT, is ignored like any unused variable.
 func TestLoadRefusesOPReferences(t *testing.T) {
 	refusal := func(name string) string {
 		return name + " is a 1Password reference (op://…); render it on the host (quadlet/render-env.sh)"
@@ -179,7 +193,7 @@ func TestLoadRefusesOPReferences(t *testing.T) {
 		want []string
 	}{
 		{"LoadBot", func() error { _, err := LoadBot("SPROBOT"); return err },
-			append([]string{refusal("SPROBOT_DISCORD_TOKEN"), refusal("SPROBOT_HEALTHCHECK_ENDPOINT")}, storage...)},
+			append([]string{refusal("SPROBOT_DISCORD_TOKEN")}, storage...)},
 		{"LoadWeb", func() error { _, err := LoadWeb(); return err }, storage},
 		{"LoadStorage", func() error { _, err := LoadStorage(); return err }, storage},
 	} {

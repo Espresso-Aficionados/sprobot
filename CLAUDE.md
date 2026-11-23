@@ -19,7 +19,7 @@ a **separate Discord application** with its own token.
 
 Shared packages:
 - `pkg/botutil`: `BaseBot`, the guild allowlist (`AllowedGuildIDs`,
-  `GuildAllowed`), healthcheck pings, gateway-close handling, `RunSaveLoop`
+  `GuildAllowed`), the `/healthz` server, gateway-close handling, `RunSaveLoop`
   and `RunJobLoop`, the bots' telemetry (`telemetry.go`),
   `PostWithRetry`, `FollowupEphemeral`, `MessageStash`, `RegisterGuildCommands`,
   `PrivacyPolicyStatus`.
@@ -191,13 +191,12 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
   (`bot.WithAsyncEventsEnabled`), because stopping a repost loop waits out a
   repost in flight (`idleloop.Handle.Stop` blocks until it ends, so never call
   it from inside the repost callback).
-- **Gateway health:** the heartbeat pings (`*_HEALTHCHECK_ENDPOINT`) and
-  `/healthz` report healthy only while the gateway is ready. A gateway close
+- **Gateway health:** `/healthz` and the `gateway_ready` job (see Telemetry)
+  report healthy only while the gateway is ready. A gateway close
   that disgo won't reconnect from (e.g. 4004 bad token, 4014 disallowed
   intents) makes the bot save, wait 10 minutes, and exit non-zero.
-- **Never log a secret**, the heartbeat URLs included (anyone holding one
-  can report the bot healthy): `*url.Error` prints its URL in full, so a
-  failed ping logs `pingError(err)` (`pkg/botutil/base.go`).
+- **Never log a secret** (tokens, S3 keys): envconfig's problems name the
+  variable, never its value.
 - **Telemetry** goes through `github.com/sadbox/svc/telemetry` (its README
   is the standard): metrics and traces over OTLP to the host's Alloy, off
   without `OTEL_EXPORTER_OTLP_ENDPOINT`. `telemetry.Start` runs only in a
@@ -208,14 +207,15 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
   the request on, not an `r.WithContext` copy, or the route is lost). Every
   outbound client has a fixed peer name: `discord` (disgo's REST client,
   `botutil.RESTClient`, and sprobot's search client), `s3`, `fetch`
-  (user-supplied URLs, wrapped outside the dial check) and `heartbeat`.
+  (user-supplied URLs, wrapped outside the dial check).
   logsetup's handler adds `trace_id` to `*Context` log calls made inside a
   span.
   - **Bots:** each periodic loop is a `telemetry.Job`, a package-level var
     (so it exists before `Start`), run by `botutil.RunJobLoop` (sprobot:
     `startLoop`) with the pass's real error; a callee that only logged its
     failures returns them too. The 30s heartbeat tick records
-    `gateway_ready` while the gateway is ready, endpoint or not. Interaction
+    `gateway_ready` while the gateway is ready: the bots' liveness signal,
+    which Grafana alerts on. Interaction
     listeners go through `botutil.TraceCommands`/`TraceAutocomplete`/
     `TraceComponents`/`TraceModals`: labelled by registered command name, or
     by a custom-ID prefix from the bot's fixed list (sprobot's

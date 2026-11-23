@@ -1,17 +1,11 @@
 package botutil
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os/signal"
-	"strings"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -46,44 +40,27 @@ func setFatalCloseDelay(t *testing.T, d time.Duration) {
 	})
 }
 
-// Heartbeat pings, and records a gateway_ready success, only while the
-// gateway is ready; the success needs no endpoint.
+// Heartbeat records a gateway_ready success only while the gateway is ready.
 func TestHeartbeatOnlyWhenGatewayReady(t *testing.T) {
-	var pings atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { pings.Add(1) }))
-	defer srv.Close()
-
 	tests := []struct {
-		name     string
-		client   *bot.Client
-		endpoint string
-		want     int32
+		name   string
+		client *bot.Client
+		want   bool
 	}{
-		{"ready", &bot.Client{Gateway: fakeGateway{status: gateway.StatusReady}}, srv.URL, 1},
-		{"ready, no endpoint", &bot.Client{Gateway: fakeGateway{status: gateway.StatusReady}}, "", 0},
-		{"disconnected", &bot.Client{Gateway: fakeGateway{status: gateway.StatusDisconnected}}, srv.URL, 0},
-		{"resuming", &bot.Client{Gateway: fakeGateway{status: gateway.StatusResuming}}, srv.URL, 0},
-		{"no gateway", &bot.Client{}, srv.URL, 0},
-		{"no client", nil, srv.URL, 0},
+		{"ready", &bot.Client{Gateway: fakeGateway{status: gateway.StatusReady}}, true},
+		{"disconnected", &bot.Client{Gateway: fakeGateway{status: gateway.StatusDisconnected}}, false},
+		{"resuming", &bot.Client{Gateway: fakeGateway{status: gateway.StatusResuming}}, false},
+		{"no gateway", &bot.Client{}, false},
+		{"no client", nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pings.Store(0)
-			b := &BaseBot{
-				Client:              tt.client,
-				Log:                 testutil.DiscardLogger(),
-				healthcheckEndpoint: tt.endpoint,
-				httpClient:          srv.Client(),
-			}
+			b := &BaseBot{Client: tt.client, Log: testutil.DiscardLogger()}
 			before := gatewayReadyJob.LastSuccess()
 			time.Sleep(time.Millisecond) // so a success is a later time
 			b.Heartbeat()
-			if got := pings.Load(); got != tt.want {
-				t.Errorf("pings = %d, want %d", got, tt.want)
-			}
-			ready := tt.client != nil && tt.client.Gateway != nil && tt.client.Gateway.Status() == gateway.StatusReady
-			if moved := gatewayReadyJob.LastSuccess().After(before); moved != ready {
-				t.Errorf("gateway_ready moved = %v, want %v", moved, ready)
+			if moved := gatewayReadyJob.LastSuccess().After(before); moved != tt.want {
+				t.Errorf("gateway_ready moved = %v, want %v", moved, tt.want)
 			}
 		})
 	}
@@ -170,30 +147,5 @@ func TestOpenGatewayHoldsAfterFatalClose(t *testing.T) {
 				t.Errorf("held before returning = %v, want %v", held, tt.hold)
 			}
 		})
-	}
-}
-
-// TestPingHealthcheckFailureHidesURL: the heartbeat URL is a secret, so a
-// failed ping must not log it.
-func TestPingHealthcheckFailureHidesURL(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	endpoint := srv.URL + "/s3cr3t-heartbeat-token"
-	srv.Close() // the ping now fails: connection refused
-
-	var logs bytes.Buffer
-	b := &BaseBot{
-		Client:              &bot.Client{Gateway: fakeGateway{status: gateway.StatusReady}},
-		Log:                 slog.New(slog.NewTextHandler(&logs, nil)),
-		healthcheckEndpoint: endpoint,
-		httpClient:          &http.Client{Timeout: time.Second},
-	}
-	b.Heartbeat()
-
-	out := logs.String()
-	if !strings.Contains(out, "Healthcheck ping failed") {
-		t.Fatalf("no failure logged: %q", out)
-	}
-	if strings.Contains(out, "s3cr3t-heartbeat-token") {
-		t.Fatalf("the heartbeat URL leaked into the log: %q", out)
 	}
 }

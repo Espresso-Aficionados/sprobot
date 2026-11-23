@@ -37,8 +37,6 @@ type Storage struct {
 // Bot is a Discord bot's environment.
 type Bot struct {
 	Token string
-	// HealthcheckEndpoint is pinged while the gateway is ready; "" for none.
-	HealthcheckEndpoint string
 	Storage
 }
 
@@ -57,15 +55,14 @@ func (e *Error) Error() string {
 	return "invalid environment: " + strings.Join(e.Problems, "; ")
 }
 
-// LoadBot reads a bot's environment: {prefix}_DISCORD_TOKEN, the optional
-// {prefix}_HEALTHCHECK_ENDPOINT, and the storage variables.
+// LoadBot reads a bot's environment: {prefix}_DISCORD_TOKEN and the
+// storage variables. The retired {prefix}_HEALTHCHECK_ENDPOINT is ignored,
+// like any variable nothing reads, whatever its value.
 func LoadBot(prefix string) (Bot, error) {
-	tokenVar, healthVar := prefix+"_DISCORD_TOKEN", prefix+"_HEALTHCHECK_ENDPOINT"
 	r := &reader{}
 	cfg := Bot{
-		Token:               r.required(tokenVar, noSpaces),
-		HealthcheckEndpoint: r.optional(healthVar, "", httpURL),
-		Storage:             r.storage(),
+		Token:   r.required(prefix+"_DISCORD_TOKEN", noSpaces),
+		Storage: r.storage(),
 	}
 	return cfg, r.err()
 }
