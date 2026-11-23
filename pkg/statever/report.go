@@ -8,18 +8,27 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/Espresso-Aficionados/sprobot/pkg/buildinfo"
 )
 
 // ParseFlags parses a program's command line: -check-state, which reads
-// what (as its usage says), and -json. Anything else exits 2. Call it after
-// healthcheck.Main, which looks at the first argument itself.
+// what (as its usage says), and -json; and -version, which prints the
+// build's version (buildinfo.Version) and exits 0 here. Anything else exits
+// 2. Call it after healthcheck.Main, which looks at the first argument
+// itself.
 func ParseFlags(what string) (checkState, asJSON bool) {
 	cs := flag.Bool("check-state", false, "read "+what+", creating or changing nothing; print each document's state version and this build's, then exit: 0 if this build can run on it, 3 if a newer build wrote some of it, 1 if some can't be read")
 	js := flag.Bool("json", false, "with -check-state: print one JSON object instead")
+	v := flag.Bool("version", false, "print this build's version (its short commit SHA) and exit")
 	flag.Parse()
-	if flag.NArg() > 0 || (*js && !*cs) {
+	if flag.NArg() > 0 || (*js && !*cs) || (*v && *cs) {
 		flag.Usage()
 		os.Exit(2)
+	}
+	if *v {
+		fmt.Println(buildinfo.Version)
+		os.Exit(0)
 	}
 	return *cs, *js
 }

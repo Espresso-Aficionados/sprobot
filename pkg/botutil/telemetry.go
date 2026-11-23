@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/Espresso-Aficionados/sprobot/pkg/buildinfo"
 )
 
 // Telemetry shared by the bots (svc/telemetry has the standard), as
@@ -186,9 +188,10 @@ func TraceModals(names []string, h func(*events.ModalSubmitInteractionCreate)) f
 // and returns the function that flushes it. Call it in main after
 // -healthcheck, -check-state and envconfig: only the running bot exports.
 // Without OTEL_EXPORTER_OTLP_ENDPOINT it does nothing, and a bad OTEL_*
-// setting costs only the telemetry.
+// setting costs only the telemetry. The build's version (buildinfo.Version)
+// goes with it as service.version.
 func StartTelemetry(service string) (shutdown func()) {
-	shutdown, err := telemetry.Start(context.Background(), service)
+	shutdown, err := telemetry.Start(context.Background(), service, telemetry.WithVersion(buildinfo.Version))
 	if err != nil {
 		slog.Warn("Telemetry off", "error", err)
 		return func() {}
