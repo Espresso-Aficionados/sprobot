@@ -38,6 +38,8 @@ type FakeS3 struct {
 	Deleted []string
 	// Requests lists every request as "METHOD path", in order.
 	Requests []string
+	// Hosts lists every request's Host, in the same order.
+	Hosts []string
 	// PageSize caps the keys in one listing page; 0 means S3's 1000.
 	PageSize int
 	// BucketHost is a hostname that is a bucket's own, "{bucket}.{host}". A
@@ -62,6 +64,7 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		key = "/" + bucket + key
 	}
 	f.Requests = append(f.Requests, r.Method+" "+key)
+	f.Hosts = append(f.Hosts, r.Host)
 
 	if status, ok := f.Fail[key]; ok {
 		code := "InjectedError"
