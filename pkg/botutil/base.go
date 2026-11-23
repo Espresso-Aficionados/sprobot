@@ -2,11 +2,8 @@ package botutil
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
-	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,7 +13,6 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
-	"github.com/sadbox/svc/telemetry"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
@@ -33,9 +29,7 @@ type BaseBot struct {
 	Log                  *slog.Logger
 	Ready                atomic.Bool
 	TestGuildIDsOverride []snowflake.ID // override for tests without a gateway
-	healthcheckEndpoint  string
-	httpClient           *http.Client
-	gatewayFailed        chan error // receives the error when the gateway closes for good
+	gatewayFailed        chan error     // receives the error when the gateway closes for good
 
 	ignoredGuildsMu sync.Mutex
 	ignoredGuilds   map[snowflake.ID]bool // guilds outside AllowedGuildIDs already warned about
@@ -49,53 +43,19 @@ func NewBaseBot(cfg envconfig.Bot) (*BaseBot, error) {
 	}
 
 	return &BaseBot{
-		S3:                  s3,
-		Log:                 slog.Default(),
-		healthcheckEndpoint: cfg.HealthcheckEndpoint,
-		httpClient:          telemetry.Client("heartbeat", &http.Client{Timeout: 10 * time.Second}),
-		gatewayFailed:       make(chan error, 1),
+		S3:            s3,
+		Log:           slog.Default(),
+		gatewayFailed: make(chan error, 1),
 	}, nil
 }
 
 // Heartbeat is the 30-second heartbeat tick: while the gateway is
-// connected and ready it records a gateway_ready success and pings the
-// healthcheck endpoint, so a bot that has lost Discord stops reporting
-// healthy. The success is recorded whether or not an endpoint is set.
+// connected and ready it records a gateway_ready success, so a bot that has
+// lost Discord stops reporting alive.
 func (b *BaseBot) Heartbeat() {
-	status := b.gatewayStatus()
-	if status == gateway.StatusReady {
+	if b.gatewayStatus() == gateway.StatusReady {
 		gatewayReadyJob.Succeeded()
 	}
-	b.pingHealthcheck(status)
-}
-
-// pingHealthcheck sends a GET to the configured healthcheck endpoint if
-// status is ready. It is a no-op if no endpoint is configured.
-func (b *BaseBot) pingHealthcheck(status gateway.Status) {
-	if b.healthcheckEndpoint == "" {
-		return
-	}
-	if status != gateway.StatusReady {
-		b.Log.Warn("Skipping healthcheck ping, gateway not ready", "status", status)
-		return
-	}
-	resp, err := b.httpClient.Get(b.healthcheckEndpoint)
-	if err != nil {
-		b.Log.Info("Healthcheck ping failed", "error", pingError(err))
-		return
-	}
-	resp.Body.Close()
-}
-
-// pingError strips the URL from a failed ping's error. The heartbeat URL is
-// a secret (anyone holding it can report the bot healthy), and *url.Error
-// prints it in full.
-func pingError(err error) error {
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
-	}
-	return err
 }
 
 func (b *BaseBot) gatewayStatus() gateway.Status {

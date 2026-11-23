@@ -14,7 +14,8 @@ func TestMain(m *testing.M) {
 }
 
 // A bad environment exits 1 before the bot connects or writes anything,
-// naming every problem and no value.
+// naming every problem and no value. The retired SPROBOT_HEALTHCHECK_ENDPOINT
+// is no problem, whatever its value.
 func TestBadEnvironmentExits(t *testing.T) {
 	code, stderr := testutil.RunMain(t, []string{
 		"SPROBOT_DISCORD_TOKEN=sekrit token",
@@ -24,10 +25,13 @@ func TestBadEnvironmentExits(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit code %d, want 1; stderr:\n%s", code, stderr)
 	}
-	for _, name := range []string{"SPROBOT_DISCORD_TOKEN", "SPROBOT_HEALTHCHECK_ENDPOINT", "S3_KEY", "S3_SECRET", "S3_BUCKET"} {
+	for _, name := range []string{"SPROBOT_DISCORD_TOKEN", "S3_KEY", "S3_SECRET", "S3_BUCKET"} {
 		if !strings.Contains(stderr, "problem=\""+name+" ") {
 			t.Errorf("no problem logged for %s:\n%s", name, stderr)
 		}
+	}
+	if strings.Contains(stderr, "SPROBOT_HEALTHCHECK_ENDPOINT") {
+		t.Errorf("the retired SPROBOT_HEALTHCHECK_ENDPOINT was named:\n%s", stderr)
 	}
 	if strings.Contains(stderr, "sekrit") {
 		t.Errorf("a value leaked:\n%s", stderr)
