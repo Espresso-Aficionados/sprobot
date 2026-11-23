@@ -207,6 +207,9 @@ jobs:
     outputs:
       subjects: ${{ steps.merge.outputs.subjects }} # [{name, digest}] per pushed index
     runs-on: ubuntu-26.04
+    # The default branch only (homelab-configs tofu/github/publish.tf), and
+    # where the report's two secrets are.
+    environment: publish
     timeout-minutes: 5
     steps:
       - name: Set up Docker Buildx
@@ -264,12 +267,25 @@ jobs:
           done
           if [ "$tip" != "$GITHUB_SHA" ]; then
             echo "::notice::main is at ${tip}, not ${GITHUB_SHA}; not moving :latest (its run builds whatever :latest lacks)"
+            echo "latest=false" >> "$GITHUB_OUTPUT"
           else
             for image in "${images[@]}"; do
               create "$image" latest
             done
+            echo "latest=true" >> "$GITHUB_OUTPUT"
           fi
           echo "subjects=$(jq -sc 'unique_by(.digest)' "$subjects")" >> "$GITHUB_OUTPUT"
+
+      # Grafana Cloud learns which build :latest now is (sadbox/ci
+      # STANDARDS.md, Publish report): an alert there compares it with what
+      # bonnet runs.
+      - name: Tell Grafana what :latest now is
+        if: steps.merge.outputs.latest == 'true'
+        uses: sadbox/ci/report-publish@v0.4.0
+        with:
+          names: sprobot sprobot-web stickybot threadbot
+          url: ${{ secrets.GRAFANA_PUBLISH_URL }}
+          auth: ${{ secrets.GRAFANA_PUBLISH_AUTH }}
 
   # GitHub artifact attestations (build provenance, signed through the
   # workflow's OIDC token) for each multi-arch index publish-merge pushed,
