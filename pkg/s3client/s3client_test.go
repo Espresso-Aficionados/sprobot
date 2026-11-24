@@ -1436,7 +1436,7 @@ func TestSaveFileKeysMatchViewer(t *testing.T) {
 	server := httptest.NewServer(fake)
 	defer server.Close()
 	fileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("data"))
+		w.Write([]byte("\x89PNG\r\n\x1a\ndata")) // a PNG's signature: shortcuts re-host images only
 	}))
 	defer fileServer.Close()
 

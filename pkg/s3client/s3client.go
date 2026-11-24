@@ -43,6 +43,10 @@ const MaxFileSize = 500 << 20
 // ErrFileTooLarge is returned when a file exceeds MaxFileSize.
 var ErrFileTooLarge = errors.New("file too large")
 
+// ErrNotImage is returned when a shortcut image URL serves something that
+// isn't an image (by its content, not its name or Content-Type).
+var ErrNotImage = errors.New("not an image")
+
 // fileSizeLimit is MaxFileSize, as a variable so tests can lower it.
 var fileSizeLimit int64 = MaxFileSize
 
@@ -67,6 +71,14 @@ var downloadClient = newFetchClient(0, 30*time.Second)
 // is exempt from that check, as it is internal: only the address of a proxy
 // URL fetchProxy returned, which comes from the environment, never from the
 // URL being fetched.
+//
+// Every CONNECT to the proxy carries fetchPurposeHeader: a label, not a
+// credential (anything in this process could send it). bonnet's egress proxy
+// gives a labelled request from a service it lets fetch (sprobot) a role of
+// its own, which may reach any public HTTPS host, logged and counted apart
+// from the service's own traffic; from any other service the label changes
+// nothing. net/http sends ProxyConnectHeader to the proxy only, never to the
+// URL's host.
 //
 // Calls are traced and timed as "fetch", outside the checked transport. The
 // host is the user's choice: svc/telemetry's metric view drops it, but the
@@ -97,9 +109,14 @@ func newFetchTransport(responseHeaderTimeout time.Duration) *http.Transport {
 		}
 		return checked.DialContext(ctx, network, addr)
 	}
+	t.ProxyConnectHeader = http.Header{fetchPurposeHeader: {"fetch"}}
 	t.ResponseHeaderTimeout = responseHeaderTimeout
 	return t
 }
+
+// fetchPurposeHeader labels the fetch clients' requests to the egress proxy
+// (see newFetchTransport; homelab-configs egress/main.go reads it).
+const fetchPurposeHeader = "X-Egress-Purpose"
 
 // fetchProxy chooses the fetch clients' proxy for a request. It is a variable
 // so tests can set one: http.ProxyFromEnvironment reads the environment once
@@ -213,10 +230,12 @@ func AllowLocalFetchesForTesting() (restore func()) {
 	return func() { urlValidator, dialCheck = origValidator, origDial }
 }
 
-// validateImageURL checks that the URL uses an allowed scheme and does not
-// resolve to a blocked IP range. It gives an early, clear error; the fetch
-// clients enforce the IP check on the address actually dialed, or leave it to
-// the proxy, which checks the address it dials (see newFetchClient).
+// validateImageURL checks that the URL uses an allowed scheme and, when it
+// will be fetched directly, that it does not resolve to a blocked IP range.
+// It gives an early, clear error; the fetch clients enforce the IP check on
+// the address actually dialed. A URL the proxy will fetch isn't resolved
+// here: the proxy resolves it and refuses internal addresses itself (see
+// newFetchClient), so this process needs no DNS of its own for it.
 func validateImageURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -224,6 +243,9 @@ func validateImageURL(rawURL string) error {
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return fmt.Errorf("unsupported URL scheme %q", parsed.Scheme)
+	}
+	if proxy, err := fetchProxy(&http.Request{URL: parsed}); err == nil && proxy != nil {
+		return nil
 	}
 
 	host := parsed.Hostname()
@@ -945,6 +967,21 @@ func (c *Client) saveRemoteFile(ctx context.Context, guildID, fileURL, kind stri
 	}
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 		return "", fmt.Errorf("rewinding temp file: %w", err)
+	}
+	if kind == sprobot.FileKindShortcut {
+		// A shortcut image is re-hosted only if it is one: a page or
+		// anything else stays the link it was.
+		head := make([]byte, 512)
+		n, err := io.ReadFull(tmp, head)
+		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("reading temp file: %w", err)
+		}
+		if ct := http.DetectContentType(head[:n]); !strings.HasPrefix(ct, "image/") {
+			return "", fmt.Errorf("%w: %s", ErrNotImage, ct)
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			return "", fmt.Errorf("rewinding temp file: %w", err)
+		}
 	}
 
 	contentType := sprobot.InlineContentType(ext)

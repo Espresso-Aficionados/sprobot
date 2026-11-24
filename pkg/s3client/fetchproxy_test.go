@@ -3,6 +3,7 @@ package s3client
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -29,6 +30,7 @@ type recordingProxy struct {
 
 	mu      sync.Mutex
 	targets []string
+	purpose []string // each CONNECT's X-Egress-Purpose
 }
 
 func newRecordingProxy(t *testing.T, body, tunnelTo string) *recordingProxy {
@@ -47,6 +49,7 @@ func (p *recordingProxy) serve(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	if r.Method == http.MethodConnect {
 		p.targets = append(p.targets, "CONNECT "+r.Host)
+		p.purpose = append(p.purpose, r.Header.Get("X-Egress-Purpose"))
 	} else {
 		p.targets = append(p.targets, r.Method+" "+r.URL.String())
 	}
@@ -156,6 +159,56 @@ func TestFetchThroughConnectProxy(t *testing.T) {
 	if got := p.seen(); len(got) != 1 || got[0] != "CONNECT example.com:"+port {
 		t.Errorf("proxy saw %q", got)
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.purpose) != 1 || p.purpose[0] != "fetch" {
+		t.Errorf("CONNECT's X-Egress-Purpose = %q, want fetch (the egress proxy's fetch role)", p.purpose)
+	}
+}
+
+// The label goes to the proxy only: the URL's host never sees it.
+func TestFetchPurposeNotSentToTarget(t *testing.T) {
+	var got []string
+	var mu sync.Mutex
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, r.Header.Get("X-Egress-Purpose"))
+		mu.Unlock()
+	}))
+	t.Cleanup(target.Close)
+	_, port, _ := net.SplitHostPort(target.Listener.Addr().String())
+	p := newRecordingProxy(t, "", target.Listener.Addr().String())
+	useProxyFor(t, "example.com", p.proxyURL(t))
+
+	tr := newFetchTransport(0)
+	roots := x509.NewCertPool()
+	roots.AddCert(target.Certificate())
+	tr.TLSClientConfig.RootCAs = roots
+	resp, err := (&http.Client{Transport: tr}).Get("https://example.com:" + port + "/cat.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0] != "" {
+		t.Errorf("target saw X-Egress-Purpose %q, want none", got)
+	}
+}
+
+// A URL the proxy will fetch isn't resolved here (with DNS off on the bots'
+// networks, it couldn't be); one fetched directly still is.
+func TestValidateImageURLLeavesProxiedHostsToTheProxy(t *testing.T) {
+	useProxyFor(t, "images.invalid", &url.URL{Scheme: "http", Host: "10.89.3.3:4750"})
+	if err := validateImageURL("https://images.invalid/cat.png"); err != nil {
+		t.Errorf("proxied URL: %v, want no lookup and no error", err)
+	}
+	if err := validateImageURL("https://direct.invalid/cat.png"); err == nil {
+		t.Error("direct URL with an unresolvable host passed, want the lookup's error")
+	}
+	if err := validateImageURL("ftp://images.invalid/cat.png"); err == nil {
+		t.Error("proxied ftp URL passed, want the scheme check")
+	}
 }
 
 // Only the proxy is exempt from the dial check: a request the proxy doesn't
@@ -251,5 +304,33 @@ func TestProxyAddr(t *testing.T) {
 		if got := proxyAddr(u); got != want {
 			t.Errorf("proxyAddr(%s) = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+// A shortcut "image" that is a page (or anything but an image) isn't stored:
+// the shortcut keeps its link. Mod and sticky files are stored whatever they
+// are.
+func TestSaveShortcutImageRefusesNonImages(t *testing.T) {
+	disableURLValidation(t)
+	fake := newFakeS3()
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<!doctype html><html><body>not an image</body></html>"))
+	}))
+	t.Cleanup(page.Close)
+	c := newTestClient(t, server)
+
+	_, err := c.SaveShortcutImage(context.Background(), "123", page.URL+"/cat.png")
+	if !errors.Is(err, ErrNotImage) {
+		t.Fatalf("err = %v, want ErrNotImage", err)
+	}
+	if _, err := c.SaveModFile(context.Background(), "123", page.URL+"/page.png"); err != nil {
+		t.Fatalf("mod file: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.objects) != 1 {
+		t.Errorf("stored %d objects, want 1 (the mod file only)", len(fake.objects))
 	}
 }
