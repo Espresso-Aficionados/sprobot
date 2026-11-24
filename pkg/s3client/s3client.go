@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -51,23 +52,79 @@ var httpClient = newFetchClient(30*time.Second, 0)
 // so there is no overall timeout; callers bound them with their context.
 var downloadClient = newFetchClient(0, 30*time.Second)
 
-// newFetchClient returns a client for fetching user-supplied URLs. Every
-// connection, including each redirect hop, is checked against blockedIP at
-// dial time, so redirects and DNS rebinding can't reach internal addresses.
-// Proxies are disabled so the checked address is the one connected to.
+// newFetchClient returns a client for fetching user-supplied URLs.
+//
+// Fetches use the proxy the environment names (HTTPS_PROXY, HTTP_PROXY and
+// NO_PROXY, as every other client here does): on bonnet the bots' networks
+// have no route out, so their egress proxy is the only way to reach the
+// internet. A proxied fetch connects only to the proxy, which resolves the
+// URL's host itself and refuses internal addresses (Smokescreen's IP policy),
+// on every redirect hop too: each hop is a new request to the proxy.
+//
+// Every other connection, a fetch with no proxy (local development) or one
+// NO_PROXY exempts, is checked against blockedIP at dial time, so redirects
+// and DNS rebinding can't reach internal addresses. The proxy's own address
+// is exempt from that check, as it is internal: only the address of a proxy
+// URL fetchProxy returned, which comes from the environment, never from the
+// URL being fetched.
+//
 // Calls are traced and timed as "fetch", outside the checked transport. The
 // host is the user's choice: svc/telemetry's metric view drops it, but the
 // client span still carries it as server.address.
 func newFetchClient(timeout, responseHeaderTimeout time.Duration) *http.Client {
-	dialer := &net.Dialer{
+	return &http.Client{Timeout: timeout, Transport: telemetry.Transport("fetch", newFetchTransport(responseHeaderTimeout))}
+}
+
+// newFetchTransport is newFetchClient's transport, before instrumentation.
+func newFetchTransport(responseHeaderTimeout time.Duration) *http.Transport {
+	checked := &net.Dialer{
 		Timeout: 30 * time.Second,
 		Control: func(_, address string, _ syscall.RawConn) error { return dialCheck(address) },
 	}
+	unchecked := &net.Dialer{Timeout: 30 * time.Second}
+	var proxies sync.Map // canonical "host:port" of each proxy fetchProxy chose
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.Proxy = nil
-	t.DialContext = dialer.DialContext
+	t.Proxy = func(r *http.Request) (*url.URL, error) {
+		u, err := fetchProxy(r)
+		if u != nil {
+			proxies.Store(proxyAddr(u), true)
+		}
+		return u, err
+	}
+	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if _, ok := proxies.Load(addr); ok {
+			return unchecked.DialContext(ctx, network, addr)
+		}
+		return checked.DialContext(ctx, network, addr)
+	}
 	t.ResponseHeaderTimeout = responseHeaderTimeout
-	return &http.Client{Timeout: timeout, Transport: telemetry.Transport("fetch", t)}
+	return t
+}
+
+// fetchProxy chooses the fetch clients' proxy for a request. It is a variable
+// so tests can set one: http.ProxyFromEnvironment reads the environment once
+// per process.
+var fetchProxy = http.ProxyFromEnvironment
+
+// proxyAddr is the address the transport dials for proxy URL u: its host and
+// port, the scheme's default port when it has none, as net/http's unexported
+// canonicalAddr computes it. That also converts a non-ASCII host name to
+// punycode, which this doesn't: a proxy named so would get the dial check,
+// which refuses it (an internal address) rather than letting anything else
+// through.
+func proxyAddr(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		switch u.Scheme {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		case "socks5", "socks5h":
+			port = "1080"
+		}
+	}
+	return net.JoinHostPort(u.Hostname(), port)
 }
 
 // dialCheck rejects connections to blocked addresses. It is a variable so
@@ -158,7 +215,8 @@ func AllowLocalFetchesForTesting() (restore func()) {
 
 // validateImageURL checks that the URL uses an allowed scheme and does not
 // resolve to a blocked IP range. It gives an early, clear error; the fetch
-// clients enforce the IP check on the address actually dialed.
+// clients enforce the IP check on the address actually dialed, or leave it to
+// the proxy, which checks the address it dials (see newFetchClient).
 func validateImageURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
