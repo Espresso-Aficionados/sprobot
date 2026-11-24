@@ -11,7 +11,7 @@ require (
 	github.com/disgoorg/snowflake/v2 v2.0.3
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/sadbox/svc v0.1.0
-	github.com/sadbox/svc/telemetry v0.1.3
+	github.com/sadbox/svc/telemetry v0.1.4
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
@@ -38,6 +38,8 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/grafana/pyroscope-go v1.5.0 // indirect
+	github.com/grafana/pyroscope-go/godeltaprof v0.1.12 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/sasha-s/go-csync v0.0.0-20240107134140-fcbab37b09ad // indirect
