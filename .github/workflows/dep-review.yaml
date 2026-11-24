@@ -1,8 +1,11 @@
 # Dependabot merge gate (sadbox/dep-review). Runs when dep-review-trigger
-# completes, and on a schedule to merge approved PRs whose CI finished later.
-# Needs the `dep-review` environment (default branch only) with variable
-# DEP_REVIEW_APP_ID and secret DEP_REVIEW_APP_KEY. The Anthropic values below
-# are identifiers, not secrets.
+# completes, and on a schedule: the scheduled run looks again at the PRs the
+# gate left waiting (a merge GitHub refused while required checks ran lands
+# there), takes up the ones it has nothing for, and asks the model about what
+# it has not read. Needs the `dep-review` environment (default branch only)
+# with variable DEP_REVIEW_APP_ID and secret DEP_REVIEW_APP_KEY. The
+# Anthropic values below are identifiers, not secrets. The gate's own
+# settings (ages, the list) are built into the gate.
 name: dep-review
 
 on:
@@ -10,7 +13,7 @@ on:
     workflows: [dep-review-trigger]
     types: [completed]
   schedule:
-    - cron: "17,47 * * * *"
+    - cron: "17 */4 * * *"
   workflow_dispatch:
 
 permissions: {}
@@ -18,12 +21,19 @@ permissions: {}
 # Keyed on the head repository too, so a fork PR on a same-named branch can't
 # share (and displace a queued run in) a Dependabot PR's group.
 concurrency:
-  group: dep-review-${{ github.event.workflow_run.head_repository.full_name || 'sweep' }}-${{ github.event.workflow_run.head_branch || 'sweep' }}
+  group: dep-review-${{ github.event.workflow_run.head_repository.full_name || 'schedule' }}-${{ github.event.workflow_run.head_branch || 'schedule' }}
   cancel-in-progress: false
 
 jobs:
   gate:
-    uses: sadbox/dep-review/.github/workflows/gate.yml@c0f8afd3c0d85bede7bd0780b0a797c15152fda4 # v0.1.7
+    # A trial of the v0.2 gate from its branch (sadbox/dep-review#40), not a
+    # release. The comment is not a version on purpose: the gate reads its
+    # own pin only as `@<commit> # vX.Y.Z`, so a Dependabot change of this
+    # line comes to a person and is never merged by the gate.
+    uses: sadbox/dep-review/.github/workflows/gate.yml@7834b7138f53e2daafada817ea85c2baa2fc82e6 # v0.2 branch, not a release
+    # The most any of the gate's jobs may ask for. Only its two review jobs
+    # take id-token: one runs for a workflow_run event, the other for the
+    # schedule. Neither runs on a manual dispatch.
     permissions:
       contents: read
       pull-requests: read
@@ -34,13 +44,9 @@ jobs:
       PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
       PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
     with:
+      # The gate app's slug: the name in https://github.com/apps/<slug>.
+      app_slug: sep-review
       anthropic_federation_rule_id: fdrl_012wV5ykPZk8GgpufmkZUJft
       anthropic_organization_id: e5c4105d-c8e0-46bb-8e22-e172c5526e4e
       anthropic_workspace_id: wrkspc_01L9rZApihjXPgpNmmtrPb1A
       anthropic_service_account_id: svac_01GthwZKH3KkYC9pTBvrkGh3
-      # Exactly the platforms publish.yaml builds.
-      docker_platforms: linux/amd64,linux/arm64
-      # Every Go build this repository makes (CI, images, the Mac) and the
-      # extra tag sets they use; Go checks skip files none of them compiles.
-      go_platforms: linux/amd64,linux/arm64,darwin/arm64
-      go_tags: race
