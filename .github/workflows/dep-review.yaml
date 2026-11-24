@@ -26,11 +26,7 @@ concurrency:
 
 jobs:
   gate:
-    # A trial of the v0.2 gate from its branch (sadbox/dep-review#40), not a
-    # release. The comment is not a version on purpose: the gate reads its
-    # own pin only as `@<commit> # vX.Y.Z`, so a Dependabot change of this
-    # line comes to a person and is never merged by the gate.
-    uses: sadbox/dep-review/.github/workflows/gate.yml@7834b7138f53e2daafada817ea85c2baa2fc82e6 # v0.2 branch, not a release
+    uses: sadbox/dep-review/.github/workflows/gate.yml@9fe5ec7cb64cad7f4dba67933b0c848aafaa7e72 # v0.2.0
     # The most any of the gate's jobs may ask for. Only its two review jobs
     # take id-token: one runs for a workflow_run event, the other for the
     # schedule. Neither runs on a manual dispatch.
