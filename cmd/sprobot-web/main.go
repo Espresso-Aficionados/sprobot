@@ -550,11 +550,26 @@ func renderS3Error(ctx context.Context, w http.ResponseWriter, what string, err 
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+	// sent is how much of the body was written; writeErr is the first
+	// error writing it. After one the client got nothing more, and if sent
+	// is under a buffer's worth, not even the status: the server's write
+	// deadline had passed (a slow S3 read), or the client had gone.
+	sent     int64
+	writeErr error
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	n, err := r.ResponseWriter.Write(b)
+	r.sent += int64(n)
+	if err != nil && r.writeErr == nil {
+		r.writeErr = err
+	}
+	return n, err
 }
 
 func accessLog(next http.Handler) http.Handler {
@@ -569,7 +584,14 @@ func accessLog(next http.Handler) http.Handler {
 		if ip == "" {
 			ip = r.RemoteAddr
 		}
-		slog.InfoContext(r.Context(), "request", "remote", sanitizeLog(ip), "method", r.Method, "uri", sanitizeLog(r.URL.RequestURI()), "status", rec.status, "duration", time.Since(start), "user_agent", sanitizeLog(r.UserAgent()))
+		attrs := []any{"remote", sanitizeLog(ip), "method", r.Method, "uri", sanitizeLog(r.URL.RequestURI()), "status", rec.status, "duration", time.Since(start), "user_agent", sanitizeLog(r.UserAgent())}
+		if rec.writeErr != nil {
+			// status is what the handler answered, not what arrived: say so,
+			// or a response nobody received reads as a 200.
+			slog.WarnContext(r.Context(), "request", append(attrs, "sent", rec.sent, "write_error", rec.writeErr)...)
+			return
+		}
+		slog.InfoContext(r.Context(), "request", attrs...)
 	})
 }
 

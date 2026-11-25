@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"html/template"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
@@ -292,6 +296,39 @@ func TestAccessLogMiddleware(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Code)
+	}
+}
+
+// failingWriter is a response whose connection is gone (or past the
+// server's write deadline): every write fails.
+type failingWriter struct{ http.ResponseWriter }
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write: i/o timeout") }
+
+// A response that couldn't be written is logged as one, not as a plain 200:
+// on 2026-11-25 a profile image whose S3 read outlasted the write deadline
+// was logged "status=200" though nothing of it was sent.
+func TestAccessLogSaysWhenTheResponseWasNotSent(t *testing.T) {
+	var buf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(logsetup.New(&buf))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	h := accessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := w.Write([]byte("image bytes")); err == nil {
+			t.Error("the handler didn't see the write fail")
+		}
+	}))
+	h.ServeHTTP(failingWriter{httptest.NewRecorder()}, httptest.NewRequest(http.MethodGet, "/profiles/1/t/2/image.jpg", nil))
+	if got := buf.String(); !strings.Contains(got, "level=WARN") || !strings.Contains(got, `write_error="write: i/o timeout"`) || !strings.Contains(got, "sent=0") {
+		t.Errorf("log = %q, want a WARN naming the write error and sent=0", got)
+	}
+
+	buf.Reset()
+	accessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })).
+		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
+	if got := buf.String(); !strings.Contains(got, "level=INFO") || strings.Contains(got, "write_error") {
+		t.Errorf("log = %q, want a plain INFO line for a response that was sent", got)
 	}
 }
 
