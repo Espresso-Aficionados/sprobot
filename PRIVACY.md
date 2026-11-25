@@ -102,7 +102,7 @@ links in messages works correctly on real links). When we do this:
   reposts. We do not share it with anyone except as described under "Development and
   troubleshooting".
 - We do not sell data, and we do not share it with third parties except the service
-  providers named above that process it on our behalf.
+  providers named in this policy that process it on our behalf.
 - We do not use any data to train machine-learning or AI models.
 - We do not track presence/online status.
 
@@ -116,12 +116,13 @@ expiry only until the bot has removed the role, or the member or role no longer
 exists. Profile pages served by sprobot-web are
 public URLs by design — do not put anything in a profile you do not want visible
 outside Discord. Links to saved files are unguessable, but work for anyone who has them.
-The bots and sprobot-web write operational logs for troubleshooting; these include
+The bots and sprobot-web write operational logs for troubleshooting, which are
+sent to our monitoring service, Grafana Cloud; these include
 user IDs and, for sprobot-web, visitors' IP addresses and user agents.
 When a member gives sprobot a link to an image to save (a profile image or a
 shortcut's image), the full link is recorded in these logs.
 They also send operational metrics and traces (request and command counts and
-timings, background-task outcomes) to our monitoring service, Grafana Cloud;
+timings, background-task outcomes) to Grafana Cloud;
 these carry no user, server or channel IDs, names, IP addresses or message content.
 
 If sprobot finds stored data it cannot read back (for example top-poster counts or
