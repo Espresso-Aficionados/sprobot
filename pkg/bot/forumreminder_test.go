@@ -143,7 +143,7 @@ func addForumThread(t *testing.T, b *Bot, stub *discordStub, age time.Duration, 
 	raw := forumThreadJSON(id, messageCount, false)
 	stub.on(fmt.Sprintf("GET /channels/%d", id), 200, raw)
 	if live {
-		b.onForumThreadCreate(gatewayEvent[*events.ThreadCreate](t, b.Client, gateway.EventTypeThreadCreate,
+		b.onForumThreadCreate(t.Context(), gatewayEvent[*events.ThreadCreate](t, b.Client, gateway.EventTypeThreadCreate,
 			strings.TrimSuffix(raw, "}")+`,"newly_created":true}`))
 	} else {
 		b.Client.Caches.AddChannel(mustThread(t, raw))
@@ -163,7 +163,7 @@ func threadMessage(b *Bot, threadID, author snowflake.ID) *events.GuildMessageCr
 func TestForumReminderPromptsLiveThreadWithoutReadingHistory(t *testing.T) {
 	b, stub := newForumBot(t)
 	id := addForumThread(t, b, stub, 2*time.Hour, 2, true)
-	b.onForumThreadMessage(threadMessage(b, id, 30)) // the owner adding detail
+	b.onForumThreadMessage(t.Context(), threadMessage(b, id, 30)) // the owner adding detail
 
 	b.sendForumReminders(t.Context())
 
@@ -182,7 +182,7 @@ func TestForumReminderPromptsLiveThreadWithoutReadingHistory(t *testing.T) {
 func TestForumReminderSkipsThreadRepliedToWhileOnline(t *testing.T) {
 	b, stub := newForumBot(t)
 	id := addForumThread(t, b, stub, 2*time.Hour, 1, true)
-	b.onForumThreadMessage(threadMessage(b, id, 31))
+	b.onForumThreadMessage(t.Context(), threadMessage(b, id, 31))
 
 	b.sendForumReminders(t.Context())
 
@@ -363,7 +363,7 @@ func TestForumReminderRereadsWaitingThreadsAfterNewSession(t *testing.T) {
 	b, stub := newForumBot(t)
 	id := addForumThread(t, b, stub, 2*time.Hour, 1, true)
 	// A reply sent while the gateway had no session is never delivered.
-	b.onForumReminderReady(&events.Ready{})
+	b.onForumReminderReady(t.Context(), &events.Ready{})
 	stub.on(fmt.Sprintf("GET /channels/%d/messages", id), 200, `[{"id":"1","channel_id":"1","author":{"id":"31","username":"bob"}}]`)
 
 	b.sendForumReminders(t.Context())

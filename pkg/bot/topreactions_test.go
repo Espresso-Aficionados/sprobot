@@ -326,7 +326,7 @@ func TestStarboardReactionDuringPostDoesNotPostTwice(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.onReactionAdd(reactionAdd(msgID, "⭐")) // reaches the threshold and posts
+		b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐")) // reaches the threshold and posts
 		close(done)
 	}()
 	<-started
@@ -335,7 +335,7 @@ func TestStarboardReactionDuringPostDoesNotPostTwice(t *testing.T) {
 	// second post would queue behind the first in disgo's rate limiter.
 	second := make(chan struct{})
 	go func() {
-		b.onReactionAdd(reactionAdd(msgID, "⭐"))
+		b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 		close(second)
 	}()
 	select {
@@ -378,7 +378,7 @@ func TestStarboardPostUsesActualReactionCount(t *testing.T) {
 	inflated := recentID(time.Hour)
 	api.setSource(inflated, 1)
 	st.Entries[inflated] = starboardEntry{ChannelID: sbSource, Count: 1}
-	b.onReactionAdd(reactionAdd(inflated, "⭐"))
+	b.onReactionAdd(t.Context(), reactionAdd(inflated, "⭐"))
 	if len(api.calls().creates) != 0 {
 		t.Errorf("posted a message below the threshold")
 	}
@@ -389,7 +389,7 @@ func TestStarboardPostUsesActualReactionCount(t *testing.T) {
 		t.Fatalf("%d work records left after the attempt; the message could never post", n)
 	}
 	api.setSource(inflated, 2)
-	b.onReactionAdd(reactionAdd(inflated, "⭐"))
+	b.onReactionAdd(t.Context(), reactionAdd(inflated, "⭐"))
 	if n := len(api.calls().creates); n != 1 {
 		t.Fatalf("%d posts once the message reached the threshold, want 1", n)
 	}
@@ -398,7 +398,7 @@ func TestStarboardPostUsesActualReactionCount(t *testing.T) {
 	msgID := recentID(2 * time.Hour)
 	api.setSource(msgID, 7)
 	st.Entries[msgID] = starboardEntry{ChannelID: sbSource, Count: 1}
-	b.onReactionAdd(reactionAdd(msgID, "⭐"))
+	b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 	creates := api.calls().creates
 	if len(creates) != 2 {
 		t.Fatalf("%d posts, want 2", len(creates))
@@ -421,7 +421,7 @@ func TestStarboardFailedPostReleasesMessage(t *testing.T) {
 	api.setSource(msgID, 2)
 	st.Entries[msgID] = starboardEntry{ChannelID: sbSource, Count: 1}
 
-	b.onReactionAdd(reactionAdd(msgID, "⭐"))
+	b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 	if n := workCount(st); n != 0 {
 		t.Fatalf("%d work records left after a failed post; the message could never post", n)
 	}
@@ -430,7 +430,7 @@ func TestStarboardFailedPostReleasesMessage(t *testing.T) {
 	api.createStatus = 0
 	api.mu.Unlock()
 	api.setSource(msgID, 3)
-	b.onReactionAdd(reactionAdd(msgID, "⭐"))
+	b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 	if n := len(api.calls().creates); n != 1 {
 		t.Errorf("%d posts after the failure cleared, want 1", n)
 	}
@@ -451,12 +451,12 @@ func TestStarboardReactionDuringCountReadIsNotLost(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.onReactionAdd(reactionAdd(msgID, "⭐")) // counter 2: tries to post, reads 1
+		b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐")) // counter 2: tries to post, reads 1
 		close(done)
 	}()
 	<-started
 	api.setSource(msgID, 2)
-	b.onReactionAdd(reactionAdd(msgID, "⭐")) // a real second ⭐, during the read
+	b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐")) // a real second ⭐, during the read
 	close(gate)
 	<-done
 
@@ -487,7 +487,7 @@ func TestStarboardUpdatesCoalesce(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.onReactionAdd(reactionAdd(msgID, "⭐")) // starts the edit and waits
+		b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐")) // starts the edit and waits
 		close(done)
 	}()
 	for {
@@ -500,7 +500,7 @@ func TestStarboardUpdatesCoalesce(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	for range 4 {
-		b.onReactionAdd(reactionAdd(msgID, "⭐"))
+		b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 	}
 	<-done
 
@@ -516,19 +516,19 @@ func TestStarboardIgnoresOtherEmojiBeforeLookups(t *testing.T) {
 	b.Client.Caches.RemoveChannel(sbSource) // a lookup would go to REST
 	msgID := recentID(time.Hour)
 
-	b.onReactionAdd(reactionAdd(msgID, "🔥"))
+	b.onReactionAdd(t.Context(), reactionAdd(msgID, "🔥"))
 	if gets := api.calls().channelGets; gets != 0 {
 		t.Errorf("a non-starboard reaction made %d channel lookups", gets)
 	}
 
 	st.Settings.OutputChannelID = 0
-	b.onReactionAdd(reactionAdd(msgID, "⭐"))
+	b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 	if gets := api.calls().channelGets; gets != 0 {
 		t.Errorf("a reaction with the starboard disabled made %d channel lookups", gets)
 	}
 
 	st.Settings.OutputChannelID = sbOutput
-	b.onReactionAdd(reactionAdd(msgID, "⭐"))
+	b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 	if api.calls().channelGets == 0 {
 		t.Error("a starboard reaction made no lookup; the checks above prove nothing")
 	}
@@ -545,8 +545,8 @@ func TestStarboardSourceDeleteRemovesPost(t *testing.T) {
 	// The output channel has changed since the post; the post's own channel is used.
 	st.Settings.OutputChannelID = 601
 
-	b.onStarboardSourceDelete(messageDelete(msgID))
-	b.onStarboardSourceDelete(messageDelete(msgID))
+	b.onStarboardSourceDelete(t.Context(), messageDelete(msgID))
+	b.onStarboardSourceDelete(t.Context(), messageDelete(msgID))
 
 	if deletes := api.calls().deletes; !slices.Equal(deletes, []string{postKey}) {
 		t.Errorf("deletes = %v, want only %s", deletes, postKey)
@@ -573,12 +573,12 @@ func TestStarboardSourceDeleteDuringPost(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.onReactionAdd(reactionAdd(msgID, "⭐"))
+		b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 		close(done)
 	}()
 	<-started
-	b.onStarboardSourceDelete(messageDelete(msgID))
-	b.onReactionAdd(reactionAdd(msgID, "⭐"))
+	b.onStarboardSourceDelete(t.Context(), messageDelete(msgID))
+	b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 	close(gate)
 	<-done
 
@@ -606,14 +606,14 @@ func TestStarboardSourceDeleteRetriesFailedPostDelete(t *testing.T) {
 	api.deleteStatus = http.StatusBadGateway
 	api.mu.Unlock()
 
-	b.onStarboardSourceDelete(messageDelete(msgID))
+	b.onStarboardSourceDelete(t.Context(), messageDelete(msgID))
 	if e, ok := entryOf(st, msgID); !ok || !e.SourceDeleted {
 		t.Fatalf("entry = %+v (exists %v), want it kept and flagged", e, ok)
 	}
 	if !persistedHolds(t, fakeS3, msgID) {
 		t.Error("flagged entry not persisted; a restart would lose the post")
 	}
-	b.onReactionAdd(reactionAdd(msgID, "⭐"))
+	b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 	if e, _ := entryOf(st, msgID); e.Count != 5 || len(api.calls().edits) != 0 {
 		t.Errorf("a reaction changed the deleted message's entry: %+v, edits %q", e, api.calls().edits)
 	}
@@ -641,7 +641,7 @@ func TestStarboardSourceDeleteKeepsPostOfUnknownChannel(t *testing.T) {
 	st.Entries[msgID] = starboardEntry{ChannelID: sbSource, Count: 5, StarboardMsgID: 8000}
 	st.Settings.OutputChannelID = 0
 
-	b.onStarboardSourceDelete(messageDelete(msgID))
+	b.onStarboardSourceDelete(t.Context(), messageDelete(msgID))
 	if e, ok := entryOf(st, msgID); !ok || !e.SourceDeleted {
 		t.Errorf("entry = %+v (exists %v), want it kept and flagged", e, ok)
 	}
@@ -682,7 +682,7 @@ func TestStarboardOldPostDeletedWithSource(t *testing.T) {
 	st.Entries[old] = starboardEntry{ChannelID: sbSource, Count: 5, StarboardMsgID: 8000, PostChannelID: sbOutput}
 
 	b.saveStarboard(t.Context())
-	b.onStarboardSourceDelete(messageDelete(old))
+	b.onStarboardSourceDelete(t.Context(), messageDelete(old))
 	if deletes := api.calls().deletes; !slices.Equal(deletes, []string{fmt.Sprintf("%d/8000", sbOutput)}) {
 		t.Errorf("deletes = %v, want the old post deleted", deletes)
 	}
@@ -704,7 +704,7 @@ func TestStarboardChannelDeleteRemovesPosts(t *testing.T) {
 		st.Entries[e.msgID] = starboardEntry{ChannelID: e.channelID, Count: 5, StarboardMsgID: postID, PostChannelID: sbOutput}
 	}
 
-	b.onStarboardChannelDelete(&events.GuildChannelDelete{GenericGuildChannel: &events.GenericGuildChannel{
+	b.onStarboardChannelDelete(t.Context(), &events.GuildChannelDelete{GenericGuildChannel: &events.GenericGuildChannel{
 		GuildID: sbGuild, ChannelID: sbSource,
 	}})
 	deletes := api.calls().deletes
@@ -718,7 +718,7 @@ func TestStarboardChannelDeleteRemovesPosts(t *testing.T) {
 		}
 	}
 
-	b.onStarboardThreadDelete(&events.ThreadDelete{GenericThread: &events.GenericThread{
+	b.onStarboardThreadDelete(t.Context(), &events.ThreadDelete{GenericThread: &events.GenericThread{
 		GuildID: sbGuild, ThreadID: 801, ParentID: 502,
 	}})
 	if _, ok := entryOf(st, inOtherThread); ok {
@@ -747,7 +747,7 @@ func TestStarboardFailsClosedWhenChannelUnknown(t *testing.T) {
 			api.setSource(msgID, 5)
 
 			for range 3 {
-				b.onReactionAdd(reactionAdd(msgID, "⭐"))
+				b.onReactionAdd(t.Context(), reactionAdd(msgID, "⭐"))
 			}
 			if _, ok := entryOf(st, msgID); ok {
 				t.Error("stored a reaction whose channel is unknown")
@@ -882,14 +882,14 @@ func TestStarboardPostsFromRestrictedChannelUnlessFiltered(t *testing.T) {
 	api.setSource(filtered, 2)
 	st.Entries[posted] = starboardEntry{ChannelID: sbSource, Count: 1}
 
-	b.onReactionAdd(reactionAdd(posted, "⭐"))
+	b.onReactionAdd(t.Context(), reactionAdd(posted, "⭐"))
 	if n := len(api.calls().creates); n != 1 {
 		t.Fatalf("%d posts, want the restricted channel's message posted", n)
 	}
 
 	st.Settings.Blacklist = []snowflake.ID{sbCategory}
 	for range 3 {
-		b.onReactionAdd(reactionAdd(filtered, "⭐"))
+		b.onReactionAdd(t.Context(), reactionAdd(filtered, "⭐"))
 	}
 	if _, ok := entryOf(st, filtered); ok {
 		t.Error("stored a reaction in a filtered category")
@@ -925,7 +925,7 @@ func TestStarboardSkipsPrivateThreadsAndAgeRestrictedChannels(t *testing.T) {
 			for range 3 {
 				e := reactionAdd(msgID, "⭐")
 				e.ChannelID = tt.channelID
-				b.onReactionAdd(e)
+				b.onReactionAdd(t.Context(), e)
 			}
 			if _, ok := entryOf(st, msgID); ok {
 				t.Error("stored a reaction that must be skipped")
@@ -1035,7 +1035,7 @@ func TestStarboardIgnoresMessagesPastMaxAge(t *testing.T) {
 	api.setSource(old, 10)
 
 	for range 3 {
-		b.onReactionAdd(reactionAdd(old, "⭐"))
+		b.onReactionAdd(t.Context(), reactionAdd(old, "⭐"))
 	}
 	if _, ok := entryOf(st, old); ok {
 		t.Error("tracked reactions on a message past the max age")

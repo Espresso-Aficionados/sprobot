@@ -184,6 +184,9 @@ func TestTraceHandlerContextCarriesSpan(t *testing.T) {
 					Data: discord.ModalSubmitInteractionData{CustomID: "test_ctx_1"},
 				}})
 		}},
+		{"event MessageCreate", func(record func(context.Context)) {
+			TraceEvent("onMessage", func(ctx context.Context, _ *events.MessageCreate) { record(ctx) })(&events.MessageCreate{})
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

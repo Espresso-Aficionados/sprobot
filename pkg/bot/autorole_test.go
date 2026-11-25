@@ -68,7 +68,7 @@ func TestEnsureAutoRoleRefusesUngrantableRole(t *testing.T) {
 	for _, roleID := range []snowflake.ID{modRole, unknownRole} {
 		b.autoRole.set(roleTestGuild, &autoRoleState{RoleID: roleID})
 		b.ensureAutoRole(t.Context(), roleTestGuild, messageFrom(20))
-		b.onMemberJoin(memberJoin(20))
+		b.onMemberJoin(t.Context(), memberJoin(20))
 		if n := api.count(roleCall("PUT", 20, roleID)); n != 0 {
 			t.Errorf("role %d granted %d times", roleID, n)
 		}

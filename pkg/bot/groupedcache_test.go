@@ -1063,7 +1063,7 @@ func TestMessageCache_RemoveMessagesByGuildID(t *testing.T) {
 // listeners, to feed gateway events through disgo's own handlers.
 func gatewayTestClient(b *Bot) *bot.Client {
 	client := &bot.Client{Caches: cache.New(b.cacheConfig()...), Logger: slog.New(slog.DiscardHandler)}
-	client.EventManager = bot.NewEventManager(client, bot.WithListenerFunc(b.onGuildLeave))
+	client.EventManager = bot.NewEventManager(client, bot.WithListenerFunc(botutil.TraceEvent("onGuildLeave", b.onGuildLeave)))
 	client.MemberChunkingManager = bot.NewMemberChunkingManager(client, client.Logger, nil)
 	return client
 }

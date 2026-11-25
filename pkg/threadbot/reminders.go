@@ -120,17 +120,17 @@ func (c *memberCountCache) adjust(threadID snowflake.ID, delta int) bool {
 // onSessionReady records when the current gateway session began. Join and
 // leave events are complete only from then on: a resume replays missed
 // events, but a new session does not.
-func (b *Bot) onSessionReady(*events.Ready) {
+func (b *Bot) onSessionReady(context.Context, *events.Ready) {
 	b.mu.Lock()
 	b.sessionStart = time.Now()
 	b.mu.Unlock()
 }
 
-func (b *Bot) onThreadMemberAdd(e *events.ThreadMemberAdd) {
+func (b *Bot) onThreadMemberAdd(_ context.Context, e *events.ThreadMemberAdd) {
 	b.adjustMemberCount(e.GuildID, e.ThreadID, 1)
 }
 
-func (b *Bot) onThreadMemberRemove(e *events.ThreadMemberRemove) {
+func (b *Bot) onThreadMemberRemove(_ context.Context, e *events.ThreadMemberRemove) {
 	b.adjustMemberCount(e.GuildID, e.ThreadID, -1)
 }
 
@@ -244,8 +244,7 @@ func (b *Bot) ensureRemindersLoaded(ctx context.Context, guildID snowflake.ID) e
 // may be the one serving a guild this one isn't in, so loops start only for
 // guilds the gateway says the bot is in. GuildReady fires again for every new
 // gateway session.
-func (b *Bot) onGuildReady(e *events.GuildReady) {
-	ctx := context.Background()
+func (b *Bot) onGuildReady(ctx context.Context, e *events.GuildReady) {
 	if !botutil.GuildAllowed(e.GuildID) {
 		return
 	}
@@ -397,8 +396,7 @@ func (b *Bot) stopReminderGoroutine(r *threadReminder) {
 // running, it stays enabled in S3 and restarts on every boot, and no command
 // can disable it since the channel is gone. Deletes this misses are caught by
 // startGuildReminders.
-func (b *Bot) onChannelDelete(e *events.GuildChannelDelete) {
-	ctx := context.Background()
+func (b *Bot) onChannelDelete(ctx context.Context, e *events.GuildChannelDelete) {
 	if b.dropReminder(e.GuildID, e.ChannelID) {
 		b.saveRemindersForGuild(ctx, e.GuildID)
 		b.Log.Info("Dropped reminder of deleted channel", "guild_id", e.GuildID, "channel_id", e.ChannelID)

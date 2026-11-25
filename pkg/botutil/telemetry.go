@@ -45,6 +45,7 @@ var (
 	interactionType = attribute.Key("interaction.type")
 	interactionName = attribute.Key("interaction.name")
 	eventKey        = attribute.Key("event")
+	eventHandler    = attribute.Key("event.handler")
 )
 
 // interactionBuckets, in seconds: an answer is due within 3s; deferred
@@ -95,6 +96,18 @@ func eventName(e bot.Event) string {
 		t = t.Elem()
 	}
 	return t.Name()
+}
+
+// TraceEvent instruments a gateway event listener: each event it handles
+// runs in a span named "event <Type>" (disgo's type, as CountEvents counts
+// it), with event.handler the listener's name, and h gets the span's context.
+func TraceEvent[E bot.Event](handler string, h func(context.Context, E)) func(E) {
+	return func(e E) {
+		ctx, span := otel.Tracer(scope).Start(context.Background(), "event "+eventName(e),
+			trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(eventHandler.String(handler)))
+		defer span.End()
+		h(ctx, e)
+	}
 }
 
 // registeredCommands are the command names this process registered

@@ -77,14 +77,14 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 		),
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.OnGuildJoin),
-		bot.WithEventListenerFunc(b.onGuildReady),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onGuildReady", b.onGuildReady)),
 		bot.WithEventListenerFunc(botutil.TraceCommands(b.onCommand)),
-		bot.WithEventListenerFunc(b.onMessage),
-		bot.WithEventListenerFunc(b.onSessionReady),
-		bot.WithEventListenerFunc(b.onThreadMemberAdd),
-		bot.WithEventListenerFunc(b.onThreadMemberRemove),
-		bot.WithEventListenerFunc(b.onThreadDelete),
-		bot.WithEventListenerFunc(b.onChannelDelete),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onMessage", b.onMessage)),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onSessionReady", b.onSessionReady)),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onThreadMemberAdd", b.onThreadMemberAdd)),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onThreadMemberRemove", b.onThreadMemberRemove)),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onThreadDelete", b.onThreadDelete)),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onChannelDelete", b.onChannelDelete)),
 	)
 	if err != nil {
 		return nil, err
@@ -137,7 +137,7 @@ func (b *Bot) shutdown(ctx context.Context) {
 	_ = errors.Join(b.saveAllReminders(ctx), b.saveMemberCounts(ctx)) // each failure is logged
 }
 
-func (b *Bot) onMessage(e *events.MessageCreate) {
+func (b *Bot) onMessage(_ context.Context, e *events.MessageCreate) {
 	if e.Message.Author.Bot {
 		return
 	}

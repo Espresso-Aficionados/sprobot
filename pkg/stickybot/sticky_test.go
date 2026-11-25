@@ -413,7 +413,7 @@ func TestLoadGuildStickiesConcurrentWithMessages(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		for range 100 {
-			b.onMessage(e)
+			b.onMessage(t.Context(), e)
 		}
 	})
 	wg.Go(func() { b.loadGuildStickies(context.Background(), testGuildID) })

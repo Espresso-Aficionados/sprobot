@@ -98,8 +98,7 @@ func (g *guildPostCounts) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (b *Bot) onMessage(e *events.MessageCreate) {
-	ctx := context.Background()
+func (b *Bot) onMessage(ctx context.Context, e *events.MessageCreate) {
 	if e.Message.Author.Bot {
 		return
 	}

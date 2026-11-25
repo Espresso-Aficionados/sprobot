@@ -221,11 +221,11 @@ func TestLoadRacesWithEvents(t *testing.T) {
 	go func() {
 		defer close(done)
 		for range 50 {
-			b.onMessage(&events.MessageCreate{GenericMessage: &events.GenericMessage{
+			b.onMessage(t.Context(), &events.MessageCreate{GenericMessage: &events.GenericMessage{
 				GuildID: &guildID, ChannelID: 500, Message: discord.Message{Author: discord.User{ID: 9}},
 			}})
 			b.adjustMemberCount(guildID, 101, 1)
-			b.onSessionReady(&events.Ready{EventReady: gateway.EventReady{}})
+			b.onSessionReady(t.Context(), &events.Ready{EventReady: gateway.EventReady{}})
 		}
 	}()
 	b.loadReminders(t.Context())
@@ -285,7 +285,7 @@ func TestGuildReadyStartsLoopsAndDropsDeletedChannels(t *testing.T) {
 		t.Fatalf("after load: running = %v, want four loaded and none running", got)
 	}
 
-	b.onGuildReady(guildReady(devGuild))
+	b.onGuildReady(t.Context(), guildReady(devGuild))
 	if got := running(b, devGuild); len(got) != 3 || !got[500] || !got[700] || !got[900] {
 		t.Errorf("after GuildReady: running = %v, want 500, 700 and 900 running and 600 dropped", got)
 	}
@@ -317,7 +317,7 @@ func TestLateLoadStartsReadyGuild(t *testing.T) {
 
 	fs.failGet.Store(true)
 	b.loadReminders(t.Context())
-	b.onGuildReady(guildReady(devGuild))
+	b.onGuildReady(t.Context(), guildReady(devGuild))
 	fs.failGet.Store(false)
 	b.loadReminders(t.Context())
 

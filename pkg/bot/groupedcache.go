@@ -3,6 +3,7 @@ package bot
 import (
 	"bufio"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -209,7 +210,7 @@ func (c readyGuildCache) SetGuildUnready(guildID snowflake.ID, unready bool) {
 // onGuildLeave removes the messages and members of a guild the bot left while
 // it was flagged unavailable: outageSafeMessageCache and guildMemberCache kept
 // them when disgo tried.
-func (b *Bot) onGuildLeave(e *events.GuildLeave) {
+func (b *Bot) onGuildLeave(_ context.Context, e *events.GuildLeave) {
 	caches := e.Client().Caches
 	if !caches.IsGuildUnavailable(e.GuildID) {
 		return

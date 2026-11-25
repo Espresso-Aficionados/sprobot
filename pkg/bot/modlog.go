@@ -733,23 +733,23 @@ func (x *modLogThreadIndex) resetAll() {
 	x.scanning = nil
 }
 
-func (b *Bot) onModLogThreadCreate(e *events.ThreadCreate) {
+func (b *Bot) onModLogThreadCreate(_ context.Context, e *events.ThreadCreate) {
 	if parentID := e.Thread.ParentID(); parentID != nil {
 		b.modLogThreads.update(*parentID, e.ThreadID, e.Thread.Name())
 	}
 }
 
-func (b *Bot) onModLogThreadUpdate(e *events.ThreadUpdate) {
+func (b *Bot) onModLogThreadUpdate(_ context.Context, e *events.ThreadUpdate) {
 	b.modLogThreads.update(e.ParentID, e.ThreadID, e.Thread.Name())
 }
 
-func (b *Bot) onModLogThreadDelete(e *events.ThreadDelete) {
+func (b *Bot) onModLogThreadDelete(_ context.Context, e *events.ThreadDelete) {
 	b.modLogThreads.remove(e.ParentID, e.ThreadID)
 }
 
 // onModLogReady forgets the thread index when a new gateway session starts:
 // unlike a resume, it doesn't replay the thread events missed in between.
-func (b *Bot) onModLogReady(*events.Ready) {
+func (b *Bot) onModLogReady(context.Context, *events.Ready) {
 	b.modLogThreads.resetAll()
 }
 
