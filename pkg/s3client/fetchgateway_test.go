@@ -306,3 +306,44 @@ func TestParseFetchGateway(t *testing.T) {
 		t.Error("a fetch went through with an unusable gateway")
 	}
 }
+
+// What production does: SetFetchGateway at startup, and every fetch of a
+// user-supplied URL after it is asked of that gateway.
+func TestSetFetchGateway(t *testing.T) {
+	g := &fakeGateway{answer: func(_ string, w http.ResponseWriter) {
+		w.Header().Set(fetchResultHeader, "upstream")
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("\x89PNG\r\n\x1a\n"))
+	}}
+	g.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.mu.Lock()
+		g.asks = append(g.asks, r.Clone(context.Background()))
+		g.mu.Unlock()
+		g.answer(r.Header.Get(fetchURLHeader), w)
+	}))
+	t.Cleanup(g.Close)
+	t.Cleanup(func() { _ = SetFetchGateway("") })
+
+	if err := SetFetchGateway("10.89.3.3:4751"); err == nil {
+		t.Error("a value that isn't an http URL was accepted")
+	}
+	if err := SetFetchGateway(g.URL); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := newFetchClient(0, 0).Get("https://images.invalid/cat.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	asks := g.asked()
+	if len(asks) != 1 || asks[0].Header.Get(fetchURLHeader) != "https://images.invalid/cat.png" {
+		t.Fatalf("the gateway was asked %d times, want once for the URL", len(asks))
+	}
+
+	if err := SetFetchGateway(""); err != nil {
+		t.Fatal(err)
+	}
+	if gw, err := fetchGateway(); gw != nil || err != nil {
+		t.Errorf("unset: got %v, %v; want none", gw, err)
+	}
+}

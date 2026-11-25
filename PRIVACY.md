@@ -118,6 +118,8 @@ public URLs by design — do not put anything in a profile you do not want visib
 outside Discord. Links to saved files are unguessable, but work for anyone who has them.
 The bots and sprobot-web write operational logs for troubleshooting; these include
 user IDs and, for sprobot-web, visitors' IP addresses and user agents.
+When a member gives sprobot a link to an image to save (a profile image or a
+shortcut's image), the full link is recorded in these logs.
 They also send operational metrics and traces (request and command counts and
 timings, background-task outcomes) to our monitoring service, Grafana Cloud;
 these carry no user, server or channel IDs, names, IP addresses or message content.
