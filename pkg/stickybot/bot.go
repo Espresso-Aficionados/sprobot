@@ -86,33 +86,39 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 
 func (b *Bot) Run() error {
 	ctx := context.Background()
+	// Startup's loads, gateway open and registrations, in one span.
+	start, startSpan := botutil.StartSpan("startup")
+	defer startSpan.End() // on a failed start; a second End does nothing
 
 	// Before the gateway opens, so no command or event sees a guild whose
 	// stickies aren't in memory yet. Nothing has been saved, and nothing
 	// will be: a newer build's stickies are left as they are.
-	if err := b.loadStickies(ctx); err != nil {
+	if err := b.loadStickies(start); err != nil {
 		return err
 	}
 
 	b.ServeHealth()
-	if err := b.OpenGateway(ctx); err != nil {
-		b.shutdown(ctx)
+	if err := b.OpenGateway(start); err != nil {
+		b.shutdown(start)
 		return err
 	}
 	defer b.Client.Close(ctx)
 
 	b.WaitForGuilds(30 * time.Second)
 
-	if err := b.registerAllCommands(); err != nil {
-		b.shutdown(ctx)
+	if err := b.registerAllCommands(start); err != nil {
+		b.shutdown(start)
 		return fmt.Errorf("registering commands: %w", err)
 	}
+	startSpan.End()
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.Heartbeat)
 	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, retryFailedJob, b.retryFailed)
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
 	shutdownErr := b.WaitForShutdown("Stickybot")
-	b.shutdown(ctx)
+	stop, stopSpan := botutil.StartSpan("shutdown")
+	defer stopSpan.End()
+	b.shutdown(stop)
 	return shutdownErr
 }
 

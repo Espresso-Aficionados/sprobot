@@ -118,6 +118,13 @@ func TraceTask[T any](name string, f func(context.Context) T) T {
 	return f(ctx)
 }
 
+// StartSpan starts a root span named name for work no event, interaction or
+// job covers (a bot's startup and shutdown), and returns its context. Its
+// context must not reach work that outlives that span.
+func StartSpan(name string) (context.Context, trace.Span) {
+	return otel.Tracer(scope).Start(context.Background(), name)
+}
+
 // registeredCommands are the command names this process registered
 // (RegisterGuildCommands, RegisterCommandNames): the only command names a
 // label may carry.

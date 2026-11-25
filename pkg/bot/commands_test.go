@@ -51,7 +51,7 @@ func TestRegisteredCommandOptions(t *testing.T) {
 	b.TestGuildIDsOverride = []snowflake.ID{10}
 	stub.on("PUT /applications/2/guilds/10/commands", 200, "[]")
 
-	if err := b.registerAllCommands(); err != nil {
+	if err := b.registerAllCommands(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	bodies := stub.bodies("PUT /applications/2/guilds/10/commands")

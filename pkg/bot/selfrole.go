@@ -102,7 +102,7 @@ func selfrolePanelButtons(cfg selfroleConfig) []discord.LayoutComponent {
 	return []discord.LayoutComponent{discord.NewActionRow(btns...)}
 }
 
-func (b *Bot) ensureSelfrolePanels() {
+func (b *Bot) ensureSelfrolePanels(ctx context.Context) {
 	for _, guildID := range b.GuildIDs() {
 		// Several panels can share a channel, so read each channel's recent
 		// history once.
@@ -115,7 +115,7 @@ func (b *Bot) ensureSelfrolePanels() {
 			messages, fetched := history[cfg.ChannelID]
 			if !fetched {
 				var err error
-				messages, err = b.Client.Rest.GetMessages(cfg.ChannelID, 0, 0, 0, 25)
+				messages, err = b.Client.Rest.GetMessages(cfg.ChannelID, 0, 0, 0, 25, rest.WithCtx(ctx))
 				if err != nil {
 					b.Log.Error("Failed to fetch messages for selfrole panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
 					unreadable[cfg.ChannelID] = true
@@ -123,14 +123,14 @@ func (b *Bot) ensureSelfrolePanels() {
 				}
 				history[cfg.ChannelID] = messages
 			}
-			b.ensureSelfrolePanel(guildID, cfg, messages)
+			b.ensureSelfrolePanel(ctx, guildID, cfg, messages)
 		}
 	}
 }
 
 // ensureSelfrolePanel posts or updates cfg's panel, given its channel's
 // recent messages.
-func (b *Bot) ensureSelfrolePanel(guildID snowflake.ID, cfg selfroleConfig, messages []discord.Message) {
+func (b *Bot) ensureSelfrolePanel(ctx context.Context, guildID snowflake.ID, cfg selfroleConfig, messages []discord.Message) {
 	embed := selfrolePanelEmbed(cfg)
 	components := selfrolePanelButtons(cfg)
 
@@ -150,7 +150,7 @@ func (b *Bot) ensureSelfrolePanel(guildID snowflake.ID, cfg selfroleConfig, mess
 				Content:    &content,
 				Embeds:     &embeds,
 				Components: &components,
-			})
+			}, rest.WithCtx(ctx))
 			if err != nil {
 				b.Log.Error("Failed to update selfrole panel", "guild_id", guildID, "error", err)
 			}
@@ -161,7 +161,7 @@ func (b *Bot) ensureSelfrolePanel(guildID snowflake.ID, cfg selfroleConfig, mess
 	_, err := b.Client.Rest.CreateMessage(cfg.ChannelID, discord.MessageCreate{
 		Embeds:     []discord.Embed{embed},
 		Components: components,
-	})
+	}, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to post selfrole panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
 	} else {

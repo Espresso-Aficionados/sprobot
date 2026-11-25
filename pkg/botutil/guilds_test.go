@@ -73,7 +73,7 @@ func TestCommandsRegisterOnlyInAllowedGuilds(t *testing.T) {
 		Caches:        guildCaches(foreignGuild, devGuild),
 		Rest:          rest.New(rest.NewClient("test", rest.WithURL(srv.URL))),
 	}}
-	if err := RegisterGuildCommands(b.Client, b.GuildIDs(), nil, b.Log); err != nil {
+	if err := RegisterGuildCommands(t.Context(), b.Client, b.GuildIDs(), nil, b.Log); err != nil {
 		t.Fatalf("RegisterGuildCommands: %v", err)
 	}
 

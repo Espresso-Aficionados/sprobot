@@ -187,6 +187,11 @@ func TestTraceHandlerContextCarriesSpan(t *testing.T) {
 		{"repost test", func(record func(context.Context)) {
 			TraceTask("repost test", func(ctx context.Context) bool { record(ctx); return true })
 		}},
+		{"startup", func(record func(context.Context)) {
+			ctx, span := StartSpan("startup")
+			record(ctx)
+			span.End()
+		}},
 		{"event MessageCreate", func(record func(context.Context)) {
 			TraceEvent("onMessage", func(ctx context.Context, _ *events.MessageCreate) { record(ctx) })(&events.MessageCreate{})
 		}},

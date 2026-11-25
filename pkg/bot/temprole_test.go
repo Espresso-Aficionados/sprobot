@@ -57,7 +57,7 @@ func TestTempRoleDurationChoicesAreAccepted(t *testing.T) {
 	b, api, _ := newRoleTestBot(t)
 	b.TestGuildIDsOverride = []snowflake.ID{roleTestGuild}
 	api.setRespond(func(string) (int, string) { return http.StatusOK, "[]" })
-	if err := b.registerAllCommands(); err != nil {
+	if err := b.registerAllCommands(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 

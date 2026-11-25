@@ -8,6 +8,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/omit"
 	"github.com/disgoorg/snowflake/v2"
 
@@ -31,7 +32,7 @@ var messageChannelTypes = []discord.ChannelType{
 	discord.ChannelTypeGuildPrivateThread,
 }
 
-func (b *Bot) registerAllCommands() error {
+func (b *Bot) registerAllCommands(ctx context.Context) error {
 	for _, guildID := range b.GuildIDs() {
 		tmpls := b.templates[guildID]
 		var commands []discord.ApplicationCommandCreate
@@ -639,7 +640,7 @@ func (b *Bot) registerAllCommands() error {
 		// Commands differ per guild here, so not RegisterGuildCommands; their
 		// names still label the interactions.
 		botutil.RegisterCommandNames(commands)
-		if _, err := b.Client.Rest.SetGuildCommands(b.Client.ApplicationID, guildID, commands); err != nil {
+		if _, err := b.Client.Rest.SetGuildCommands(b.Client.ApplicationID, guildID, commands, rest.WithCtx(ctx)); err != nil {
 			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
 		}
 		b.Log.Info("Registered guild commands", "guild_id", guildID, "count", len(commands))

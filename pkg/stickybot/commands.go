@@ -33,7 +33,7 @@ const (
 	fieldBuffer        = "buffer"
 )
 
-func (b *Bot) registerAllCommands() error {
+func (b *Bot) registerAllCommands(ctx context.Context) error {
 	perm := discord.PermissionManageMessages
 
 	commands := []discord.ApplicationCommandCreate{
@@ -66,7 +66,7 @@ func (b *Bot) registerAllCommands() error {
 		},
 	}
 
-	return botutil.RegisterGuildCommands(b.Client, b.GuildIDs(), commands, b.Log)
+	return botutil.RegisterGuildCommands(ctx, b.Client, b.GuildIDs(), commands, b.Log)
 }
 
 func (b *Bot) onCommand(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {

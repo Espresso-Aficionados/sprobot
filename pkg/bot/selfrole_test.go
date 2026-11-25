@@ -232,7 +232,7 @@ func TestEnsureSelfrolePanelsReadsSharedChannelOnce(t *testing.T) {
 	b.TestGuildIDsOverride = []snowflake.ID{10}
 	stub.on("GET /channels/90/messages", 200, "[]")
 
-	b.ensureSelfrolePanels()
+	b.ensureSelfrolePanels(t.Context())
 
 	if got := stub.bodies("GET /channels/90/messages"); len(got) != 1 {
 		t.Errorf("read the shared channel %d times, want 1", len(got))
