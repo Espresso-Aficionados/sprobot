@@ -41,6 +41,9 @@ func NewBaseBot(cfg envconfig.Bot) (*BaseBot, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := s3client.SetFetchGateway(cfg.FetchGateway); err != nil {
+		return nil, err
+	}
 
 	return &BaseBot{
 		S3:            s3,
