@@ -3,6 +3,7 @@ package s3client
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
@@ -34,8 +35,9 @@ func TestNewInstrumentsS3(t *testing.T) {
 	for _, p := range rec.Points(t, "http.client.request.duration") {
 		peers = append(peers, p.Get("peer.service"))
 	}
-	if len(peers) == 0 || peers[0] != "s3" {
-		t.Errorf("client request peers = %q, want s3", peers)
+	// The recorder is the test binary's: other tests' fetches are in it too.
+	if !slices.Contains(peers, "s3") {
+		t.Errorf("client request peers = %q, want s3 among them", peers)
 	}
 }
 

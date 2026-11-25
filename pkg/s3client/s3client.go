@@ -29,6 +29,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/sadbox/svc/telemetry"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/envconfig"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
@@ -50,44 +51,75 @@ var ErrNotImage = errors.New("not an image")
 // fileSizeLimit is MaxFileSize, as a variable so tests can lower it.
 var fileSizeLimit int64 = MaxFileSize
 
+// httpClient fetches a URL a user chose (a profile's image).
 var httpClient = newFetchClient(30*time.Second, 0)
 
-// downloadClient fetches files to save. Saves of large files can take minutes,
-// so there is no overall timeout; callers bound them with their context.
+// downloadClient fetches a URL a user chose to save (a shortcut's image).
+// A save can take a while, so there is no overall timeout; callers bound
+// it with their context.
 var downloadClient = newFetchClient(0, 30*time.Second)
+
+// attachmentClient fetches Discord's own copy of an attachment (its
+// ProxyURL, on Discord's media hosts) to save: files up to MaxFileSize,
+// which can take minutes, so no overall timeout here either.
+var attachmentClient = newAttachmentClient(30 * time.Second)
 
 // newFetchClient returns a client for fetching user-supplied URLs.
 //
-// Fetches use the proxy the environment names (HTTPS_PROXY, HTTP_PROXY and
-// NO_PROXY, as every other client here does): on bonnet the bots' networks
-// have no route out, so their egress proxy is the only way to reach the
-// internet. A proxied fetch connects only to the proxy, which resolves the
-// URL's host itself and refuses internal addresses (Smokescreen's IP policy),
-// on every redirect hop too: each hop is a new request to the proxy.
+// On bonnet a bot has no route out: its egress proxy is the only way to
+// the internet, and its tunnels (CONNECT) reach only the hosts the bot's
+// own allowlist names. A URL a user chose can be on any host, so it isn't
+// tunnelled at all: the client asks the proxy's fetch gateway for it
+// (EGRESS_FETCH_GATEWAY, homelab-configs egress/gateway.go), in plain HTTP
+// on the bot's own bridge, and the gateway makes the request: a GET with
+// no body, for an https URL, answered only with an image (by its bytes) of
+// at most 25 MiB. The gateway resolves the host itself and refuses
+// internal addresses; it doesn't follow redirects, so each hop comes back
+// here and is asked for the same way. Its refusals are errors
+// (*gatewayError): "not an image" is ErrNotImage, "too large"
+// ErrFileTooLarge.
 //
-// Every other connection, a fetch with no proxy (local development) or one
-// NO_PROXY exempts, is checked against blockedIP at dial time, so redirects
-// and DNS rebinding can't reach internal addresses. The proxy's own address
-// is exempt from that check, as it is internal: only the address of a proxy
-// URL fetchProxy returned, which comes from the environment, never from the
-// URL being fetched.
+// With no gateway (local development) the fetch is direct, or through the
+// proxy the environment names (HTTPS_PROXY, HTTP_PROXY, NO_PROXY), and
+// every connection but one to that proxy is checked against blockedIP at
+// dial time, so redirects and DNS rebinding can't reach internal
+// addresses (newFetchTransport).
 //
-// Every CONNECT to the proxy carries fetchPurposeHeader: a label, not a
-// credential (anything in this process could send it). bonnet's egress proxy
-// gives a labelled request from a service it lets fetch (sprobot) a role of
-// its own, which may reach any public HTTPS host, logged and counted apart
-// from the service's own traffic; from any other service the label changes
-// nothing. net/http sends ProxyConnectHeader to the proxy only, never to the
-// URL's host.
-//
-// Calls are traced and timed as "fetch", outside the checked transport. The
-// host is the user's choice: svc/telemetry's metric view drops it, but the
-// client span still carries it as server.address.
+// Calls are traced and timed as "fetch", outside all of that. The host is
+// the user's choice: svc/telemetry drops it from the span and the metric.
+// The gateway is ours, so it gets the span's traceparent (its own span
+// for the request is this one's child); the URL's host never does.
 func newFetchClient(timeout, responseHeaderTimeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, Transport: telemetry.Transport("fetch", newFetchTransport(responseHeaderTimeout))}
+	gt := &gatewayTransport{
+		gateway: func() (*url.URL, error) { return fetchGateway() },
+		direct:  newFetchTransport(responseHeaderTimeout),
+		// To the gateway only, on the bot's bridge: never through the
+		// proxy, whatever the environment says.
+		via: &http.Transport{
+			Proxy:                 nil,
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+			ResponseHeaderTimeout: responseHeaderTimeout,
+			MaxIdleConnsPerHost:   2,
+			IdleConnTimeout:       30 * time.Second,
+		},
+	}
+	return &http.Client{Timeout: timeout, Transport: telemetry.Transport("fetch", gt)}
 }
 
-// newFetchTransport is newFetchClient's transport, before instrumentation.
+// newAttachmentClient returns the client for Discord's attachment URLs:
+// through the environment's proxy as the bot's own traffic (its allowlist
+// names Discord's media hosts), or direct and dial-checked without one.
+func newAttachmentClient(responseHeaderTimeout time.Duration) *http.Client {
+	return &http.Client{Transport: telemetry.Transport("discord-cdn", newFetchTransport(responseHeaderTimeout))}
+}
+
+// newFetchTransport is a transport for URLs that come from outside (a
+// user's, or Discord's for an attachment), before instrumentation. It
+// uses the proxy the environment names; every other connection, a fetch
+// with no proxy or one NO_PROXY exempts, is checked against blockedIP at
+// dial time. The proxy's own address is exempt from that check, as it is
+// internal: only the address of a proxy URL fetchProxy returned, which
+// comes from the environment, never from the URL being fetched.
 func newFetchTransport(responseHeaderTimeout time.Duration) *http.Transport {
 	checked := &net.Dialer{
 		Timeout: 30 * time.Second,
@@ -109,14 +141,98 @@ func newFetchTransport(responseHeaderTimeout time.Duration) *http.Transport {
 		}
 		return checked.DialContext(ctx, network, addr)
 	}
-	t.ProxyConnectHeader = http.Header{fetchPurposeHeader: {"fetch"}}
 	t.ResponseHeaderTimeout = responseHeaderTimeout
 	return t
 }
 
-// fetchPurposeHeader labels the fetch clients' requests to the egress proxy
-// (see newFetchTransport; homelab-configs egress/main.go reads it).
-const fetchPurposeHeader = "X-Egress-Purpose"
+// The fetch gateway's protocol (homelab-configs egress/gateway.go): GET
+// /fetch with the URL in fetchURLHeader; a response it relayed from the
+// URL's host says fetchResultHeader: upstream, and a refusal of its own
+// names why in fetchErrorHeader.
+const (
+	fetchGatewayEnv   = "EGRESS_FETCH_GATEWAY"
+	fetchURLHeader    = "Egress-Fetch-Url"
+	fetchResultHeader = "Egress-Fetch"
+	fetchErrorHeader  = "Egress-Fetch-Error"
+)
+
+// fetchGateway is the egress fetch gateway's URL, nil when there is none
+// (EGRESS_FETCH_GATEWAY unset: local development). A value that isn't an
+// http URL is an error on every fetch, not a silent direct fetch. A
+// variable so tests can set one.
+var fetchGateway = sync.OnceValues(func() (*url.URL, error) {
+	return parseFetchGateway(os.Getenv(fetchGatewayEnv))
+})
+
+func parseFetchGateway(v string) (*url.URL, error) {
+	if v == "" {
+		return nil, nil
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Scheme != "http" || u.Host == "" {
+		return nil, fmt.Errorf("%s=%q is not an http URL", fetchGatewayEnv, v)
+	}
+	return u, nil
+}
+
+// gatewayError is a refusal by the fetch gateway itself (not the URL's
+// host's answer): its code, as egress/gateway.go names them.
+type gatewayError struct {
+	code   string
+	status int
+}
+
+func (e *gatewayError) Error() string {
+	if e.code == "" {
+		return fmt.Sprintf("fetch gateway: unexpected response (HTTP %d)", e.status)
+	}
+	return "fetch gateway: " + e.code
+}
+
+func (e *gatewayError) Is(target error) bool {
+	return (e.code == "not-image" && target == ErrNotImage) || (e.code == "too-large" && target == ErrFileTooLarge)
+}
+
+// gatewayTransport sends a fetch to the gateway when there is one, and
+// directly (the checked transport) when there isn't.
+type gatewayTransport struct {
+	gateway func() (*url.URL, error)
+	direct  http.RoundTripper
+	via     http.RoundTripper // to the gateway itself
+}
+
+func (t *gatewayTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	gw, err := t.gateway()
+	if err != nil {
+		return nil, err
+	}
+	if gw == nil {
+		return t.direct.RoundTrip(req)
+	}
+	if req.Method != http.MethodGet || (req.Body != nil && req.Body != http.NoBody) {
+		return nil, fmt.Errorf("fetch gateway: only a GET with no body, not %s", req.Method)
+	}
+	out, err := http.NewRequestWithContext(req.Context(), http.MethodGet, gw.JoinPath("fetch").String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	out.Header.Set(fetchURLHeader, req.URL.String())
+	// The request's client span (telemetry.Transport, outside this): the
+	// gateway's span is its child.
+	propagation.TraceContext{}.Inject(req.Context(), propagation.HeaderCarrier(out.Header))
+	resp, err := t.via.RoundTrip(out)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Header.Get(fetchResultHeader) != "upstream" || resp.Header.Get(fetchErrorHeader) != "" {
+		resp.Body.Close()
+		return nil, &gatewayError{code: resp.Header.Get(fetchErrorHeader), status: resp.StatusCode}
+	}
+	// The response is to the caller's request: net/http resolves a
+	// redirect's Location against it, and sends the next hop back here.
+	resp.Request = req
+	return resp, nil
+}
 
 // fetchProxy chooses the fetch clients' proxy for a request. It is a variable
 // so tests can set one: http.ProxyFromEnvironment reads the environment once
@@ -233,9 +349,10 @@ func AllowLocalFetchesForTesting() (restore func()) {
 // validateImageURL checks that the URL uses an allowed scheme and, when it
 // will be fetched directly, that it does not resolve to a blocked IP range.
 // It gives an early, clear error; the fetch clients enforce the IP check on
-// the address actually dialed. A URL the proxy will fetch isn't resolved
-// here: the proxy resolves it and refuses internal addresses itself (see
-// newFetchClient), so this process needs no DNS of its own for it.
+// the address actually dialed. A URL the fetch gateway or the proxy will
+// fetch isn't resolved here: they resolve it and refuse internal addresses
+// themselves (see newFetchClient), so this process needs no DNS of its own
+// for it.
 func validateImageURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -243,6 +360,9 @@ func validateImageURL(rawURL string) error {
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return fmt.Errorf("unsupported URL scheme %q", parsed.Scheme)
+	}
+	if gw, err := fetchGateway(); err != nil || gw != nil {
+		return err // the gateway resolves it (or the fetch fails with err)
 	}
 	if proxy, err := fetchProxy(&http.Request{URL: parsed}); err == nil && proxy != nil {
 		return nil
@@ -937,7 +1057,13 @@ func (c *Client) saveRemoteFile(ctx context.Context, guildID, fileURL, kind stri
 	if err != nil {
 		return "", fmt.Errorf("building request: %w", err)
 	}
-	resp, err := downloadClient.Do(req)
+	// A shortcut's image is wherever a user said; every other kind is an
+	// attachment's own URL on Discord's hosts.
+	client := attachmentClient
+	if kind == sprobot.FileKindShortcut {
+		client = downloadClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetching file: %w", err)
 	}
@@ -1104,6 +1230,9 @@ func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guild
 	}
 
 	resp, err := httpClient.Get(maybeURL)
+	if errors.Is(err, ErrNotImage) {
+		return "The URL provided isn't an image, and we can only use images. The rest of your profile has been saved. If this looked like a gif, discord probably used a mp4.", ""
+	}
 	if err != nil {
 		return "Unable to fetch from the URL provided, make sure it's an image and try again. The rest of your profile has been saved.", ""
 	}

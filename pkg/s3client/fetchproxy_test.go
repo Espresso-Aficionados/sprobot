@@ -30,7 +30,7 @@ type recordingProxy struct {
 
 	mu      sync.Mutex
 	targets []string
-	purpose []string // each CONNECT's X-Egress-Purpose
+	purpose []string // each CONNECT's X-Egress-Purpose (never sent now)
 }
 
 func newRecordingProxy(t *testing.T, body, tunnelTo string) *recordingProxy {
@@ -159,40 +159,12 @@ func TestFetchThroughConnectProxy(t *testing.T) {
 	if got := p.seen(); len(got) != 1 || got[0] != "CONNECT example.com:"+port {
 		t.Errorf("proxy saw %q", got)
 	}
+	// No purpose label: a tunnel is the bot's own role at the egress proxy,
+	// whatever it carries (user URLs go through the fetch gateway instead).
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.purpose) != 1 || p.purpose[0] != "fetch" {
-		t.Errorf("CONNECT's X-Egress-Purpose = %q, want fetch (the egress proxy's fetch role)", p.purpose)
-	}
-}
-
-// The label goes to the proxy only: the URL's host never sees it.
-func TestFetchPurposeNotSentToTarget(t *testing.T) {
-	var got []string
-	var mu sync.Mutex
-	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		got = append(got, r.Header.Get("X-Egress-Purpose"))
-		mu.Unlock()
-	}))
-	t.Cleanup(target.Close)
-	_, port, _ := net.SplitHostPort(target.Listener.Addr().String())
-	p := newRecordingProxy(t, "", target.Listener.Addr().String())
-	useProxyFor(t, "example.com", p.proxyURL(t))
-
-	tr := newFetchTransport(0)
-	roots := x509.NewCertPool()
-	roots.AddCert(target.Certificate())
-	tr.TLSClientConfig.RootCAs = roots
-	resp, err := (&http.Client{Transport: tr}).Get("https://example.com:" + port + "/cat.png")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	mu.Lock()
-	defer mu.Unlock()
-	if len(got) != 1 || got[0] != "" {
-		t.Errorf("target saw X-Egress-Purpose %q, want none", got)
+	if len(p.purpose) != 1 || p.purpose[0] != "" {
+		t.Errorf("CONNECT's X-Egress-Purpose = %q, want none", p.purpose)
 	}
 }
 
