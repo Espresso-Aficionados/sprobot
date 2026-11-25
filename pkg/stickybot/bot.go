@@ -69,12 +69,12 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 		),
 		bot.WithEventListenerFunc(b.OnReady),
 		bot.WithEventListenerFunc(b.OnGuildJoin),
-		bot.WithEventListenerFunc(b.onGuildReady),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onGuildReady", b.onGuildReady)),
 		bot.WithEventListenerFunc(botutil.TraceCommands(b.onCommand)),
 		bot.WithEventListenerFunc(botutil.TraceModals(modalNames, b.onModal)),
-		bot.WithEventListenerFunc(b.onMessage),
-		bot.WithEventListenerFunc(b.onChannelDelete),
-		bot.WithEventListenerFunc(b.onThreadDelete),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onMessage", b.onMessage)),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onChannelDelete", b.onChannelDelete)),
+		bot.WithEventListenerFunc(botutil.TraceEvent("onThreadDelete", b.onThreadDelete)),
 	)
 	if err != nil {
 		return nil, err
@@ -125,7 +125,7 @@ func (b *Bot) shutdown(ctx context.Context) {
 	b.retryFileDeletes(ctx)
 }
 
-func (b *Bot) onMessage(e *events.MessageCreate) {
+func (b *Bot) onMessage(_ context.Context, e *events.MessageCreate) {
 	if e.Message.Author.Bot {
 		return
 	}
@@ -148,8 +148,7 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 // fires for every guild the bot is in on each new gateway session; a guild
 // whose stickies haven't loaded yet is checked by the load that succeeds (see
 // loadGuildStickies).
-func (b *Bot) onGuildReady(e *events.GuildReady) {
-	ctx := context.Background()
+func (b *Bot) onGuildReady(ctx context.Context, e *events.GuildReady) {
 	if !botutil.GuildAllowed(e.GuildID) {
 		return
 	}
@@ -181,13 +180,11 @@ func (b *Bot) dropStickiesOfDeletedChannels(ctx context.Context, guildID snowfla
 	}
 }
 
-func (b *Bot) onChannelDelete(e *events.GuildChannelDelete) {
-	ctx := context.Background()
+func (b *Bot) onChannelDelete(ctx context.Context, e *events.GuildChannelDelete) {
 	b.dropDeletedChannelSticky(ctx, e.GuildID, e.ChannelID)
 }
 
-func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
-	ctx := context.Background()
+func (b *Bot) onThreadDelete(ctx context.Context, e *events.ThreadDelete) {
 	b.dropDeletedChannelSticky(ctx, e.GuildID, e.ThreadID)
 }
 

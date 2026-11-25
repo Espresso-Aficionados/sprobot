@@ -242,7 +242,7 @@ func TestChannelDeleteStopsReminderLoop(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.onChannelDelete(channelDelete(r.GuildID, r.ChannelID))
+		b.onChannelDelete(t.Context(), channelDelete(r.GuildID, r.ChannelID))
 		close(done)
 	}()
 	select {
@@ -279,9 +279,9 @@ func TestChannelDeleteDropsStoredReminder(t *testing.T) {
 	defer b.stopAllReminderGoroutines()
 	b.saveRemindersForGuild(t.Context(), guildID)
 
-	b.onChannelDelete(channelDelete(guildID, 500))
-	b.onChannelDelete(channelDelete(guildID, 700))            // no reminder there
-	b.onChannelDelete(channelDelete(726985544038612993, 500)) // guild not loaded
+	b.onChannelDelete(t.Context(), channelDelete(guildID, 500))
+	b.onChannelDelete(t.Context(), channelDelete(guildID, 700))            // no reminder there
+	b.onChannelDelete(t.Context(), channelDelete(726985544038612993, 500)) // guild not loaded
 
 	restarted := newTestBot(t, s3c)
 	restarted.loadReminders(t.Context())

@@ -184,11 +184,11 @@ func TestThreadCreateLogsOnlyNewThreads(t *testing.T) {
 			threadJSON(name, fmt.Sprintf(`,"newly_created":%t`, newlyCreated)))
 	}
 
-	b.onThreadCreate(event("help", false)) // the bot was added to an existing thread
+	b.onThreadCreate(t.Context(), event("help", false)) // the bot was added to an existing thread
 	if got := stub.bodies("POST /channels/15/messages"); len(got) != 0 {
 		t.Fatalf("logged 'Thread Created' for an existing thread: %v", got)
 	}
-	b.onThreadCreate(event("help", true))
+	b.onThreadCreate(t.Context(), event("help", true))
 	got := stub.bodies("POST /channels/15/messages")
 	if len(got) != 1 || !strings.Contains(got[0], "Thread Created") {
 		t.Fatalf("event log posts = %v, want one 'Thread Created'", got)
@@ -198,7 +198,7 @@ func TestThreadCreateLogsOnlyNewThreads(t *testing.T) {
 	}
 
 	stub.reset()
-	b.onThreadCreate(event(hiddenChannelName, true))
+	b.onThreadCreate(t.Context(), event(hiddenChannelName, true))
 	got = stub.bodies("POST /channels/15/messages")
 	if len(got) != 1 || embedField(t, got[0], "Name") != channelDisplayName(hiddenChannelName) {
 		t.Errorf("event log posts = %v, want the hidden thread's name replaced", got)
@@ -212,13 +212,13 @@ func TestThreadVisibilityChangeIsNotLoggedAsRename(t *testing.T) {
 		return gatewayEvent[*events.ThreadUpdate](t, b.Client, gateway.EventTypeThreadUpdate, threadJSON(newName, ""))
 	}
 
-	b.onThreadUpdate(update(hiddenChannelName, "help"))
-	b.onThreadUpdate(update("help", hiddenChannelName))
+	b.onThreadUpdate(t.Context(), update(hiddenChannelName, "help"))
+	b.onThreadUpdate(t.Context(), update("help", hiddenChannelName))
 	if got := stub.routesCalled(); len(got) != 0 {
 		t.Fatalf("logged a thread becoming visible or hidden as a rename: %v", got)
 	}
 
-	b.onThreadUpdate(update("help", "solved"))
+	b.onThreadUpdate(t.Context(), update("help", "solved"))
 	if got := stub.bodies("POST /channels/16/messages"); len(got) != 1 || !strings.Contains(got[0], "Thread Renamed") {
 		t.Errorf("rename log posts = %v, want one 'Thread Renamed'", got)
 	}
@@ -259,12 +259,12 @@ func TestChannelVisibilityChangeIsNotLoggedAsRename(t *testing.T) {
 		}
 	}
 
-	b.onChannelUpdate(update(hiddenChannelName, "staff"))
+	b.onChannelUpdate(t.Context(), update(hiddenChannelName, "staff"))
 	if got := stub.routesCalled(); len(got) != 0 {
 		t.Fatalf("logged a channel becoming visible as an edit: %v", got)
 	}
 
-	b.onChannelUpdate(update("staff", "mods"))
+	b.onChannelUpdate(t.Context(), update("staff", "mods"))
 	if got := stub.bodies("POST /channels/16/messages"); len(got) != 1 || !strings.Contains(got[0], "Channel Renamed") {
 		t.Errorf("rename log posts = %v, want one 'Channel Renamed'", got)
 	}
@@ -666,7 +666,7 @@ func TestMessageDeleteLinksWhereItWas(t *testing.T) {
 	cached := discord.Message{ID: 40, ChannelID: 20, Content: "gone", Author: discord.User{ID: 31, Username: "bob"}}
 	for _, msg := range []discord.Message{cached, {}} {
 		stub.reset()
-		b.onMessageDelete(&events.GuildMessageDelete{GenericGuildMessage: &events.GenericGuildMessage{
+		b.onMessageDelete(t.Context(), &events.GuildMessageDelete{GenericGuildMessage: &events.GenericGuildMessage{
 			GuildID: 10, ChannelID: 20, MessageID: 40, Message: msg,
 		}})
 		posts := stub.bodies("POST /channels/15/messages")

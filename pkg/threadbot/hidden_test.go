@@ -76,7 +76,7 @@ func TestHiddenThreadsExcludedPersistedAndPruned(t *testing.T) {
 	}
 
 	// Deleting the thread drops it from the list, and that is persisted too.
-	b2.onThreadDelete(&events.ThreadDelete{GenericThread: &events.GenericThread{GuildID: guildID, ThreadID: 202}})
+	b2.onThreadDelete(t.Context(), &events.ThreadDelete{GenericThread: &events.GenericThread{GuildID: guildID, ThreadID: 202}})
 	if len(mustHiddenSet(t, b2, guildID)) != 0 {
 		t.Error("deleted thread still hidden")
 	}

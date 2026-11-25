@@ -175,8 +175,7 @@ func (b *Bot) loadHiddenThreads(ctx context.Context) error {
 	return errors.Join(refused...)
 }
 
-func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
-	ctx := context.Background()
+func (b *Bot) onThreadDelete(ctx context.Context, e *events.ThreadDelete) {
 	changed, err := b.setHidden(ctx, e.GuildID, e.ThreadID, false)
 	switch {
 	case errors.Is(err, errHiddenNotLoaded):

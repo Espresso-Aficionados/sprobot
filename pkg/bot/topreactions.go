@@ -374,8 +374,7 @@ func pruneStarboardEntries(st *starboardState, now time.Time) {
 
 // --- Reaction Event Handlers ---
 
-func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
-	ctx := context.Background()
+func (b *Bot) onReactionAdd(ctx context.Context, e *events.GuildMessageReactionAdd) {
 	if e.Member.User.Bot {
 		return
 	}
@@ -415,18 +414,15 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 	b.runStarboardAction(ctx, e.GuildID, e.MessageID, st, action)
 }
 
-func (b *Bot) onReactionRemove(e *events.GuildMessageReactionRemove) {
-	ctx := context.Background()
+func (b *Bot) onReactionRemove(ctx context.Context, e *events.GuildMessageReactionRemove) {
 	b.recordReactionRemoval(ctx, e.GuildID, e.MessageID, e.Emoji.Reaction(), reactionRemoved)
 }
 
-func (b *Bot) onReactionRemoveAll(e *events.GuildMessageReactionRemoveAll) {
-	ctx := context.Background()
+func (b *Bot) onReactionRemoveAll(ctx context.Context, e *events.GuildMessageReactionRemoveAll) {
 	b.recordReactionRemoval(ctx, e.GuildID, e.MessageID, "", reactionsCleared)
 }
 
-func (b *Bot) onReactionRemoveEmoji(e *events.GuildMessageReactionRemoveEmoji) {
-	ctx := context.Background()
+func (b *Bot) onReactionRemoveEmoji(ctx context.Context, e *events.GuildMessageReactionRemoveEmoji) {
 	b.recordReactionRemoval(ctx, e.GuildID, e.MessageID, e.Emoji.Reaction(), reactionsCleared)
 }
 
@@ -461,8 +457,7 @@ func (b *Bot) runStarboardAction(ctx context.Context, guildID, msgID snowflake.I
 // onStarboardSourceDelete deletes the entry and starboard post of a deleted
 // message, so its reposted text does not outlive it. A repeated delete finds
 // no entry, or retries a post delete that failed.
-func (b *Bot) onStarboardSourceDelete(e *events.GuildMessageDelete) {
-	ctx := context.Background()
+func (b *Bot) onStarboardSourceDelete(ctx context.Context, e *events.GuildMessageDelete) {
 	if st := b.starboard.get(e.GuildID); st != nil {
 		b.markSourcesDeleted(ctx, e.GuildID, st, []snowflake.ID{e.MessageID})
 	}
@@ -471,13 +466,11 @@ func (b *Bot) onStarboardSourceDelete(e *events.GuildMessageDelete) {
 // onStarboardChannelDelete and onStarboardThreadDelete delete the posts of
 // messages in a deleted channel or thread, for which Discord sends no message
 // deletes.
-func (b *Bot) onStarboardChannelDelete(e *events.GuildChannelDelete) {
-	ctx := context.Background()
+func (b *Bot) onStarboardChannelDelete(ctx context.Context, e *events.GuildChannelDelete) {
 	b.deleteChannelSources(ctx, e.GuildID, e.ChannelID)
 }
 
-func (b *Bot) onStarboardThreadDelete(e *events.ThreadDelete) {
-	ctx := context.Background()
+func (b *Bot) onStarboardThreadDelete(ctx context.Context, e *events.ThreadDelete) {
 	b.deleteChannelSources(ctx, e.GuildID, e.ThreadID)
 }
 

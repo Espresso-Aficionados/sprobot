@@ -20,10 +20,10 @@ import (
 func TestChannelDeleteDropsSticky(t *testing.T) {
 	deletes := map[string]func(*Bot){
 		"channel": func(b *Bot) {
-			b.onChannelDelete(&events.GuildChannelDelete{GenericGuildChannel: &events.GenericGuildChannel{GuildID: testGuildID, ChannelID: 500}})
+			b.onChannelDelete(t.Context(), &events.GuildChannelDelete{GenericGuildChannel: &events.GenericGuildChannel{GuildID: testGuildID, ChannelID: 500}})
 		},
 		"thread": func(b *Bot) {
-			b.onThreadDelete(&events.ThreadDelete{GenericThread: &events.GenericThread{GuildID: testGuildID, ThreadID: 500}})
+			b.onThreadDelete(t.Context(), &events.ThreadDelete{GenericThread: &events.GenericThread{GuildID: testGuildID, ThreadID: 500}})
 		},
 	}
 	for name, deleteChannel := range deletes {
@@ -144,7 +144,7 @@ func TestGuildReadyDropsStickiesOfDeletedChannels(t *testing.T) {
 	h := b.stickies[testGuildID][500].handle
 	b.mu.Unlock()
 
-	b.onGuildReady(guildReady(testGuildID))
+	b.onGuildReady(t.Context(), guildReady(testGuildID))
 
 	h.Signal()
 	time.Sleep(100 * time.Millisecond)
@@ -182,7 +182,7 @@ func TestLateLoadDropsStickiesOfDeletedChannels(t *testing.T) {
 	fakeS3.Mu.Unlock()
 
 	b.loadStickies(t.Context())
-	b.onGuildReady(guildReady(testGuildID))
+	b.onGuildReady(t.Context(), guildReady(testGuildID))
 	fakeS3.Mu.Lock()
 	delete(fakeS3.Fail, storedKey)
 	fakeS3.Mu.Unlock()

@@ -421,7 +421,7 @@ func TestModLogScanKeepsThreadEventsFromDuringIt(t *testing.T) {
 	// A mod creates bob's thread after the active threads were listed.
 	api.onArchived = func() {
 		api.addThread(400, "bob - 456", time.Time{})
-		b.onModLogThreadCreate(&events.ThreadCreate{GenericThread: &events.GenericThread{
+		b.onModLogThreadCreate(t.Context(), &events.ThreadCreate{GenericThread: &events.GenericThread{
 			ThreadID: 400, GuildID: testModLogGuild, Thread: testThread(t, 400, "bob - 456"),
 		}})
 	}
@@ -449,7 +449,7 @@ func TestModLogScanDiscardedByDeleteDuringIt(t *testing.T) {
 	// listed it must not be used.
 	api.onArchived = func() {
 		api.deleteThread(300)
-		b.onModLogThreadDelete(&events.ThreadDelete{GenericThread: &events.GenericThread{ThreadID: 300, ParentID: testModLogForum}})
+		b.onModLogThreadDelete(t.Context(), &events.ThreadDelete{GenericThread: &events.GenericThread{ThreadID: 300, ParentID: testModLogForum}})
 	}
 	id, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 1, Username: "alice"})
 	if err != nil {
@@ -472,7 +472,7 @@ func TestModLogReadyForgetsIndex(t *testing.T) {
 	// Carol's thread was created while the gateway was down. A new session
 	// doesn't replay its event.
 	api.addThread(301, "carol - 3", time.Time{})
-	b.onModLogReady(&events.Ready{})
+	b.onModLogReady(t.Context(), &events.Ready{})
 	id, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 3, Username: "carol"})
 	if err != nil {
 		t.Fatal(err)
@@ -539,7 +539,7 @@ func TestModLogThreadEventsKeepIndexCurrent(t *testing.T) {
 
 	// A thread created by someone else is picked up from its event. Like
 	// disgo's, the event carries the parent only on the thread.
-	b.onModLogThreadCreate(&events.ThreadCreate{GenericThread: &events.GenericThread{
+	b.onModLogThreadCreate(t.Context(), &events.ThreadCreate{GenericThread: &events.GenericThread{
 		ThreadID: 302, GuildID: testModLogGuild, Thread: testThread(t, 302, "carol - 3"),
 	}})
 	if got := find(discord.User{ID: 3, Username: "carol"}); got != 302 {
@@ -547,7 +547,7 @@ func TestModLogThreadEventsKeepIndexCurrent(t *testing.T) {
 	}
 
 	// A renamed thread moves to its new user.
-	b.onModLogThreadUpdate(&events.ThreadUpdate{GenericThread: &events.GenericThread{
+	b.onModLogThreadUpdate(t.Context(), &events.ThreadUpdate{GenericThread: &events.GenericThread{
 		ThreadID: 301, GuildID: testModLogGuild, ParentID: testModLogForum, Thread: testThread(t, 301, "bob - 4"),
 	}})
 	if got := find(discord.User{ID: 4, Username: "bob"}); got != 301 {
@@ -558,7 +558,7 @@ func TestModLogThreadEventsKeepIndexCurrent(t *testing.T) {
 	}
 
 	// Threads in other channels are ignored.
-	b.onModLogThreadDelete(&events.ThreadDelete{GenericThread: &events.GenericThread{ThreadID: 300, ParentID: 999}})
+	b.onModLogThreadDelete(t.Context(), &events.ThreadDelete{GenericThread: &events.GenericThread{ThreadID: 300, ParentID: 999}})
 	if got := find(discord.User{ID: 1, Username: "alice"}); got != 300 || api.count("active") != 1 {
 		t.Errorf("delete in another forum changed the index: alice -> %d", got)
 	}
@@ -566,7 +566,7 @@ func TestModLogThreadEventsKeepIndexCurrent(t *testing.T) {
 	// Deleting a user's thread rescans on next use, in case they have another.
 	api.deleteThread(300)
 	api.addThread(303, "alice - 1", time.Time{})
-	b.onModLogThreadDelete(&events.ThreadDelete{GenericThread: &events.GenericThread{ThreadID: 300, ParentID: testModLogForum}})
+	b.onModLogThreadDelete(t.Context(), &events.ThreadDelete{GenericThread: &events.GenericThread{ThreadID: 300, ParentID: testModLogForum}})
 	if got := find(discord.User{ID: 1, Username: "alice"}); got != 303 {
 		t.Errorf("after delete, alice -> %d, want her other thread 303", got)
 	}

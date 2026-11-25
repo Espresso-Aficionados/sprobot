@@ -125,8 +125,7 @@ func (b *Bot) isEventLogChannel(guildID, channelID snowflake.ID) bool {
 
 // --- Message events ---
 
-func (b *Bot) onMessageDelete(e *events.GuildMessageDelete) {
-	ctx := context.Background()
+func (b *Bot) onMessageDelete(ctx context.Context, e *events.GuildMessageDelete) {
 	if b.isEventLogChannel(e.GuildID, e.ChannelID) {
 		return
 	}
@@ -171,8 +170,7 @@ func (b *Bot) onMessageDelete(e *events.GuildMessageDelete) {
 	b.postEventLog(ctx, e.GuildID, embed)
 }
 
-func (b *Bot) onMessageUpdate(e *events.GuildMessageUpdate) {
-	ctx := context.Background()
+func (b *Bot) onMessageUpdate(ctx context.Context, e *events.GuildMessageUpdate) {
 	if b.isEventLogChannel(e.GuildID, e.ChannelID) {
 		return
 	}
@@ -242,8 +240,7 @@ func (b *Bot) logMemberJoin(ctx context.Context, guildID snowflake.ID, member di
 	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) onMemberLeave(e *events.GuildMemberLeave) {
-	ctx := context.Background()
+func (b *Bot) onMemberLeave(ctx context.Context, e *events.GuildMemberLeave) {
 	embed := discord.Embed{
 		Title:       "Member Left",
 		Color:       colorOrange,
@@ -260,8 +257,7 @@ func (b *Bot) onMemberLeave(e *events.GuildMemberLeave) {
 	b.postEventLog(ctx, e.GuildID, embed)
 }
 
-func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
-	ctx := context.Background()
+func (b *Bot) onMemberUpdate(ctx context.Context, e *events.GuildMemberUpdate) {
 	// Skip if old member wasn't in cache (zero value)
 	if e.OldMember.User.ID == 0 {
 		return
@@ -315,8 +311,7 @@ func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
 // Ban/unban are handled entirely by the audit log handler (handleBanEntry)
 // which includes moderator + reason and cross-posts to the mod log.
 
-func (b *Bot) onAuditLogEntry(e *events.GuildAuditLogEntryCreate) {
-	ctx := context.Background()
+func (b *Bot) onAuditLogEntry(ctx context.Context, e *events.GuildAuditLogEntryCreate) {
 	entry := e.AuditLogEntry
 
 	switch entry.ActionType {
@@ -1009,8 +1004,7 @@ func (b *Bot) crossPostToModLog(ctx context.Context, guildID snowflake.ID, user 
 
 // --- Channel events ---
 
-func (b *Bot) onChannelCreate(e *events.GuildChannelCreate) {
-	ctx := context.Background()
+func (b *Bot) onChannelCreate(ctx context.Context, e *events.GuildChannelCreate) {
 	embed := discord.Embed{
 		Title: "Channel Created",
 		Color: colorGreen,
@@ -1023,8 +1017,7 @@ func (b *Bot) onChannelCreate(e *events.GuildChannelCreate) {
 	b.postEventLog(ctx, e.GuildID, embed)
 }
 
-func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
-	ctx := context.Background()
+func (b *Bot) onChannelUpdate(ctx context.Context, e *events.GuildChannelUpdate) {
 	b.checkChannelRename(ctx, e)
 
 	var fields []discord.EmbedField
@@ -1076,8 +1069,7 @@ func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
 
 // --- Thread events ---
 
-func (b *Bot) onThreadCreate(e *events.ThreadCreate) {
-	ctx := context.Background()
+func (b *Bot) onThreadCreate(ctx context.Context, e *events.ThreadCreate) {
 	// THREAD_CREATE is also sent when the bot is added to an existing thread.
 	if !e.NewlyCreated {
 		return
@@ -1096,8 +1088,7 @@ func (b *Bot) onThreadCreate(e *events.ThreadCreate) {
 	b.postEventLog(ctx, e.GuildID, embed)
 }
 
-func (b *Bot) onThreadUpdate(e *events.ThreadUpdate) {
-	ctx := context.Background()
+func (b *Bot) onThreadUpdate(ctx context.Context, e *events.ThreadUpdate) {
 	if e.OldThread.ID() == 0 {
 		return
 	}
@@ -1146,8 +1137,7 @@ func (b *Bot) onThreadUpdate(e *events.ThreadUpdate) {
 	b.postEventLog(ctx, e.GuildID, embed)
 }
 
-func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
-	ctx := context.Background()
+func (b *Bot) onThreadDelete(ctx context.Context, e *events.ThreadDelete) {
 	embed := discord.Embed{
 		Title: "Thread Deleted",
 		Color: colorRed,
@@ -1161,8 +1151,7 @@ func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
 
 // --- Emoji events ---
 
-func (b *Bot) onEmojiCreate(e *events.EmojiCreate) {
-	ctx := context.Background()
+func (b *Bot) onEmojiCreate(ctx context.Context, e *events.EmojiCreate) {
 	embed := discord.Embed{
 		Title: "Emoji Created",
 		Color: colorGreen,
@@ -1179,8 +1168,7 @@ func (b *Bot) onEmojiCreate(e *events.EmojiCreate) {
 	b.postEventLog(ctx, e.GuildID, embed)
 }
 
-func (b *Bot) onEmojiUpdate(e *events.EmojiUpdate) {
-	ctx := context.Background()
+func (b *Bot) onEmojiUpdate(ctx context.Context, e *events.EmojiUpdate) {
 	if e.OldEmoji.ID == 0 {
 		return
 	}
@@ -1205,8 +1193,7 @@ func (b *Bot) onEmojiUpdate(e *events.EmojiUpdate) {
 	b.postEventLog(ctx, e.GuildID, embed)
 }
 
-func (b *Bot) onEmojiDelete(e *events.EmojiDelete) {
-	ctx := context.Background()
+func (b *Bot) onEmojiDelete(ctx context.Context, e *events.EmojiDelete) {
 	embed := discord.Embed{
 		Title: "Emoji Deleted",
 		Color: colorRed,
@@ -1220,8 +1207,7 @@ func (b *Bot) onEmojiDelete(e *events.EmojiDelete) {
 
 // --- Sticker events ---
 
-func (b *Bot) onStickerCreate(e *events.StickerCreate) {
-	ctx := context.Background()
+func (b *Bot) onStickerCreate(ctx context.Context, e *events.StickerCreate) {
 	embed := discord.Embed{
 		Title: "Sticker Created",
 		Color: colorGreen,
@@ -1233,8 +1219,7 @@ func (b *Bot) onStickerCreate(e *events.StickerCreate) {
 	b.postEventLog(ctx, e.GuildID, embed)
 }
 
-func (b *Bot) onStickerUpdate(e *events.StickerUpdate) {
-	ctx := context.Background()
+func (b *Bot) onStickerUpdate(ctx context.Context, e *events.StickerUpdate) {
 	if e.OldSticker.ID == 0 {
 		return
 	}
@@ -1265,8 +1250,7 @@ func (b *Bot) onStickerUpdate(e *events.StickerUpdate) {
 	b.postEventLog(ctx, e.GuildID, embed)
 }
 
-func (b *Bot) onStickerDelete(e *events.StickerDelete) {
-	ctx := context.Background()
+func (b *Bot) onStickerDelete(ctx context.Context, e *events.StickerDelete) {
 	embed := discord.Embed{
 		Title: "Sticker Deleted",
 		Color: colorRed,
@@ -1280,8 +1264,7 @@ func (b *Bot) onStickerDelete(e *events.StickerDelete) {
 
 // --- Stage Instance events ---
 
-func (b *Bot) onStageInstanceCreate(e *events.StageInstanceCreate) {
-	ctx := context.Background()
+func (b *Bot) onStageInstanceCreate(ctx context.Context, e *events.StageInstanceCreate) {
 	embed := discord.Embed{
 		Title: "Stage Started",
 		Color: colorGreen,
@@ -1293,8 +1276,7 @@ func (b *Bot) onStageInstanceCreate(e *events.StageInstanceCreate) {
 	b.postEventLog(ctx, e.StageInstance.GuildID, embed)
 }
 
-func (b *Bot) onStageInstanceUpdate(e *events.StageInstanceUpdate) {
-	ctx := context.Background()
+func (b *Bot) onStageInstanceUpdate(ctx context.Context, e *events.StageInstanceUpdate) {
 	if e.OldStageInstance.ID == 0 {
 		return
 	}
@@ -1319,8 +1301,7 @@ func (b *Bot) onStageInstanceUpdate(e *events.StageInstanceUpdate) {
 	b.postEventLog(ctx, e.StageInstance.GuildID, embed)
 }
 
-func (b *Bot) onStageInstanceDelete(e *events.StageInstanceDelete) {
-	ctx := context.Background()
+func (b *Bot) onStageInstanceDelete(ctx context.Context, e *events.StageInstanceDelete) {
 	embed := discord.Embed{
 		Title: "Stage Ended",
 		Color: colorRed,
@@ -1334,8 +1315,7 @@ func (b *Bot) onStageInstanceDelete(e *events.StageInstanceDelete) {
 
 // --- Scheduled Event events ---
 
-func (b *Bot) onScheduledEventCreate(e *events.GuildScheduledEventCreate) {
-	ctx := context.Background()
+func (b *Bot) onScheduledEventCreate(ctx context.Context, e *events.GuildScheduledEventCreate) {
 	fields := []discord.EmbedField{
 		{Name: "Name", Value: e.GuildScheduled.Name, Inline: boolPtr(true)},
 		{Name: "Start", Value: fmt.Sprintf("<t:%d:F>", e.GuildScheduled.ScheduledStartTime.Unix()), Inline: boolPtr(true)},
@@ -1348,8 +1328,7 @@ func (b *Bot) onScheduledEventCreate(e *events.GuildScheduledEventCreate) {
 	b.postEventLog(ctx, e.GuildScheduled.GuildID, embed)
 }
 
-func (b *Bot) onScheduledEventUpdate(e *events.GuildScheduledEventUpdate) {
-	ctx := context.Background()
+func (b *Bot) onScheduledEventUpdate(ctx context.Context, e *events.GuildScheduledEventUpdate) {
 	if e.OldGuildScheduled.ID == 0 {
 		return
 	}
@@ -1381,8 +1360,7 @@ func (b *Bot) onScheduledEventUpdate(e *events.GuildScheduledEventUpdate) {
 	b.postEventLog(ctx, e.GuildScheduled.GuildID, embed)
 }
 
-func (b *Bot) onScheduledEventDelete(e *events.GuildScheduledEventDelete) {
-	ctx := context.Background()
+func (b *Bot) onScheduledEventDelete(ctx context.Context, e *events.GuildScheduledEventDelete) {
 	embed := discord.Embed{
 		Title: "Scheduled Event Deleted",
 		Color: colorRed,
@@ -1410,8 +1388,7 @@ func scheduledEventStatusName(s discord.ScheduledEventStatus) string {
 
 // --- Soundboard Sound events ---
 
-func (b *Bot) onSoundboardSoundCreate(e *events.GuildSoundboardSoundCreate) {
-	ctx := context.Background()
+func (b *Bot) onSoundboardSoundCreate(ctx context.Context, e *events.GuildSoundboardSoundCreate) {
 	guildID := snowflake.ID(0)
 	if e.SoundboardSound.GuildID != nil {
 		guildID = *e.SoundboardSound.GuildID
@@ -1427,8 +1404,7 @@ func (b *Bot) onSoundboardSoundCreate(e *events.GuildSoundboardSoundCreate) {
 	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) onSoundboardSoundUpdate(e *events.GuildSoundboardSoundUpdate) {
-	ctx := context.Background()
+func (b *Bot) onSoundboardSoundUpdate(ctx context.Context, e *events.GuildSoundboardSoundUpdate) {
 	if e.OldGuildSoundboardSound.SoundID == 0 {
 		return
 	}
@@ -1457,8 +1433,7 @@ func (b *Bot) onSoundboardSoundUpdate(e *events.GuildSoundboardSoundUpdate) {
 	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) onSoundboardSoundDelete(e *events.GuildSoundboardSoundDelete) {
-	ctx := context.Background()
+func (b *Bot) onSoundboardSoundDelete(ctx context.Context, e *events.GuildSoundboardSoundDelete) {
 	embed := discord.Embed{
 		Title: "Soundboard Sound Deleted",
 		Color: colorRed,
@@ -1473,8 +1448,7 @@ func (b *Bot) onSoundboardSoundDelete(e *events.GuildSoundboardSoundDelete) {
 // Role create and delete are handled by the audit log handler (handleRoleAuditEntry)
 // which includes moderator + reason info.
 
-func (b *Bot) onRoleUpdate(e *events.RoleUpdate) {
-	ctx := context.Background()
+func (b *Bot) onRoleUpdate(ctx context.Context, e *events.RoleUpdate) {
 	var fields []discord.EmbedField
 	if e.OldRole.Name != e.Role.Name {
 		fields = append(fields,
@@ -1540,8 +1514,7 @@ func (b *Bot) onRoleUpdate(e *events.RoleUpdate) {
 
 // --- Server events ---
 
-func (b *Bot) onGuildUpdate(e *events.GuildUpdate) {
-	ctx := context.Background()
+func (b *Bot) onGuildUpdate(ctx context.Context, e *events.GuildUpdate) {
 	var fields []discord.EmbedField
 	if e.OldGuild.Name != e.Guild.Name {
 		fields = append(fields,

@@ -30,8 +30,7 @@ func defaultAutoRoleConfig() map[snowflake.ID]snowflake.ID {
 	}
 }
 
-func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
-	ctx := context.Background()
+func (b *Bot) onMemberJoin(ctx context.Context, e *events.GuildMemberJoin) {
 	b.logMemberJoin(ctx, e.GuildID, e.Member)
 	b.sendWelcomeDM(ctx, e.GuildID, e.Member.User.ID)
 

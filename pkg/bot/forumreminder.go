@@ -100,7 +100,7 @@ func (s *forumReminderState) forgetWaiting() {
 
 // onForumThreadCreate records a thread created in a reminder forum while the
 // bot is online: from here on, replies arrive as message events.
-func (b *Bot) onForumThreadCreate(e *events.ThreadCreate) {
+func (b *Bot) onForumThreadCreate(_ context.Context, e *events.ThreadCreate) {
 	if !e.NewlyCreated {
 		return
 	}
@@ -114,13 +114,13 @@ func (b *Bot) onForumThreadCreate(e *events.ThreadCreate) {
 // onForumReminderReady runs at the start of every gateway session. Messages
 // sent while there was none are never delivered, so a thread thought to be
 // waiting may have been answered in the meantime.
-func (b *Bot) onForumReminderReady(*events.Ready) {
+func (b *Bot) onForumReminderReady(context.Context, *events.Ready) {
 	b.forumReminders.forgetWaiting()
 }
 
 // onForumThreadMessage settles a reminder-forum thread once someone other
 // than its owner posts. Only the author is read, never the content.
-func (b *Bot) onForumThreadMessage(e *events.GuildMessageCreate) {
+func (b *Bot) onForumThreadMessage(_ context.Context, e *events.GuildMessageCreate) {
 	thread, ok := b.Client.Caches.GuildThread(e.ChannelID)
 	if !ok {
 		return
