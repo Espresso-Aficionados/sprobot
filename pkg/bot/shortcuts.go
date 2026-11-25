@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
@@ -376,6 +378,14 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 			continue
 		}
 		s3URL, err := b.S3.SaveShortcutImage(ctx, guildStr, strings.TrimSpace(resp))
+		if errors.Is(err, s3client.ErrNotImage) {
+			host := ""
+			if u, perr := url.Parse(strings.TrimSpace(resp)); perr == nil {
+				host = u.Hostname()
+			}
+			b.Log.Warn("Shortcut response isn't an image, kept as a link", "guild_id", guildStr, "host", host, "error", err)
+			continue
+		}
 		if err != nil {
 			b.Log.Error("Failed to re-host shortcut image", "error", err)
 			continue // keep original URL
