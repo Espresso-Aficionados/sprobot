@@ -390,31 +390,36 @@ func (b *Bot) stopLoops() {
 
 func (b *Bot) Run() error {
 	ctx := context.Background()
+	// Startup's loads, gateway open and registrations, in one span. Its
+	// context reaches nothing that runs past startup but the owner listing.
+	start, startSpan := botutil.StartSpan("startup")
+	defer startSpan.End() // on a failed start; a second End does nothing
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045773440", b.Client.ApplicationID))
 
 	// Nothing has been saved yet, and nothing will be: a newer build's state
 	// is left as it is.
-	if err := b.loadState(ctx); err != nil {
+	if err := b.loadState(start); err != nil {
 		return err
 	}
 	// Lists stored profiles from S3 only; name updates probe authors until it
 	// finishes.
-	go b.loadProfileOwners(ctx, botutil.AllowedGuildIDs)
+	go b.loadProfileOwners(start, botutil.AllowedGuildIDs)
 
 	b.ServeHealth()
-	if err := b.OpenGateway(ctx); err != nil {
+	if err := b.OpenGateway(start); err != nil {
 		return err
 	}
 	defer b.Client.Close(ctx)
 
 	b.WaitForGuilds(30 * time.Second)
 
-	b.ensureTicketPanels()
-	b.ensureSelfrolePanels()
-	if err := b.registerAllCommands(); err != nil {
+	b.ensureTicketPanels(start)
+	b.ensureSelfrolePanels(start)
+	if err := b.registerAllCommands(start); err != nil {
 		return fmt.Errorf("registering commands: %w", err)
 	}
+	startSpan.End()
 	go b.forumReminderLoop()
 	// Not a startLoop: it saves nothing, and a hung ping would hold up shutdown.
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.Heartbeat)
@@ -433,8 +438,10 @@ func (b *Bot) Run() error {
 	b.startLoop(1*time.Minute, processTempRoleExpiriesJob, b.processTempRoleExpiries)
 
 	shutdownErr := b.WaitForShutdown("Bot")
+	stop, stopSpan := botutil.StartSpan("shutdown")
+	defer stopSpan.End()
 	b.stopLoops()
-	b.saveState(ctx)
+	b.saveState(stop)
 	_ = b.saveCaches() // it logs its own failures
 	return shutdownErr
 }

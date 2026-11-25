@@ -138,7 +138,7 @@ func (st *ticketState) endOpen(userID, threadID snowflake.ID, now time.Time) {
 	st.opens[userID] = ticketOpen{at: now, threadID: threadID}
 }
 
-func (b *Bot) ensureTicketPanels() {
+func (b *Bot) ensureTicketPanels(ctx context.Context) {
 	for _, guildID := range b.GuildIDs() {
 		cfg, ok := b.ticketConfigs[guildID]
 		if !ok {
@@ -147,7 +147,7 @@ func (b *Bot) ensureTicketPanels() {
 		if cfg.ChannelID == 0 {
 			continue
 		}
-		b.ensureTicketPanel(guildID, cfg)
+		b.ensureTicketPanel(ctx, guildID, cfg)
 	}
 }
 
@@ -195,8 +195,8 @@ func (b *Bot) panelNeedsUpdate(msg discord.Message, cfg ticketConfig) bool {
 	return false
 }
 
-func (b *Bot) ensureTicketPanel(guildID snowflake.ID, cfg ticketConfig) {
-	messages, err := b.Client.Rest.GetMessages(cfg.ChannelID, 0, 0, 0, 25)
+func (b *Bot) ensureTicketPanel(ctx context.Context, guildID snowflake.ID, cfg ticketConfig) {
+	messages, err := b.Client.Rest.GetMessages(cfg.ChannelID, 0, 0, 0, 25, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to fetch messages for ticket panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
 		return
@@ -233,7 +233,7 @@ func (b *Bot) ensureTicketPanel(guildID snowflake.ID, cfg ticketConfig) {
 						Content:    &content,
 						Embeds:     &embeds,
 						Components: &components,
-					})
+					}, rest.WithCtx(ctx))
 					if err != nil {
 						b.Log.Error("Failed to update ticket panel", "guild_id", guildID, "error", err)
 					}
@@ -246,7 +246,7 @@ func (b *Bot) ensureTicketPanel(guildID snowflake.ID, cfg ticketConfig) {
 	_, err = b.Client.Rest.CreateMessage(cfg.ChannelID, discord.MessageCreate{
 		Embeds:     []discord.Embed{embed},
 		Components: components,
-	})
+	}, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to post ticket panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
 	} else {
