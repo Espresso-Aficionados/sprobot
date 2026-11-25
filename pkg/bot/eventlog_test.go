@@ -237,7 +237,7 @@ func TestChannelOverwriteOnHiddenChannelUsesID(t *testing.T) {
 		Changes:    []discord.AuditLogChange{{Key: discord.AuditLogChangeKeyAllow, NewValue: json.RawMessage(`"2048"`)}},
 	}
 
-	b.handleChannelOverwriteEntry(10, entry)
+	b.handleChannelOverwriteEntry(t.Context(), 10, entry)
 
 	got := stub.bodies("POST /channels/15/messages")
 	if len(got) != 1 || strings.Contains(got[0], hiddenChannelName) || !strings.Contains(got[0], "Channel Permissions Created: 5") {
@@ -283,7 +283,7 @@ func TestMemberRoleUpdateWithUnreadableRolesIsLogged(t *testing.T) {
 		},
 	}
 
-	b.handleMemberRoleUpdateEntry(10, entry)
+	b.handleMemberRoleUpdateEntry(t.Context(), 10, entry)
 
 	got := stub.bodies("POST /channels/15/messages")
 	if len(got) != 1 || !strings.Contains(got[0], "Could not read the role changes") {
@@ -302,7 +302,7 @@ func TestChannelOverwriteUnreadableIsNotAnEmptyDiff(t *testing.T) {
 		},
 	}
 
-	b.handleChannelOverwriteEntry(10, entry)
+	b.handleChannelOverwriteEntry(t.Context(), 10, entry)
 
 	got := stub.bodies("POST /channels/15/messages")
 	if len(got) != 1 || !strings.Contains(got[0], "Could not read the permission changes") || strings.Contains(got[0], "No recognizable") {
@@ -313,7 +313,7 @@ func TestChannelOverwriteUnreadableIsNotAnEmptyDiff(t *testing.T) {
 	stub.reset()
 	entry.ActionType = discord.AuditLogEventChannelOverwriteCreate
 	entry.Changes = []discord.AuditLogChange{{Key: discord.AuditLogChangeKeyAllow, NewValue: json.RawMessage(`"2048"`)}}
-	b.handleChannelOverwriteEntry(10, entry)
+	b.handleChannelOverwriteEntry(t.Context(), 10, entry)
 	got = stub.bodies("POST /channels/15/messages")
 	if len(got) != 1 || !strings.Contains(got[0], "Send Messages") {
 		t.Errorf("event log posts = %v, want the granted permission listed", got)

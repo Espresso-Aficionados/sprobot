@@ -1,12 +1,14 @@
 package threadbot
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/omit"
 	"github.com/disgoorg/snowflake/v2"
 
@@ -171,8 +173,8 @@ func (b *Bot) registerAllCommands() error {
 	return botutil.RegisterGuildCommands(b.Client, b.GuildIDs(), commands, b.Log)
 }
 
-func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
-	if e.GuildID() == nil || b.RejectGuildNotAllowed(e) {
+func (b *Bot) onCommand(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
+	if e.GuildID() == nil || b.RejectGuildNotAllowed(ctx, e) {
 		return
 	}
 
@@ -184,13 +186,13 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 	switch d.CommandName() {
 	case cmdListThreads:
 		if isThread(e.Channel().Type()) {
-			botutil.RespondEphemeral(e, "This command only works in channels — it lists the threads under a channel.")
+			botutil.RespondEphemeral(ctx, e, "This command only works in channels — it lists the threads under a channel.")
 			return
 		}
-		b.handleThreads(e)
+		b.handleThreads(ctx, e)
 	case cmdSlash:
 		if isThread(e.Channel().Type()) {
-			botutil.RespondEphemeral(e, "This command can only be used in channels, not threads.")
+			botutil.RespondEphemeral(ctx, e, "This command can only be used in channels, not threads.")
 			return
 		}
 		sub := d.SubCommandName
@@ -199,26 +201,26 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		}
 		switch *sub {
 		case subEnable:
-			b.handleEnable(e)
+			b.handleEnable(ctx, e)
 		case subDisable:
-			b.handleDisable(e)
+			b.handleDisable(ctx, e)
 		case subList:
-			b.handleList(e)
+			b.handleList(ctx, e)
 		case subRefreshCounts:
-			b.handleRefreshCounts(e)
+			b.handleRefreshCounts(ctx, e)
 		case subFetchAll:
-			b.handleFetchAll(e)
+			b.handleFetchAll(ctx, e)
 		case subHide:
-			b.handleHide(e, true)
+			b.handleHide(ctx, e, true)
 		case subUnhide:
-			b.handleHide(e, false)
+			b.handleHide(ctx, e, false)
 		case subHidden:
-			b.handleHiddenList(e)
+			b.handleHiddenList(ctx, e)
 		}
 	}
 }
 
-func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleEnable(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
 	data := e.Data.(discord.SlashCommandInteractionData)
@@ -246,10 +248,10 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 
 	if errMsg := validateReminderParams(minIdle, maxIdle, msgThreshold, timeThreshold, buffer); errMsg != "" {
 		b.Log.Info("Enable rejected", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "reason", errMsg)
-		botutil.RespondEphemeral(e, errMsg)
+		botutil.RespondEphemeral(ctx, e, errMsg)
 		return
 	}
-	reply, ok := b.remindersLoaded(e, guildID)
+	reply, ok := b.remindersLoaded(ctx, e, guildID)
 	if !ok {
 		return
 	}
@@ -288,9 +290,9 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	b.startReminderGoroutine(r)
 	b.mu.Unlock()
 	if !current && old != nil && old.LastMessageID != 0 {
-		_ = b.Client.Rest.DeleteMessage(channelID, old.LastMessageID)
+		_ = b.Client.Rest.DeleteMessage(channelID, old.LastMessageID, rest.WithCtx(ctx))
 	}
-	b.saveRemindersForGuild(guildID)
+	b.saveRemindersForGuild(ctx, guildID)
 
 	b.Log.Info("Reminder enabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", msgThreshold, "time_threshold", timeThreshold, "buffer", buffer)
 }
@@ -301,20 +303,20 @@ func (b *Bot) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 // interaction's 3-second deadline, so the command is deferred and answered
 // with a follow-up. If they can't be loaded it tells the user and returns
 // false: a change saved now would overwrite them.
-func (b *Bot) remindersLoaded(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID) (func(string), bool) {
+func (b *Bot) remindersLoaded(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID) (func(string), bool) {
 	b.mu.Lock()
 	_, loaded := b.reminders[guildID]
 	b.mu.Unlock()
 	if loaded {
-		return func(content string) { botutil.RespondEphemeral(e, content) }, true
+		return func(content string) { botutil.RespondEphemeral(ctx, e, content) }, true
 	}
 
-	if err := e.DeferCreateMessage(true); err != nil {
+	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer reminder command", "error", err)
 		return nil, false
 	}
-	reply := func(content string) { botutil.FollowupEphemeral(b.Client, e.Token(), content) }
-	if err := b.ensureRemindersLoaded(guildID); err != nil {
+	reply := func(content string) { botutil.FollowupEphemeral(ctx, b.Client, e.Token(), content) }
+	if err := b.ensureRemindersLoaded(ctx, guildID); err != nil {
 		b.Log.Error("Failed to load thread reminders", "guild_id", guildID, "error", err)
 		reply("Couldn't load this server's thread reminders, so they can't be shown or changed right now. Please try again in a minute.")
 		return nil, false
@@ -322,10 +324,10 @@ func (b *Bot) remindersLoaded(e *events.ApplicationCommandInteractionCreate, gui
 	return reply, true
 }
 
-func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleDisable(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
-	reply, ok := b.remindersLoaded(e, guildID)
+	reply, ok := b.remindersLoaded(ctx, e, guildID)
 	if !ok {
 		return
 	}
@@ -346,34 +348,34 @@ func (b *Bot) handleDisable(e *events.ApplicationCommandInteractionCreate) {
 	b.stopReminderGoroutine(r)
 	// Read only after the stop: a repost in flight replaces the message.
 	if r.LastMessageID != 0 {
-		_ = b.Client.Rest.DeleteMessage(channelID, r.LastMessageID)
+		_ = b.Client.Rest.DeleteMessage(channelID, r.LastMessageID, rest.WithCtx(ctx))
 	}
-	b.saveRemindersForGuild(guildID)
+	b.saveRemindersForGuild(ctx, guildID)
 	b.Log.Info("Reminder disabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 }
 
-func (b *Bot) handleThreads(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleThreads(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	b.Log.Info("Listing threads", "user_id", e.User().ID, "guild_id", *e.GuildID(), "channel_id", e.Channel().ID())
-	b.respondThreads(e, e.Channel().ID(), true)
+	b.respondThreads(ctx, e, e.Channel().ID(), true)
 }
 
-func (b *Bot) handleFetchAll(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleFetchAll(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	public, _ := e.Data.(discord.SlashCommandInteractionData).OptBool(optPublic)
 	b.Log.Info("Fetching all threads", "user_id", e.User().ID, "guild_id", *e.GuildID(), "public", public)
-	b.respondThreads(e, 0, !public)
+	b.respondThreads(ctx, e, 0, !public)
 }
 
 // respondThreads answers a command with the thread list for channelID, or
 // for the whole server when channelID is 0.
-func (b *Bot) respondThreads(e *events.ApplicationCommandInteractionCreate, channelID snowflake.ID, ephemeral bool) {
+func (b *Bot) respondThreads(ctx context.Context, e *events.ApplicationCommandInteractionCreate, channelID snowflake.ID, ephemeral bool) {
 	// Defer since fetching threads + member counts may exceed the 3s deadline.
-	if err := e.DeferCreateMessage(ephemeral); err != nil {
+	if err := e.DeferCreateMessage(ephemeral, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer thread list response", "error", err)
 		return
 	}
 
 	var msg discord.MessageCreate
-	embed, err := b.buildThreadsEmbed(*e.GuildID(), channelID)
+	embed, err := b.buildThreadsEmbed(ctx, *e.GuildID(), channelID)
 	switch {
 	case err != nil:
 		b.Log.Error("Failed to build thread list", "guild_id", *e.GuildID(), "channel_id", channelID, "error", err)
@@ -388,14 +390,14 @@ func (b *Bot) respondThreads(e *events.ApplicationCommandInteractionCreate, chan
 	if ephemeral {
 		msg.Flags = discord.MessageFlagEphemeral
 	}
-	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg); err != nil {
+	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to send thread list", "error", err)
 	}
 }
 
-func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleList(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
-	reply, ok := b.remindersLoaded(e, guildID)
+	reply, ok := b.remindersLoaded(ctx, e, guildID)
 	if !ok {
 		return
 	}
@@ -427,14 +429,14 @@ func (b *Bot) handleList(e *events.ApplicationCommandInteractionCreate) {
 	reply(strings.Join(lines, "\n"))
 }
 
-func (b *Bot) handleRefreshCounts(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleRefreshCounts(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
-	if err := b.resetMemberCounts(guildID, func() {
+	if err := b.resetMemberCounts(ctx, guildID, func() {
 		b.Log.Info("Member count cache cleared", "user_id", e.User().ID, "guild_id", guildID)
-		botutil.RespondEphemeral(e, "Thread member count cache cleared. Counts will refresh on the next reminder post or `/threads` command.")
+		botutil.RespondEphemeral(ctx, e, "Thread member count cache cleared. Counts will refresh on the next reminder post or `/threads` command.")
 	}); err != nil {
 		b.Log.Error("Refusing to clear thread member counts a newer build wrote", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "These member counts were saved by a newer version of the bot, so this one leaves them alone.")
+		botutil.RespondEphemeral(ctx, e, "These member counts were saved by a newer version of the bot, so this one leaves them alone.")
 	}
 }
 
@@ -443,14 +445,14 @@ func (b *Bot) handleRefreshCounts(e *events.ApplicationCommandInteractionCreate)
 // with no cache, so a restart would bring the old counts back. This also
 // replaces stored counts that failed to load, unless a newer build wrote
 // them: that is refused.
-func (b *Bot) resetMemberCounts(guildID snowflake.ID, cleared func()) error {
-	if err := b.ensureMemberCountsLoaded(guildID); statever.IsNewer(err) {
+func (b *Bot) resetMemberCounts(ctx context.Context, guildID snowflake.ID, cleared func()) error {
+	if err := b.ensureMemberCountsLoaded(ctx, guildID); statever.IsNewer(err) {
 		return err
 	}
 	b.mu.Lock()
 	b.memberCounts[guildID] = newMemberCountCache()
 	b.mu.Unlock()
 	cleared()
-	b.saveMemberCountsForGuild(guildID)
+	b.saveMemberCountsForGuild(ctx, guildID)
 	return nil
 }

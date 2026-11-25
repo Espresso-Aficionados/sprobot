@@ -8,6 +8,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
@@ -15,7 +16,7 @@ import (
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
-func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
+func (b *Bot) handleGet(ctx context.Context, e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
 	b.Log.Info("Processing getprofile",
 		"user_id", userIDStr(e),
 		"template", tmpl.Name,
@@ -23,7 +24,7 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 	)
 
 	// Defer since FetchProfile may exceed the 3s deadline.
-	if err := e.DeferCreateMessage(false); err != nil {
+	if err := e.DeferCreateMessage(false, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer getprofile response", "error", err)
 		return
 	}
@@ -41,10 +42,10 @@ func (b *Bot) handleGet(e *events.ApplicationCommandInteractionCreate, tmpl spro
 		}
 	}
 
-	b.sendProfile(e, tmpl, targetID, targetName)
+	b.sendProfile(ctx, e, tmpl, targetID, targetName)
 }
 
-func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
+func (b *Bot) handleGetMenu(ctx context.Context, e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
 	b.Log.Info("Processing getprofile menu",
 		"user_id", userIDStr(e),
 		"template", tmpl.Name,
@@ -69,35 +70,35 @@ func (b *Bot) handleGetMenu(e *events.ApplicationCommandInteractionCreate, tmpl 
 		targetName = author.EffectiveName()
 		fetchMember = true
 	default:
-		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
+		botutil.RespondEphemeral(ctx, e, "Oops! Something went wrong.")
 		return
 	}
 
 	// Defer since GetMember + FetchProfile may exceed the 3s deadline.
-	if err := e.DeferCreateMessage(false); err != nil {
+	if err := e.DeferCreateMessage(false, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer getmenu response", "error", err)
 		return
 	}
 
 	if fetchMember {
-		if member, err := b.Client.Rest.GetMember(*e.GuildID(), targetID); err == nil {
+		if member, err := b.Client.Rest.GetMember(*e.GuildID(), targetID, rest.WithCtx(ctx)); err == nil {
 			targetName = member.EffectiveName()
 		}
 	}
 
-	b.sendProfile(e, tmpl, targetID, targetName)
+	b.sendProfile(ctx, e, tmpl, targetID, targetName)
 }
 
 // sendProfile answers a deferred profile lookup with targetID's profile, or,
 // privately, with why there isn't one to show.
-func (b *Bot) sendProfile(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template, targetID snowflake.ID, targetName string) {
+func (b *Bot) sendProfile(ctx context.Context, e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template, targetID snowflake.ID, targetName string) {
 	guildStr := guildIDStr(e)
 	targetIDStr := targetID.String()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, targetIDStr)
+	profile, err := b.S3.FetchProfile(fetchCtx, tmpl, guildStr, targetIDStr)
 	if err != nil {
 		var msg string
 		switch {
@@ -109,14 +110,14 @@ func (b *Bot) sendProfile(e *events.ApplicationCommandInteractionCreate, tmpl sp
 		default:
 			msg = fmt.Sprintf("Whoops! Unable to find a %s profile for %s.", tmpl.Name, targetName)
 		}
-		b.followupPrivately(e.Token(), msg)
+		b.followupPrivately(ctx, e.Token(), msg)
 		return
 	}
 
 	embed := buildProfileEmbed(tmpl, targetName, profile, guildStr, targetIDStr, b.S3)
 	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
-	}); err != nil {
+	}, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to send profile embed", "error", err)
 	}
 }
@@ -125,9 +126,9 @@ func (b *Bot) sendProfile(e *events.ApplicationCommandInteractionCreate, tmpl sp
 // ephemeral message. The first follow-up replaces the deferred response and
 // keeps its visibility whatever its own flags say, so the public placeholder
 // is deleted first.
-func (b *Bot) followupPrivately(token, content string) {
-	if err := b.Client.Rest.DeleteInteractionResponse(b.Client.ApplicationID, token); err != nil {
+func (b *Bot) followupPrivately(ctx context.Context, token, content string) {
+	if err := b.Client.Rest.DeleteInteractionResponse(b.Client.ApplicationID, token, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to delete deferred response", "error", err)
 	}
-	botutil.FollowupEphemeral(b.Client, token, content)
+	botutil.FollowupEphemeral(ctx, b.Client, token, content)
 }

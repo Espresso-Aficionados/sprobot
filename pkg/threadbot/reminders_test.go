@@ -91,10 +91,10 @@ func TestZeroSettingsSurviveReload(t *testing.T) {
 	b.reminders[guildID] = map[snowflake.ID]*threadReminder{
 		100: {ChannelID: 100, GuildID: guildID, MinIdleMins: 0, MaxIdleMins: 10, MsgThreshold: 0, TimeThresholdMins: 60, Buffer: 0},
 	}
-	b.saveRemindersForGuild(guildID)
+	b.saveRemindersForGuild(t.Context(), guildID)
 
 	b2 := newTestBot(t, c)
-	b2.loadReminders()
+	b2.loadReminders(t.Context())
 	r := b2.reminders[guildID][100]
 	if r == nil {
 		t.Fatal("reminder not reloaded")
@@ -113,7 +113,7 @@ func TestLoadRemindersNotFound(t *testing.T) {
 	b := newTestBot(t, c)
 
 	// Should not panic or error on missing data
-	b.loadReminders()
+	b.loadReminders(t.Context())
 
 	guildID := snowflake.ID(1013566342345019512)
 	if channels, ok := b.reminders[guildID]; ok && len(channels) > 0 {
@@ -146,7 +146,7 @@ func TestLoadRemindersFromS3(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadReminders()
+	b.loadReminders(t.Context())
 
 	guildID := snowflake.ID(1013566342345019512)
 	channels, ok := b.reminders[guildID]
@@ -189,7 +189,7 @@ func TestSaveRemindersForGuild(t *testing.T) {
 		},
 	}
 
-	b.saveRemindersForGuild(guildID)
+	b.saveRemindersForGuild(t.Context(), guildID)
 
 	// Verify written to S3
 	fake.Mu.Lock()
@@ -226,7 +226,7 @@ func TestSaveRemindersForGuildNoData(t *testing.T) {
 	b := newTestBot(t, c)
 
 	// Saving for a guild that isn't in the map should not panic
-	b.saveRemindersForGuild(999)
+	b.saveRemindersForGuild(t.Context(), 999)
 
 	fake.Mu.Lock()
 	_, ok := fake.Objects["/test-bucket/threadreminders/999.json"]
@@ -262,11 +262,11 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 		},
 	}
 
-	b.saveRemindersForGuild(guildID)
+	b.saveRemindersForGuild(t.Context(), guildID)
 
 	// Load into a fresh bot
 	b2 := newTestBot(t, c)
-	b2.loadReminders()
+	b2.loadReminders(t.Context())
 
 	channels, ok := b2.reminders[guildID]
 	if !ok {
@@ -315,7 +315,7 @@ func TestSaveAllReminders(t *testing.T) {
 		100: {ChannelID: 100, GuildID: guild1, Enabled: true, MinIdleMins: 30, MaxIdleMins: 720, MsgThreshold: 30},
 	}
 
-	b.saveAllReminders()
+	b.saveAllReminders(t.Context())
 
 	fake.Mu.Lock()
 	_, ok := fake.Objects["/test-bucket/threadreminders/1013566342345019512.json"]
@@ -399,7 +399,7 @@ func TestLoadRemindersInvalidJSON(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadReminders()
+	b.loadReminders(t.Context())
 
 	// Left unloaded, so the stored file isn't saved over.
 	guildID := snowflake.ID(1013566342345019512)
@@ -525,7 +525,7 @@ func TestLoadMemberCountsNotFound(t *testing.T) {
 	c := testutil.NewTestS3Client(t, server)
 	b := newTestBot(t, c)
 
-	b.loadMemberCounts()
+	b.loadMemberCounts(t.Context())
 
 	// Nothing stored: the guild starts with an empty cache it may save.
 	guildID := snowflake.ID(1013566342345019512)
@@ -554,7 +554,7 @@ func TestLoadMemberCountsFromS3(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadMemberCounts()
+	b.loadMemberCounts(t.Context())
 
 	guildID := snowflake.ID(1013566342345019512)
 	loaded, ok := b.memberCounts[guildID]
@@ -585,7 +585,7 @@ func TestSaveMemberCounts(t *testing.T) {
 		Fetched: map[snowflake.ID]time.Time{snowflake.ID(111): time.Now().Truncate(time.Second)},
 	}
 
-	b.saveMemberCounts()
+	b.saveMemberCounts(t.Context())
 
 	fake.Mu.Lock()
 	data, ok := fake.Objects["/test-bucket/threadmembercounts/1013566342345019512.json"]
@@ -616,7 +616,7 @@ func TestLoadMemberCountsInvalidJSON(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadMemberCounts()
+	b.loadMemberCounts(t.Context())
 
 	// Left unloaded, so the stored file isn't saved over.
 	guildID := snowflake.ID(1013566342345019512)
@@ -639,11 +639,11 @@ func TestSaveRemindersMultipleChannels(t *testing.T) {
 		200: {ChannelID: 200, GuildID: guildID, EnabledBy: 222, Enabled: false, MinIdleMins: 60, MaxIdleMins: 1440, MsgThreshold: 50},
 	}
 
-	b.saveRemindersForGuild(guildID)
+	b.saveRemindersForGuild(t.Context(), guildID)
 
 	// Load and verify both
 	b2 := newTestBot(t, c)
-	b2.loadReminders()
+	b2.loadReminders(t.Context())
 
 	channels := b2.reminders[guildID]
 	if len(channels) != 2 {

@@ -17,17 +17,17 @@ import (
 // succeeds again once it can.
 func TestGuildStateStoreSaveReportsFailure(t *testing.T) {
 	store, h := newTestStore(t)
-	if err := store.load([]snowflake.ID{testGuild}); err != nil {
+	if err := store.load(t.Context(), []snowflake.ID{testGuild}); err != nil {
 		t.Fatal(err)
 	}
 	store.getOrCreate(testGuild)
 
 	h.setHook(func(r *http.Request) bool { return r.Method != http.MethodPut })
-	if err := store.save(); err == nil {
+	if err := store.save(t.Context()); err == nil {
 		t.Error("save succeeded while S3 refuses writes")
 	}
 	h.setHook(nil)
-	if err := store.save(); err != nil {
+	if err := store.save(t.Context()); err != nil {
 		t.Errorf("save after recovery: %v", err)
 	}
 }

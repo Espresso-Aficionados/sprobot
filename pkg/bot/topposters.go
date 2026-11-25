@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
@@ -97,6 +99,7 @@ func (g *guildPostCounts) UnmarshalJSON(data []byte) error {
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {
+	ctx := context.Background()
 	if e.Message.Author.Bot {
 		return
 	}
@@ -105,10 +108,10 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 	}
 
 	guildID := *e.GuildID
-	b.ensureAutoRole(guildID, e.Message)
-	b.checkPosterRole(guildID, e.ChannelID, e.Message)
-	b.checkTempRolesOnMessage(guildID, e.Message)
-	b.syncProfileName(guildID, e.Message)
+	b.ensureAutoRole(ctx, guildID, e.Message)
+	b.checkPosterRole(ctx, guildID, e.ChannelID, e.Message)
+	b.checkTempRolesOnMessage(ctx, guildID, e.Message)
+	b.syncProfileName(ctx, guildID, e.Message)
 
 	gc := b.topPosters.get(guildID)
 	if gc == nil {
@@ -166,14 +169,14 @@ func (gc *guildPostCounts) prune(cutoff string) {
 	}
 }
 
-func (b *Bot) saveTopPosters() error {
+func (b *Bot) saveTopPosters(ctx context.Context) error {
 	cutoff := time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02")
 	b.topPosters.each(func(_ snowflake.ID, gc *guildPostCounts) {
 		gc.mu.Lock()
 		gc.prune(cutoff)
 		gc.mu.Unlock()
 	})
-	return b.topPosters.save()
+	return b.topPosters.save(ctx)
 }
 
 func pruneOldDays(counts map[string]map[string]int, cutoff string) {
@@ -209,7 +212,7 @@ type posterEntry struct {
 	Count  int
 }
 
-func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleTopPosters(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	if e.GuildID() == nil {
 		return
 	}
@@ -219,13 +222,13 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 
 	// Check ManageMessages permission
 	if member := e.Member(); member == nil || member.Permissions&discord.PermissionManageMessages == 0 {
-		botutil.RespondEphemeral(e, "You don't have permission to use this command.")
+		botutil.RespondEphemeral(ctx, e, "You don't have permission to use this command.")
 		return
 	}
 
 	gc := b.topPosters.get(guildID)
 	if gc == nil {
-		botutil.RespondEphemeral(e, "No data available yet.")
+		botutil.RespondEphemeral(ctx, e, "No data available yet.")
 		return
 	}
 
@@ -328,12 +331,12 @@ func (b *Bot) handleTopPosters(e *events.ApplicationCommandInteractionCreate) {
 
 	e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
-	})
+	}, rest.WithCtx(ctx))
 }
 
 // --- /config topposters handlers ---
 
-func (b *Bot) handleTopPostersConfigCmd(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleTopPostersConfigCmd(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -346,7 +349,7 @@ func (b *Bot) handleTopPostersConfigCmd(e *events.ApplicationCommandInteractionC
 
 	st := b.topPostersConfig.getOrCreate(*guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "The top posters config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
+		botutil.RespondEphemeral(ctx, e, "The top posters config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
 		return
 	}
 
@@ -357,17 +360,17 @@ func (b *Bot) handleTopPostersConfigCmd(e *events.ApplicationCommandInteractionC
 
 	switch *subCmd {
 	case "filter-add":
-		b.handleTopPostersFilterAdd(e, *guildID, st)
+		b.handleTopPostersFilterAdd(ctx, e, *guildID, st)
 	case "filter-remove":
-		b.handleTopPostersFilterRemove(e, *guildID, st)
+		b.handleTopPostersFilterRemove(ctx, e, *guildID, st)
 	case "filter-list":
-		b.handleTopPostersFilterList(e, st)
+		b.handleTopPostersFilterList(ctx, e, st)
 	case "filter-clear":
-		b.handleTopPostersFilterClear(e, *guildID, st)
+		b.handleTopPostersFilterClear(ctx, e, *guildID, st)
 	}
 }
 
-func (b *Bot) handleTopPostersFilterAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
+func (b *Bot) handleTopPostersFilterAdd(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
 	user, hasUser := data.OptUser("user")
@@ -375,7 +378,7 @@ func (b *Bot) handleTopPostersFilterAdd(e *events.ApplicationCommandInteractionC
 	ch, hasCh := data.OptChannel("channel")
 
 	if !hasUser && !hasRole && !hasCh {
-		botutil.RespondEphemeral(e, "Please provide at least one of: user, role, or channel.")
+		botutil.RespondEphemeral(ctx, e, "Please provide at least one of: user, role, or channel.")
 		return
 	}
 
@@ -398,20 +401,20 @@ func (b *Bot) handleTopPostersFilterAdd(e *events.ApplicationCommandInteractionC
 	st.mu.Unlock()
 
 	if len(added) == 0 {
-		botutil.RespondEphemeral(e, "All specified items are already filtered.")
+		botutil.RespondEphemeral(ctx, e, "All specified items are already filtered.")
 		return
 	}
 
-	if err := b.topPostersConfig.persist(guildID); err != nil {
+	if err := b.topPostersConfig.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist topposters filter", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save filter.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save filter.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, "Added to filter: "+strings.Join(added, ", "))
+	botutil.RespondEphemeral(ctx, e, "Added to filter: "+strings.Join(added, ", "))
 }
 
-func (b *Bot) handleTopPostersFilterRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
+func (b *Bot) handleTopPostersFilterRemove(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
 	user, hasUser := data.OptUser("user")
@@ -419,7 +422,7 @@ func (b *Bot) handleTopPostersFilterRemove(e *events.ApplicationCommandInteracti
 	ch, hasCh := data.OptChannel("channel")
 
 	if !hasUser && !hasRole && !hasCh {
-		botutil.RespondEphemeral(e, "Please provide at least one of: user, role, or channel.")
+		botutil.RespondEphemeral(ctx, e, "Please provide at least one of: user, role, or channel.")
 		return
 	}
 
@@ -445,20 +448,20 @@ func (b *Bot) handleTopPostersFilterRemove(e *events.ApplicationCommandInteracti
 	st.mu.Unlock()
 
 	if len(removed) == 0 {
-		botutil.RespondEphemeral(e, "None of the specified items were in the filter.")
+		botutil.RespondEphemeral(ctx, e, "None of the specified items were in the filter.")
 		return
 	}
 
-	if err := b.topPostersConfig.persist(guildID); err != nil {
+	if err := b.topPostersConfig.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist topposters filter removal", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save changes.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save changes.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, "Removed from filter: "+strings.Join(removed, ", "))
+	botutil.RespondEphemeral(ctx, e, "Removed from filter: "+strings.Join(removed, ", "))
 }
 
-func (b *Bot) handleTopPostersFilterList(e *events.ApplicationCommandInteractionCreate, st *topPostersConfigState) {
+func (b *Bot) handleTopPostersFilterList(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *topPostersConfigState) {
 	b.Log.Info("Top posters filter list", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
@@ -471,7 +474,7 @@ func (b *Bot) handleTopPostersFilterList(e *events.ApplicationCommandInteraction
 	st.mu.Unlock()
 
 	if len(users) == 0 && len(roles) == 0 && len(channels) == 0 {
-		botutil.RespondEphemeral(e, "No filters configured.")
+		botutil.RespondEphemeral(ctx, e, "No filters configured.")
 		return
 	}
 
@@ -498,10 +501,10 @@ func (b *Bot) handleTopPostersFilterList(e *events.ApplicationCommandInteraction
 		sections = append(sections, "**Channels:**\n"+strings.Join(lines, "\n"))
 	}
 
-	botutil.RespondEphemeral(e, strings.Join(sections, "\n\n"))
+	botutil.RespondEphemeral(ctx, e, strings.Join(sections, "\n\n"))
 }
 
-func (b *Bot) handleTopPostersFilterClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
+func (b *Bot) handleTopPostersFilterClear(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
 	b.Log.Info("Top posters filter clear", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
@@ -512,17 +515,17 @@ func (b *Bot) handleTopPostersFilterClear(e *events.ApplicationCommandInteractio
 	st.mu.Unlock()
 
 	if count == 0 {
-		botutil.RespondEphemeral(e, "No filters to clear.")
+		botutil.RespondEphemeral(ctx, e, "No filters to clear.")
 		return
 	}
 
-	if err := b.topPostersConfig.persist(guildID); err != nil {
+	if err := b.topPostersConfig.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist topposters filter clear", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save changes.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save changes.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Cleared %d filter entries.", count))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("Cleared %d filter entries.", count))
 }
 
 // removeID removes the first occurrence of id from the slice. Returns true if found.

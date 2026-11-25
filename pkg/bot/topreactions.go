@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -53,11 +54,11 @@ func (s *starboardSettings) isBlacklisted(ids ...snowflake.ID) bool {
 // lookupChannel returns a guild channel or thread from disgo's channel cache,
 // which the gateway keeps current, falling back to REST for one that isn't
 // cached. Nothing is remembered, so a failed lookup is retried next time.
-func (b *Bot) lookupChannel(channelID snowflake.ID) (discord.GuildChannel, error) {
+func (b *Bot) lookupChannel(ctx context.Context, channelID snowflake.ID) (discord.GuildChannel, error) {
 	if ch, ok := b.Client.Caches.Channel(channelID); ok {
 		return ch, nil
 	}
-	ch, err := b.Client.Rest.GetChannel(channelID)
+	ch, err := b.Client.Rest.GetChannel(channelID, rest.WithCtx(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -72,9 +73,9 @@ func (b *Bot) lookupChannel(channelID snowflake.ID) (discord.GuildChannel, error
 // IDs: for a thread, its channel and that channel's category. A lookup that
 // fails is left out of the result. The *sync.Map is unused and kept only so
 // existing callers compile; parents come from the channel cache.
-func (b *Bot) resolveChannelParents(channelID snowflake.ID, _ *sync.Map) []snowflake.ID {
+func (b *Bot) resolveChannelParents(ctx context.Context, channelID snowflake.ID, _ *sync.Map) []snowflake.ID {
 	ids := []snowflake.ID{channelID}
-	ch, err := b.lookupChannel(channelID)
+	ch, err := b.lookupChannel(ctx, channelID)
 	if err != nil {
 		b.Log.Warn("Failed to look up channel parents", "channel_id", channelID, "error", err)
 		return ids
@@ -87,7 +88,7 @@ func (b *Bot) resolveChannelParents(channelID snowflake.ID, _ *sync.Map) []snowf
 	if _, isThread := ch.(discord.GuildThread); !isThread {
 		return ids
 	}
-	parent, err := b.lookupChannel(*parentID)
+	parent, err := b.lookupChannel(ctx, *parentID)
 	if err != nil {
 		b.Log.Warn("Failed to look up thread parent", "channel_id", *parentID, "error", err)
 		return ids
@@ -144,17 +145,17 @@ func starboardEligible(source, sourceParent, output discord.GuildChannel) (bool,
 
 // checkStarboardChannel applies starboardEligible to a reaction in channelID.
 // It fails closed, logging why, when a channel can't be found.
-func (b *Bot) checkStarboardChannel(guildID, channelID, outputID snowflake.ID) bool {
-	source, _ := b.lookupChannel(channelID)
+func (b *Bot) checkStarboardChannel(ctx context.Context, guildID, channelID, outputID snowflake.ID) bool {
+	source, _ := b.lookupChannel(ctx, channelID)
 	var parent discord.GuildChannel
 	if thread, ok := source.(discord.GuildThread); ok {
-		parent, _ = b.lookupChannel(*thread.ParentID())
+		parent, _ = b.lookupChannel(ctx, *thread.ParentID())
 	}
-	output, _ := b.lookupChannel(outputID)
+	output, _ := b.lookupChannel(ctx, outputID)
 	if thread, ok := output.(discord.GuildThread); ok {
 		// Only configs older than the channel type check have a thread as
 		// output. A thread is age-restricted if its channel is.
-		output, _ = b.lookupChannel(*thread.ParentID())
+		output, _ = b.lookupChannel(ctx, *thread.ParentID())
 	}
 	ok, err := starboardEligible(source, parent, output)
 	if err != nil {
@@ -349,13 +350,13 @@ func reactionCount(reactions []discord.MessageReaction, emoji string) int {
 
 // --- Load / Save / Persist ---
 
-func (b *Bot) saveStarboard() error {
+func (b *Bot) saveStarboard(ctx context.Context) error {
 	b.starboard.each(func(_ snowflake.ID, st *starboardState) {
 		st.mu.Lock()
 		pruneStarboardEntries(st, time.Now())
 		st.mu.Unlock()
 	})
-	return b.starboard.save()
+	return b.starboard.save(ctx)
 }
 
 // pruneStarboardEntries removes unposted entries older than
@@ -374,6 +375,7 @@ func pruneStarboardEntries(st *starboardState, now time.Time) {
 // --- Reaction Event Handlers ---
 
 func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
+	ctx := context.Background()
 	if e.Member.User.Bot {
 		return
 	}
@@ -395,10 +397,10 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 	if time.Since(e.MessageID.Time()) > starboardMaxAge {
 		return
 	}
-	if settings.isBlacklisted(b.resolveChannelParents(e.ChannelID, nil)...) {
+	if settings.isBlacklisted(b.resolveChannelParents(ctx, e.ChannelID, nil)...) {
 		return
 	}
-	if !b.checkStarboardChannel(e.GuildID, e.ChannelID, settings.OutputChannelID) {
+	if !b.checkStarboardChannel(ctx, e.GuildID, e.ChannelID, settings.OutputChannelID) {
 		return
 	}
 
@@ -410,24 +412,27 @@ func (b *Bot) onReactionAdd(e *events.GuildMessageReactionAdd) {
 	action := st.applyReaction(e.MessageID, reactionAdded, seed)
 	st.mu.Unlock()
 
-	b.runStarboardAction(e.GuildID, e.MessageID, st, action)
+	b.runStarboardAction(ctx, e.GuildID, e.MessageID, st, action)
 }
 
 func (b *Bot) onReactionRemove(e *events.GuildMessageReactionRemove) {
-	b.recordReactionRemoval(e.GuildID, e.MessageID, e.Emoji.Reaction(), reactionRemoved)
+	ctx := context.Background()
+	b.recordReactionRemoval(ctx, e.GuildID, e.MessageID, e.Emoji.Reaction(), reactionRemoved)
 }
 
 func (b *Bot) onReactionRemoveAll(e *events.GuildMessageReactionRemoveAll) {
-	b.recordReactionRemoval(e.GuildID, e.MessageID, "", reactionsCleared)
+	ctx := context.Background()
+	b.recordReactionRemoval(ctx, e.GuildID, e.MessageID, "", reactionsCleared)
 }
 
 func (b *Bot) onReactionRemoveEmoji(e *events.GuildMessageReactionRemoveEmoji) {
-	b.recordReactionRemoval(e.GuildID, e.MessageID, e.Emoji.Reaction(), reactionsCleared)
+	ctx := context.Background()
+	b.recordReactionRemoval(ctx, e.GuildID, e.MessageID, e.Emoji.Reaction(), reactionsCleared)
 }
 
 // recordReactionRemoval lowers msgID's count and edits its post if it has
 // one. emoji is the removed reaction, or "" when every reaction was removed.
-func (b *Bot) recordReactionRemoval(guildID, msgID snowflake.ID, emoji string, change reactionChange) {
+func (b *Bot) recordReactionRemoval(ctx context.Context, guildID, msgID snowflake.ID, emoji string, change reactionChange) {
 	st := b.starboard.get(guildID)
 	if st == nil || time.Since(msgID.Time()) > starboardMaxAge {
 		return
@@ -441,15 +446,15 @@ func (b *Bot) recordReactionRemoval(guildID, msgID snowflake.ID, emoji string, c
 	action := st.applyReaction(msgID, change, starboardEntry{})
 	st.mu.Unlock()
 
-	b.runStarboardAction(guildID, msgID, st, action)
+	b.runStarboardAction(ctx, guildID, msgID, st, action)
 }
 
-func (b *Bot) runStarboardAction(guildID, msgID snowflake.ID, st *starboardState, action starboardAction) {
+func (b *Bot) runStarboardAction(ctx context.Context, guildID, msgID snowflake.ID, st *starboardState, action starboardAction) {
 	switch action {
 	case starboardPost:
-		b.postStarboardEntry(guildID, msgID, st)
+		b.postStarboardEntry(ctx, guildID, msgID, st)
 	case starboardUpdate:
-		b.runStarboardUpdates(guildID, msgID, st)
+		b.runStarboardUpdates(ctx, guildID, msgID, st)
 	}
 }
 
@@ -457,8 +462,9 @@ func (b *Bot) runStarboardAction(guildID, msgID snowflake.ID, st *starboardState
 // message, so its reposted text does not outlive it. A repeated delete finds
 // no entry, or retries a post delete that failed.
 func (b *Bot) onStarboardSourceDelete(e *events.GuildMessageDelete) {
+	ctx := context.Background()
 	if st := b.starboard.get(e.GuildID); st != nil {
-		b.markSourcesDeleted(e.GuildID, st, []snowflake.ID{e.MessageID})
+		b.markSourcesDeleted(ctx, e.GuildID, st, []snowflake.ID{e.MessageID})
 	}
 }
 
@@ -466,11 +472,13 @@ func (b *Bot) onStarboardSourceDelete(e *events.GuildMessageDelete) {
 // messages in a deleted channel or thread, for which Discord sends no message
 // deletes.
 func (b *Bot) onStarboardChannelDelete(e *events.GuildChannelDelete) {
-	b.deleteChannelSources(e.GuildID, e.ChannelID)
+	ctx := context.Background()
+	b.deleteChannelSources(ctx, e.GuildID, e.ChannelID)
 }
 
 func (b *Bot) onStarboardThreadDelete(e *events.ThreadDelete) {
-	b.deleteChannelSources(e.GuildID, e.ThreadID)
+	ctx := context.Background()
+	b.deleteChannelSources(ctx, e.GuildID, e.ThreadID)
 }
 
 // deleteChannelSources deletes the posts and entries of messages in
@@ -478,7 +486,7 @@ func (b *Bot) onStarboardThreadDelete(e *events.ThreadDelete) {
 // disgo 0.20 that is none on a channel delete: disgo evicts the channel's
 // threads before it dispatches the event, so posts of messages in them stay.
 // Accepted: channels are almost never deleted.
-func (b *Bot) deleteChannelSources(guildID, channelID snowflake.ID) {
+func (b *Bot) deleteChannelSources(ctx context.Context, guildID, channelID snowflake.ID) {
 	st := b.starboard.get(guildID)
 	if st == nil {
 		return
@@ -497,13 +505,13 @@ func (b *Bot) deleteChannelSources(guildID, channelID snowflake.ID) {
 			deleted = append(deleted, msgIDs...)
 		}
 	}
-	b.markSourcesDeleted(guildID, st, deleted)
+	b.markSourcesDeleted(ctx, guildID, st, deleted)
 }
 
 // markSourcesDeleted flags the entries of deleted messages and deletes their
 // posts and entries. One with a post or edit in flight is left to that work,
 // which finishes it when done; reactions no longer start any.
-func (b *Bot) markSourcesDeleted(guildID snowflake.ID, st *starboardState, msgIDs []snowflake.ID) {
+func (b *Bot) markSourcesDeleted(ctx context.Context, guildID snowflake.ID, st *starboardState, msgIDs []snowflake.ID) {
 	var idle []snowflake.ID
 	st.mu.Lock()
 	for _, msgID := range msgIDs {
@@ -520,10 +528,10 @@ func (b *Bot) markSourcesDeleted(guildID snowflake.ID, st *starboardState, msgID
 	st.mu.Unlock()
 
 	for _, msgID := range idle {
-		b.removeDeletedEntry(guildID, msgID, st)
+		b.removeDeletedEntry(ctx, guildID, msgID, st)
 	}
 	if len(idle) > 0 {
-		if err := b.starboard.persist(guildID); err != nil {
+		if err := b.starboard.persist(ctx, guildID); err != nil {
 			b.Log.Error("Failed to persist starboard after delete", "guild_id", guildID, "error", err)
 		}
 	}
@@ -533,7 +541,7 @@ func (b *Bot) markSourcesDeleted(guildID snowflake.ID, st *starboardState, msgID
 // the entry, and reports whether it did. If the post can't be deleted, or its
 // channel isn't known, the entry stays flagged for retryStarboardDeletes. The
 // caller persists. Must be called with nothing in flight for msgID.
-func (b *Bot) removeDeletedEntry(guildID, msgID snowflake.ID, st *starboardState) bool {
+func (b *Bot) removeDeletedEntry(ctx context.Context, guildID, msgID snowflake.ID, st *starboardState) bool {
 	st.mu.Lock()
 	entry, ok := st.Entries[msgID]
 	outputID := st.Settings.OutputChannelID
@@ -543,7 +551,7 @@ func (b *Bot) removeDeletedEntry(guildID, msgID snowflake.ID, st *starboardState
 	}
 	if entry.StarboardMsgID != 0 {
 		channelID := entry.postChannel(outputID)
-		if channelID == 0 || !b.deleteStarboardPost(guildID, msgID, channelID, entry.StarboardMsgID) {
+		if channelID == 0 || !b.deleteStarboardPost(ctx, guildID, msgID, channelID, entry.StarboardMsgID) {
 			return false
 		}
 	}
@@ -555,7 +563,7 @@ func (b *Bot) removeDeletedEntry(guildID, msgID snowflake.ID, st *starboardState
 
 // retryStarboardDeletes retries deleting the posts of deleted messages whose
 // first delete failed. It fails if a guild's state couldn't be saved after.
-func (b *Bot) retryStarboardDeletes() error {
+func (b *Bot) retryStarboardDeletes(ctx context.Context) error {
 	var errs []error
 	b.starboard.each(func(guildID snowflake.ID, st *starboardState) {
 		var pending []snowflake.ID
@@ -568,12 +576,12 @@ func (b *Bot) retryStarboardDeletes() error {
 		st.mu.Unlock()
 		removed := false
 		for _, msgID := range pending {
-			removed = b.removeDeletedEntry(guildID, msgID, st) || removed
+			removed = b.removeDeletedEntry(ctx, guildID, msgID, st) || removed
 		}
 		if !removed {
 			return
 		}
-		if err := b.starboard.persist(guildID); err != nil {
+		if err := b.starboard.persist(ctx, guildID); err != nil {
 			b.Log.Error("Failed to persist starboard after delete", "guild_id", guildID, "error", err)
 			errs = append(errs, err)
 		}
@@ -583,8 +591,8 @@ func (b *Bot) retryStarboardDeletes() error {
 
 // deleteStarboardPost deletes a post and reports whether it is gone, counting
 // one that was already deleted.
-func (b *Bot) deleteStarboardPost(guildID, sourceID, channelID, postID snowflake.ID) bool {
-	err := b.Client.Rest.DeleteMessage(channelID, postID)
+func (b *Bot) deleteStarboardPost(ctx context.Context, guildID, sourceID, channelID, postID snowflake.ID) bool {
+	err := b.Client.Rest.DeleteMessage(channelID, postID, rest.WithCtx(ctx))
 	if err == nil || rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownMessage, rest.JSONErrorCodeUnknownChannel) {
 		return true
 	}
@@ -621,8 +629,8 @@ func starboardFooter(emoji string, count int, channelName string) discord.EmbedF
 
 // resolveChannelName returns the channel's name, or "" if it can't be looked
 // up. Callers must not store "".
-func (b *Bot) resolveChannelName(channelID snowflake.ID) string {
-	ch, err := b.lookupChannel(channelID)
+func (b *Bot) resolveChannelName(ctx context.Context, channelID snowflake.ID) string {
+	ch, err := b.lookupChannel(ctx, channelID)
 	if err != nil {
 		return ""
 	}
@@ -680,14 +688,14 @@ const (
 // (see applyReaction), so no second post can start. A reaction that arrives
 // meanwhile marks it dirty: once the post exists it gets one edit, and if the
 // count read was too low it is read again.
-func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState) {
-	result := b.createStarboardPost(guildID, msgID, st)
+func (b *Bot) postStarboardEntry(ctx context.Context, guildID, msgID snowflake.ID, st *starboardState) {
+	result := b.createStarboardPost(ctx, guildID, msgID, st)
 
 	st.mu.Lock()
 	w := st.work[msgID]
 	for result == postBelowThreshold && w.dirty {
 		st.mu.Unlock()
-		result = b.createStarboardPost(guildID, msgID, st)
+		result = b.createStarboardPost(ctx, guildID, msgID, st)
 		st.mu.Lock()
 	}
 	sourceDeleted := st.Entries[msgID].SourceDeleted
@@ -699,31 +707,31 @@ func (b *Bot) postStarboardEntry(guildID, msgID snowflake.ID, st *starboardState
 
 	switch {
 	case followUp:
-		b.runStarboardUpdates(guildID, msgID, st)
+		b.runStarboardUpdates(ctx, guildID, msgID, st)
 	case sourceDeleted:
-		b.finishSourceDelete(guildID, msgID, st)
+		b.finishSourceDelete(ctx, guildID, msgID, st)
 	}
 }
 
 // finishSourceDelete removes msgID's flagged entry and its post, if any, once
 // the work in flight when its message was deleted has ended.
-func (b *Bot) finishSourceDelete(guildID, msgID snowflake.ID, st *starboardState) {
-	b.removeDeletedEntry(guildID, msgID, st)
-	if err := b.starboard.persist(guildID); err != nil {
+func (b *Bot) finishSourceDelete(ctx context.Context, guildID, msgID snowflake.ID, st *starboardState) {
+	b.removeDeletedEntry(ctx, guildID, msgID, st)
+	if err := b.starboard.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist starboard after delete", "guild_id", guildID, "error", err)
 	}
 }
 
 // createStarboardPost posts msgID if its actual reaction count meets the
 // threshold.
-func (b *Bot) createStarboardPost(guildID, msgID snowflake.ID, st *starboardState) postResult {
+func (b *Bot) createStarboardPost(ctx context.Context, guildID, msgID snowflake.ID, st *starboardState) postResult {
 	st.mu.Lock()
 	st.work[msgID].dirty = false
 	entry := st.Entries[msgID]
 	settings := st.Settings
 	st.mu.Unlock()
 
-	msg, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID)
+	msg, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to fetch message for starboard", "guild_id", guildID, "message_id", msgID, "error", err)
 		return postFailed
@@ -747,11 +755,11 @@ func (b *Bot) createStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 		return postBelowThreshold
 	}
 
-	channelName := b.resolveChannelName(entry.ChannelID)
+	channelName := b.resolveChannelName(ctx, entry.ChannelID)
 	embed := starboardEmbed(guildID, *msg, settings.Emoji, count, channelName)
 	create := discord.MessageCreate{Embeds: []discord.Embed{embed}}.
 		WithNonce(starboardNonce(msgID)).WithEnforceNonce(true)
-	sent, err := b.Client.Rest.CreateMessage(settings.OutputChannelID, create)
+	sent, err := b.Client.Rest.CreateMessage(settings.OutputChannelID, create, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to post starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
 		return postFailed
@@ -774,10 +782,10 @@ func (b *Bot) createStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 	if !ok {
 		// Nothing removes an entry with a post in flight, but a post nothing
 		// tracks could never be deleted.
-		b.deleteStarboardPost(guildID, msgID, settings.OutputChannelID, sent.ID)
+		b.deleteStarboardPost(ctx, guildID, msgID, settings.OutputChannelID, sent.ID)
 		return postFailed
 	}
-	if err := b.starboard.persist(guildID); err != nil {
+	if err := b.starboard.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist starboard after post", "guild_id", guildID, "error", err)
 	}
 	return postDone
@@ -787,7 +795,7 @@ func (b *Bot) createStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 // during an edit. The caller holds the message's updating flag, so edits for
 // a message run one at a time and can't land out of order, and the wait
 // before each folds a burst of reactions into one edit.
-func (b *Bot) runStarboardUpdates(guildID, msgID snowflake.ID, st *starboardState) {
+func (b *Bot) runStarboardUpdates(ctx context.Context, guildID, msgID snowflake.ID, st *starboardState) {
 	for {
 		time.Sleep(starboardUpdateDelay)
 
@@ -795,7 +803,7 @@ func (b *Bot) runStarboardUpdates(guildID, msgID snowflake.ID, st *starboardStat
 		st.work[msgID].dirty = false
 		st.mu.Unlock()
 
-		b.updateStarboardPost(guildID, msgID, st)
+		b.updateStarboardPost(ctx, guildID, msgID, st)
 
 		st.mu.Lock()
 		w := st.work[msgID]
@@ -805,7 +813,7 @@ func (b *Bot) runStarboardUpdates(guildID, msgID snowflake.ID, st *starboardStat
 			sourceDeleted := st.Entries[msgID].SourceDeleted
 			st.mu.Unlock()
 			if sourceDeleted {
-				b.finishSourceDelete(guildID, msgID, st)
+				b.finishSourceDelete(ctx, guildID, msgID, st)
 			}
 			return
 		}
@@ -815,7 +823,7 @@ func (b *Bot) runStarboardUpdates(guildID, msgID snowflake.ID, st *starboardStat
 
 // updateStarboardPost sets the post's footer to the source message's reaction
 // count, read just before the edit.
-func (b *Bot) updateStarboardPost(guildID, msgID snowflake.ID, st *starboardState) {
+func (b *Bot) updateStarboardPost(ctx context.Context, guildID, msgID snowflake.ID, st *starboardState) {
 	st.mu.Lock()
 	entry, ok := st.Entries[msgID]
 	settings := st.Settings
@@ -826,7 +834,7 @@ func (b *Bot) updateStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 	}
 	postChannel := entry.postChannel(settings.OutputChannelID)
 
-	existing, err := b.Client.Rest.GetMessage(postChannel, entry.StarboardMsgID)
+	existing, err := b.Client.Rest.GetMessage(postChannel, entry.StarboardMsgID, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to fetch starboard message for update", "guild_id", guildID, "message_id", msgID, "error", err)
 		return
@@ -838,10 +846,10 @@ func (b *Bot) updateStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 	// Fill in a channel name an older post stored as "unknown" or not at all.
 	channelName := entry.ChannelName
 	if channelName == "" || channelName == "unknown" {
-		channelName = b.resolveChannelName(entry.ChannelID)
+		channelName = b.resolveChannelName(ctx, entry.ChannelID)
 	}
 
-	source, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID)
+	source, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to fetch message for starboard update", "guild_id", guildID, "message_id", msgID, "error", err)
 		return
@@ -871,7 +879,7 @@ func (b *Bot) updateStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 	_, err = b.Client.Rest.UpdateMessage(postChannel, entry.StarboardMsgID, discord.MessageUpdate{
 		Content: &emptyContent,
 		Embeds:  &embeds,
-	})
+	}, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to update starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
 	}
@@ -879,7 +887,7 @@ func (b *Bot) updateStarboardPost(guildID, msgID snowflake.ID, st *starboardStat
 
 // --- Command Handlers ---
 
-func (b *Bot) handleStarboardConfig(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleStarboardConfig(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -892,7 +900,7 @@ func (b *Bot) handleStarboardConfig(e *events.ApplicationCommandInteractionCreat
 
 	st := b.starboard.get(*guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "Starboard is not configured for this server.")
+		botutil.RespondEphemeral(ctx, e, "Starboard is not configured for this server.")
 		return
 	}
 
@@ -901,33 +909,33 @@ func (b *Bot) handleStarboardConfig(e *events.ApplicationCommandInteractionCreat
 		return
 	}
 
-	persist := func() error { return b.starboard.persist(*guildID) }
+	persist := func() error { return b.starboard.persist(ctx, *guildID) }
 	switch *subCmd {
 	case "config":
-		b.handleSBConfigSet(e, *guildID, st)
+		b.handleSBConfigSet(ctx, e, *guildID, st)
 	case "show-config":
-		b.handleSBConfigShow(e, st)
+		b.handleSBConfigShow(ctx, e, st)
 	case "disable":
-		b.handleSBConfigDisable(e, *guildID, st)
+		b.handleSBConfigDisable(ctx, e, *guildID, st)
 	case "filter-add":
-		b.handleBlacklistAdd(e, *guildID, st, persist, "Starboard")
+		b.handleBlacklistAdd(ctx, e, *guildID, st, persist, "Starboard")
 	case "filter-remove":
-		b.handleBlacklistRemove(e, *guildID, st, persist, "Starboard")
+		b.handleBlacklistRemove(ctx, e, *guildID, st, persist, "Starboard")
 	case "filter-list":
-		b.handleBlacklistList(e, st, "Starboard")
+		b.handleBlacklistList(ctx, e, st, "Starboard")
 	case "filter-clear":
-		b.handleBlacklistClear(e, *guildID, st, persist, "Starboard")
+		b.handleBlacklistClear(ctx, e, *guildID, st, persist, "Starboard")
 	}
 }
 
-func (b *Bot) handleSBConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
+func (b *Bot) handleSBConfigSet(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
 	b.Log.Info("Starboard config set", "user_id", e.User().ID, "guild_id", guildID)
 
 	ch, hasChannel := data.OptChannel("channel")
 	if hasChannel && !starboardOutputType(ch.Type) {
-		botutil.RespondEphemeral(e, "The starboard channel must be a text or announcement channel.")
+		botutil.RespondEphemeral(ctx, e, "The starboard channel must be a text or announcement channel.")
 		return
 	}
 
@@ -952,16 +960,16 @@ func (b *Bot) handleSBConfigSet(e *events.ApplicationCommandInteractionCreate, g
 	}
 	st.mu.Unlock()
 
-	if err := b.starboard.persist(guildID); err != nil {
+	if err := b.starboard.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist starboard config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, "Starboard configuration updated.")
+	botutil.RespondEphemeral(ctx, e, "Starboard configuration updated.")
 }
 
-func (b *Bot) handleSBConfigShow(e *events.ApplicationCommandInteractionCreate, st *starboardState) {
+func (b *Bot) handleSBConfigShow(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *starboardState) {
 	b.Log.Info("Starboard config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
@@ -990,21 +998,21 @@ func (b *Bot) handleSBConfigShow(e *events.ApplicationCommandInteractionCreate, 
 		fmt.Sprintf("**Tracked Entries:** %d", entryCount),
 	}
 
-	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
+	botutil.RespondEphemeral(ctx, e, strings.Join(lines, "\n"))
 }
 
-func (b *Bot) handleSBConfigDisable(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
+func (b *Bot) handleSBConfigDisable(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
 	b.Log.Info("Starboard config disable", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
 	st.Settings.OutputChannelID = 0
 	st.mu.Unlock()
 
-	if err := b.starboard.persist(guildID); err != nil {
+	if err := b.starboard.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist starboard config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, "Starboard disabled. Settings preserved.")
+	botutil.RespondEphemeral(ctx, e, "Starboard disabled. Settings preserved.")
 }

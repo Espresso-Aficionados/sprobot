@@ -63,7 +63,7 @@ func TestEditShowsNoFormWhenProfileUnreadable(t *testing.T) {
 	h.setHook(failGets(profileObject(tmpl, editUserID)))
 
 	responses := make(chan editResponse, 2)
-	b.handleEdit(editCommand(t, responses), tmpl)
+	b.handleEdit(t.Context(), editCommand(t, responses), tmpl)
 
 	r := <-responses
 	msg, ok := r.data.(discord.MessageCreate)
@@ -75,7 +75,7 @@ func TestEditShowsNoFormWhenProfileUnreadable(t *testing.T) {
 func TestEditShowsFormForNewProfile(t *testing.T) {
 	b, _ := newEditBot(t)
 	responses := make(chan editResponse, 2)
-	b.handleEdit(editCommand(t, responses), sprobot.ProfileTemplate)
+	b.handleEdit(t.Context(), editCommand(t, responses), sprobot.ProfileTemplate)
 
 	if r := <-responses; r.kind != discord.InteractionResponseTypeModal {
 		t.Errorf("response = %v %+v, want the edit form", r.kind, r.data)
@@ -123,7 +123,7 @@ func TestEditSubmitKeepsProfileWhenUnreadable(t *testing.T) {
 		t.Fatalf("decoding interaction: %v", err)
 	}
 	responses := make(chan editResponse, 2)
-	b.handleEditModalSubmit(&events.ModalSubmitInteractionCreate{ModalSubmitInteraction: i, Respond: respondTo(responses)}, tmpl)
+	b.handleEditModalSubmit(t.Context(), &events.ModalSubmitInteractionCreate{ModalSubmitInteraction: i, Respond: respondTo(responses)}, tmpl)
 
 	if got, _ := h.object(path); got != saved {
 		t.Errorf("stored profile = %q, want it untouched", got)

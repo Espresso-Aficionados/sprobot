@@ -621,7 +621,7 @@ func TestStarboardSourceDeleteRetriesFailedPostDelete(t *testing.T) {
 	api.mu.Lock()
 	api.deleteStatus = 0
 	api.mu.Unlock()
-	b.retryStarboardDeletes()
+	b.retryStarboardDeletes(t.Context())
 	if deletes := api.calls().deletes; !slices.Equal(deletes, []string{fmt.Sprintf("%d/8000", sbOutput)}) {
 		t.Errorf("deletes = %v, want the post deleted on retry", deletes)
 	}
@@ -681,7 +681,7 @@ func TestStarboardOldPostDeletedWithSource(t *testing.T) {
 	api.addPost(8000, "⭐ 5 | #coffee")
 	st.Entries[old] = starboardEntry{ChannelID: sbSource, Count: 5, StarboardMsgID: 8000, PostChannelID: sbOutput}
 
-	b.saveStarboard()
+	b.saveStarboard(t.Context())
 	b.onStarboardSourceDelete(messageDelete(old))
 	if deletes := api.calls().deletes; !slices.Equal(deletes, []string{fmt.Sprintf("%d/8000", sbOutput)}) {
 		t.Errorf("deletes = %v, want the old post deleted", deletes)
@@ -769,7 +769,7 @@ func TestStarboardChannelNameNotStoredWhenUnknown(t *testing.T) {
 	st.Entries[msgID] = starboardEntry{ChannelID: sbSource, Count: 2}
 	st.startWork(msgID).posting = true
 
-	b.postStarboardEntry(sbGuild, msgID, st)
+	b.postStarboardEntry(t.Context(), sbGuild, msgID, st)
 	if got := api.calls().creates[0].Embeds[0].Footer.Text; got != "⭐ 2 | #unknown" {
 		t.Errorf("footer = %q, want #unknown shown", got)
 	}
@@ -782,7 +782,7 @@ func TestStarboardChannelNameNotStoredWhenUnknown(t *testing.T) {
 	entry.ChannelName = "unknown"
 	st.Entries[msgID] = entry
 	b.Client.Caches.AddChannel(testChannel(t, textChannelJSON(sbSource, sbCategory, "coffee")))
-	b.updateStarboardPost(sbGuild, msgID, st)
+	b.updateStarboardPost(t.Context(), sbGuild, msgID, st)
 	if entry, _ := entryOf(st, msgID); entry.ChannelName != "coffee" {
 		t.Errorf("channel name = %q, want coffee", entry.ChannelName)
 	}
@@ -800,7 +800,7 @@ func TestResolveChannelParents(t *testing.T) {
 
 	check := func(channelID snowflake.ID, want ...snowflake.ID) {
 		t.Helper()
-		got := b.resolveChannelParents(channelID, nil)
+		got := b.resolveChannelParents(t.Context(), channelID, nil)
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Errorf("resolveChannelParents(%d) = %v, want %v", channelID, got, want)
 		}
@@ -1045,7 +1045,7 @@ func TestStarboardIgnoresMessagesPastMaxAge(t *testing.T) {
 	}
 
 	st.Entries[old] = starboardEntry{ChannelID: sbSource, Count: 10, StarboardMsgID: 8000, PostChannelID: sbOutput}
-	b.recordReactionRemoval(sbGuild, old, "⭐", reactionRemoved)
+	b.recordReactionRemoval(t.Context(), sbGuild, old, "⭐", reactionRemoved)
 	if e, _ := entryOf(st, old); e.Count != 10 {
 		t.Errorf("count changed to %d on a message past the max age", e.Count)
 	}
@@ -1071,7 +1071,7 @@ func TestStarboardConfigRejectsNonTextChannel(t *testing.T) {
 			"resolved":{"channels":{"900":{"id":"900","name":"c","type":%d,"permissions":"0"}}}}`, tt.typ)
 		e, responses := sprobotCommandEvent(t, data)
 
-		b.handleSBConfigSet(e, sbGuild, st)
+		b.handleSBConfigSet(t.Context(), e, sbGuild, st)
 
 		resp := <-responses
 		gotOK := st.Settings.OutputChannelID == 900

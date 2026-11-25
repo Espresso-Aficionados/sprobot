@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -38,7 +39,7 @@ func TestBlacklistRemoveLeavesReadersCopyIntact(t *testing.T) {
 	opts := `[{"name":"market","type":2,"options":[{"name":"filter-remove","type":1,"options":[{"name":"channel","type":7,"value":"100"}]}]}]`
 	resolved := discord.ResolvedData{Channels: map[snowflake.ID]discord.ResolvedChannel{100: {ID: 100, Name: "sales"}}}
 	e, responses := roleCommand(t, roleTestOwner, nil, opts, resolved)
-	b.handleBlacklistRemove(e, roleTestGuild, st, func() error { return nil }, "Market")
+	b.handleBlacklistRemove(t.Context(), e, roleTestGuild, st, func() error { return nil }, "Market")
 	response(t, responses)
 
 	if !slices.Equal(st.Settings.SkipChannels, []snowflake.ID{200, 300}) {
@@ -53,12 +54,12 @@ func TestBlacklistRemoveLeavesReadersCopyIntact(t *testing.T) {
 func TestStarboardBlacklistAddRemove(t *testing.T) {
 	b, _, _ := newRoleTestBot(t)
 	st := &starboardState{}
-	filter := func(handle func(*events.ApplicationCommandInteractionCreate, snowflake.ID, blacklistable, func() error, string), sub string, channelID snowflake.ID) string {
+	filter := func(handle func(context.Context, *events.ApplicationCommandInteractionCreate, snowflake.ID, blacklistable, func() error, string), sub string, channelID snowflake.ID) string {
 		t.Helper()
 		opts := fmt.Sprintf(`[{"name":"starboard","type":2,"options":[{"name":%q,"type":1,"options":[{"name":"channel","type":7,"value":"%d"}]}]}]`, sub, channelID)
 		resolved := discord.ResolvedData{Channels: map[snowflake.ID]discord.ResolvedChannel{channelID: {ID: channelID, Name: "art"}}}
 		e, responses := roleCommand(t, roleTestOwner, nil, opts, resolved)
-		handle(e, roleTestGuild, st, func() error { return nil }, "Starboard")
+		handle(t.Context(), e, roleTestGuild, st, func() error { return nil }, "Starboard")
 		return response(t, responses).Content
 	}
 

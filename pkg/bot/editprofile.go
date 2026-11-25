@@ -8,6 +8,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
@@ -16,7 +17,7 @@ import (
 
 const profileLoadFailed = "Couldn't load your profile, please try again."
 
-func (b *Bot) handleEdit(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
+func (b *Bot) handleEdit(ctx context.Context, e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
@@ -26,17 +27,17 @@ func (b *Bot) handleEdit(e *events.ApplicationCommandInteractionCreate, tmpl spr
 		"guild_id", guildStr,
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	// A form that failed to load would come up empty, and submitting it would
 	// overwrite the saved profile.
-	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
+	profile, err := b.S3.FetchProfile(fetchCtx, tmpl, guildStr, userStr)
 	if errors.Is(err, s3client.ErrNotFound) {
 		profile = make(map[string]string)
 	} else if err != nil {
 		b.Log.Error("Failed to fetch profile for edit", "user_id", userStr, "guild_id", guildStr, "error", err)
-		botutil.RespondEphemeral(e, profileLoadFailed)
+		botutil.RespondEphemeral(ctx, e, profileLoadFailed)
 		return
 	}
 
@@ -73,19 +74,19 @@ func (b *Bot) handleEdit(e *events.ApplicationCommandInteractionCreate, tmpl spr
 		CustomID:   fmt.Sprintf("edit_%s", tmpl.ShortName),
 		Title:      "Edit Profile",
 		Components: components,
-	})
+	}, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to respond with modal", "error", err)
 	}
 }
 
-func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl sprobot.Template) {
+func (b *Bot) handleEditModalSubmit(ctx context.Context, e *events.ModalSubmitInteractionCreate, tmpl sprobot.Template) {
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
 	// Defer: re-hosting the image, and waiting on a running name update, can
 	// outlast the 3-second response window.
-	if err := e.DeferCreateMessage(true); err != nil {
+	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer profile save response", "error", err)
 		return
 	}
@@ -96,15 +97,15 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	lock.Lock()
 	defer lock.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	saveCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	// Preserve existing image URL from the saved profile. If the profile
 	// can't be read, saving would drop the image, so don't.
-	existing, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
+	existing, err := b.S3.FetchProfile(saveCtx, tmpl, guildStr, userStr)
 	if err != nil && !errors.Is(err, s3client.ErrNotFound) {
 		b.Log.Error("Failed to fetch profile before saving", "user_id", userStr, "guild_id", guildStr, "error", err)
-		b.ephemeralFollowup(e.Token(), profileLoadFailed)
+		b.ephemeralFollowup(ctx, e.Token(), profileLoadFailed)
 		return
 	}
 	if img, ok := existing[tmpl.Image.Name]; ok && img != "" {
@@ -127,10 +128,10 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 		profile[tmpl.Image.Name] = attachments[0].ProxyURL
 	}
 
-	_, userErr, err := b.S3.SaveProfile(ctx, tmpl, guildStr, userStr, profile)
+	_, userErr, err := b.S3.SaveProfile(saveCtx, tmpl, guildStr, userStr, profile)
 	if err != nil {
 		b.Log.Error("Failed to save profile", "error", err)
-		b.ephemeralFollowup(e.Token(), "Oops! Something went wrong.")
+		b.ephemeralFollowup(ctx, e.Token(), "Oops! Something went wrong.")
 		return
 	}
 
@@ -139,7 +140,7 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	}
 
 	if userErr != "" {
-		b.ephemeralFollowup(e.Token(), userErr)
+		b.ephemeralFollowup(ctx, e.Token(), userErr)
 		return
 	}
 
@@ -147,7 +148,7 @@ func (b *Bot) handleEditModalSubmit(e *events.ModalSubmitInteractionCreate, tmpl
 	_, err = b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 		Flags:  discord.MessageFlagEphemeral,
-	})
+	}, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to respond with embed", "error", err)
 	}

@@ -100,7 +100,7 @@ func profileOwnersFromKeys(guildID string, keys []string, templates []string) ma
 // loadProfileOwners lists each guild's stored profiles, so that name updates
 // read only profiles that exist instead of probing every message author. A
 // guild whose listing fails keeps probing.
-func (b *Bot) loadProfileOwners(guildIDs []snowflake.ID) {
+func (b *Bot) loadProfileOwners(ctx context.Context, guildIDs []snowflake.ID) {
 	for _, guildID := range guildIDs {
 		var templates []string
 		for _, tmpl := range b.templates[guildID] {
@@ -111,7 +111,7 @@ func (b *Bot) loadProfileOwners(guildIDs []snowflake.ID) {
 		}
 		guildStr := strconv.FormatInt(int64(guildID), 10)
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
 		objects, err := b.S3.ListObjects(ctx, "profiles/"+guildStr+"/")
 		cancel()
 		if err != nil {
@@ -156,7 +156,7 @@ func messageDisplayName(msg discord.Message) string {
 
 // syncProfileName updates the author's stored profile name if it has changed.
 // The S3 work runs in the background; the common case is a map lookup.
-func (b *Bot) syncProfileName(guildID snowflake.ID, msg discord.Message) {
+func (b *Bot) syncProfileName(ctx context.Context, guildID snowflake.ID, msg discord.Message) {
 	if msg.WebhookID != nil || len(b.templates[guildID]) == 0 {
 		return
 	}
@@ -188,17 +188,17 @@ func (b *Bot) syncProfileName(guildID snowflake.ID, msg discord.Message) {
 	templates := o.templates
 	p.mu.Unlock()
 
-	go b.writeProfileName(guildID, guildStr, userStr, name, o, templates)
+	go b.writeProfileName(context.WithoutCancel(ctx), guildID, guildStr, userStr, name, o, templates)
 }
 
 // writeProfileName stores name in the user's profiles of the given templates,
 // or of every template when templates is nil.
-func (b *Bot) writeProfileName(guildID snowflake.ID, guildStr, userStr, name string, o *profileOwner, templates []string) {
+func (b *Bot) writeProfileName(ctx context.Context, guildID snowflake.ID, guildStr, userStr, name string, o *profileOwner, templates []string) {
 	lock := b.profileLock(guildStr, userStr)
 	lock.Lock()
 	defer lock.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	var found []string

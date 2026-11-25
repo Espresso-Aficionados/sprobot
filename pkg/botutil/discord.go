@@ -1,6 +1,7 @@
 package botutil
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -23,22 +24,22 @@ type MessageResponder interface {
 	CreateMessage(discord.MessageCreate, ...rest.RequestOpt) error
 }
 
-func RespondEphemeral(e MessageResponder, content string) {
+func RespondEphemeral(ctx context.Context, e MessageResponder, content string) {
 	if err := e.CreateMessage(discord.MessageCreate{
 		Content: content,
 		Flags:   discord.MessageFlagEphemeral,
-	}); err != nil {
+	}, rest.WithCtx(ctx)); err != nil {
 		slog.Error("Failed to send ephemeral response", "error", err)
 	}
 }
 
 // FollowupEphemeral answers a deferred interaction with an ephemeral
 // follow-up message, logging any failure.
-func FollowupEphemeral(client *bot.Client, token, content string) {
+func FollowupEphemeral(ctx context.Context, client *bot.Client, token, content string) {
 	if _, err := client.Rest.CreateFollowupMessage(client.ApplicationID, token, discord.MessageCreate{
 		Content: content,
 		Flags:   discord.MessageFlagEphemeral,
-	}); err != nil {
+	}, rest.WithCtx(ctx)); err != nil {
 		slog.Error("Failed to send follow-up", "error", err)
 	}
 }
@@ -53,7 +54,7 @@ var postRetryDelay = 2 * time.Second
 // or 5xx), Discord returns that message instead of posting a duplicate. 4xx
 // responses are not retried: they fail the same way again, and disgo already
 // waits out 429s.
-func PostWithRetry(restClient rest.Rest, channelID snowflake.ID, msg discord.MessageCreate, log *slog.Logger) (*discord.Message, error) {
+func PostWithRetry(ctx context.Context, restClient rest.Rest, channelID snowflake.ID, msg discord.MessageCreate, log *slog.Logger) (*discord.Message, error) {
 	msg = msg.WithNonce(newNonce()).WithEnforceNonce(true)
 	var sent *discord.Message
 	var err error
@@ -61,7 +62,7 @@ func PostWithRetry(restClient rest.Rest, channelID snowflake.ID, msg discord.Mes
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * postRetryDelay)
 		}
-		sent, err = restClient.CreateMessage(channelID, msg)
+		sent, err = restClient.CreateMessage(channelID, msg, rest.WithCtx(ctx))
 		if err == nil {
 			return sent, nil
 		}
@@ -96,9 +97,9 @@ func isClientError(err error) bool {
 // and only bot messages follow it (or nothing follows it). Returns false if
 // any human message was posted after lastMsgID, if lastMsgID is not found in
 // the recent history, or on error.
-func OnlyBotsAfter(restClient rest.Rest, channelID, lastMsgID snowflake.ID, log *slog.Logger) bool {
+func OnlyBotsAfter(ctx context.Context, restClient rest.Rest, channelID, lastMsgID snowflake.ID, log *slog.Logger) bool {
 	// Fetch the 25 most recent messages (no after/before filter).
-	msgs, err := restClient.GetMessages(channelID, 0, 0, 0, 25)
+	msgs, err := restClient.GetMessages(channelID, 0, 0, 0, 25, rest.WithCtx(ctx))
 	if err != nil {
 		log.Error("Failed to fetch messages for bot-loop check", "channel_id", channelID, "error", err)
 		return false

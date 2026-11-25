@@ -11,6 +11,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
@@ -60,7 +61,7 @@ func decodeHiddenThreads(guildID snowflake.ID, data []byte) (map[snowflake.ID]st
 // already. A failed load is retried on the next call; until one succeeds the
 // list can't be changed, so a partial list never overwrites the stored one.
 // Callers hold b.hiddenSaveMu.
-func (b *Bot) ensureHiddenLoaded(guildID snowflake.ID) error {
+func (b *Bot) ensureHiddenLoaded(ctx context.Context, guildID snowflake.ID) error {
 	b.mu.Lock()
 	loaded := b.hiddenLoaded[guildID]
 	b.mu.Unlock()
@@ -69,7 +70,7 @@ func (b *Bot) ensureHiddenLoaded(guildID snowflake.ID) error {
 	}
 
 	set := map[snowflake.ID]struct{}{}
-	data, err := b.S3.FetchHiddenThreads(context.Background(), fmt.Sprintf("%d", guildID))
+	data, err := b.S3.FetchHiddenThreads(ctx, fmt.Sprintf("%d", guildID))
 	switch {
 	case errors.Is(err, s3client.ErrNotFound):
 	case err != nil:
@@ -94,9 +95,9 @@ func (b *Bot) ensureHiddenLoaded(guildID snowflake.ID) error {
 // hiddenSet returns a copy of the guild's hidden thread IDs, safe to use
 // without holding b.mu. It fails if the stored list can't be loaded: listing
 // threads as if none were hidden would promote the ones mods hid.
-func (b *Bot) hiddenSet(guildID snowflake.ID) (map[snowflake.ID]struct{}, error) {
+func (b *Bot) hiddenSet(ctx context.Context, guildID snowflake.ID) (map[snowflake.ID]struct{}, error) {
 	b.hiddenSaveMu.Lock()
-	err := b.ensureHiddenLoaded(guildID)
+	err := b.ensureHiddenLoaded(ctx, guildID)
 	b.hiddenSaveMu.Unlock()
 	if err != nil {
 		return nil, err
@@ -111,12 +112,12 @@ func (b *Bot) hiddenSet(guildID snowflake.ID) (map[snowflake.ID]struct{}, error)
 // whether anything changed. If the save fails the change is rolled back, so a
 // retry saves again instead of finding nothing to do. hiddenSaveMu orders the
 // saves, so an older snapshot can't land in S3 after a newer one.
-func (b *Bot) setHidden(guildID, threadID snowflake.ID, hidden bool) (bool, error) {
+func (b *Bot) setHidden(ctx context.Context, guildID, threadID snowflake.ID, hidden bool) (bool, error) {
 	b.hiddenSaveMu.Lock()
 	defer b.hiddenSaveMu.Unlock()
 
 	// Saving before the stored list is loaded would overwrite it.
-	if err := b.ensureHiddenLoaded(guildID); err != nil {
+	if err := b.ensureHiddenLoaded(ctx, guildID); err != nil {
 		return false, err
 	}
 
@@ -143,7 +144,7 @@ func (b *Bot) setHidden(guildID, threadID snowflake.ID, hidden bool) (bool, erro
 	b.mu.Unlock()
 
 	if err == nil {
-		err = b.S3.SaveHiddenThreads(context.Background(), fmt.Sprintf("%d", guildID), data)
+		err = b.S3.SaveHiddenThreads(ctx, fmt.Sprintf("%d", guildID), data)
 	}
 	if err != nil {
 		b.mu.Lock()
@@ -157,11 +158,11 @@ func (b *Bot) setHidden(guildID, threadID snowflake.ID, hidden bool) (bool, erro
 // loadHiddenThreads loads the hidden list of every allowed guild. Guilds that
 // fail here load on first use. It returns the refusals of lists a newer
 // build wrote.
-func (b *Bot) loadHiddenThreads() error {
+func (b *Bot) loadHiddenThreads(ctx context.Context) error {
 	var refused []error
 	for _, guildID := range botutil.AllowedGuildIDs {
 		b.hiddenSaveMu.Lock()
-		err := b.ensureHiddenLoaded(guildID)
+		err := b.ensureHiddenLoaded(ctx, guildID)
 		b.hiddenSaveMu.Unlock()
 		switch {
 		case statever.IsNewer(err):
@@ -175,7 +176,8 @@ func (b *Bot) loadHiddenThreads() error {
 }
 
 func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
-	changed, err := b.setHidden(e.GuildID, e.ThreadID, false)
+	ctx := context.Background()
+	changed, err := b.setHidden(ctx, e.GuildID, e.ThreadID, false)
 	switch {
 	case errors.Is(err, errHiddenNotLoaded):
 		// A deleted thread left in an unloaded list is harmless: it is never shown.
@@ -186,24 +188,24 @@ func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
 	}
 }
 
-func (b *Bot) handleHide(e *events.ApplicationCommandInteractionCreate, hide bool) {
+func (b *Bot) handleHide(ctx context.Context, e *events.ApplicationCommandInteractionCreate, hide bool) {
 	guildID := *e.GuildID()
 	data := e.Data.(discord.SlashCommandInteractionData)
 	thread, ok := data.OptChannel(optThread)
 	if !ok || !isThread(thread.Type) {
-		botutil.RespondEphemeral(e, "Pick a thread.")
+		botutil.RespondEphemeral(ctx, e, "Pick a thread.")
 		return
 	}
 
 	// Defer: loading and saving the list in S3 can outlast the interaction's
 	// 3-second deadline.
-	if err := e.DeferCreateMessage(true); err != nil {
+	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer hide response", "error", err)
 		return
 	}
-	reply := func(content string) { botutil.FollowupEphemeral(b.Client, e.Token(), content) }
+	reply := func(content string) { botutil.FollowupEphemeral(ctx, b.Client, e.Token(), content) }
 
-	changed, err := b.setHidden(guildID, thread.ID, hide)
+	changed, err := b.setHidden(ctx, guildID, thread.ID, hide)
 	if errors.Is(err, errHiddenNotLoaded) {
 		b.Log.Error("Hidden thread list not loaded", "guild_id", guildID, "error", err)
 		reply("Couldn't load the hidden thread list, so it can't be changed right now. Please try again in a minute.")
@@ -228,17 +230,17 @@ func (b *Bot) handleHide(e *events.ApplicationCommandInteractionCreate, hide boo
 	}
 }
 
-func (b *Bot) handleHiddenList(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleHiddenList(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	// Defer: loading the list from S3 can outlast the interaction's 3-second
 	// deadline.
-	if err := e.DeferCreateMessage(true); err != nil {
+	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer hidden list response", "error", err)
 		return
 	}
-	reply := func(content string) { botutil.FollowupEphemeral(b.Client, e.Token(), content) }
+	reply := func(content string) { botutil.FollowupEphemeral(ctx, b.Client, e.Token(), content) }
 
-	set, err := b.hiddenSet(guildID)
+	set, err := b.hiddenSet(ctx, guildID)
 	if err != nil {
 		b.Log.Error("Hidden thread list not loaded", "guild_id", guildID, "error", err)
 		reply("Couldn't load the hidden thread list. Please try again in a minute.")

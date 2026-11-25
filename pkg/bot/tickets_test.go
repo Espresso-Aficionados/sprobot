@@ -299,7 +299,7 @@ func TestTicketOpenDeletesThreadTheUserCannotJoin(t *testing.T) {
 	stub.on("PUT /channels/70/thread-members/30", 403, discordError(50001, "Missing Access"))
 
 	e, replies := componentEvent(t, b.Client, "ticket_open", `"60"`, "")
-	b.handleTicketOpen(e)
+	b.handleTicketOpen(t.Context(), e)
 
 	if _, data := replies.only(t); !isEphemeral(data) {
 		t.Error("open was not deferred ephemerally")
@@ -318,7 +318,7 @@ func TestTicketOpenDeletesThreadTheUserCannotJoin(t *testing.T) {
 	// The failed open doesn't block a retry.
 	stub.on("PUT /channels/70/thread-members/30", 204, "")
 	e, _ = componentEvent(t, b.Client, "ticket_open", `"60"`, "")
-	b.handleTicketOpen(e)
+	b.handleTicketOpen(t.Context(), e)
 	if got := stub.bodies("POST /channels/50/threads"); len(got) != 2 {
 		t.Errorf("created %d threads, want a retry to create a second", len(got))
 	}
@@ -330,7 +330,7 @@ func TestTicketOpenSecondClickOpensNoSecondTicket(t *testing.T) {
 
 	for range 2 {
 		e, _ := componentEvent(t, b.Client, "ticket_open", `"60"`, "")
-		b.handleTicketOpen(e)
+		b.handleTicketOpen(t.Context(), e)
 	}
 
 	if got := stub.bodies("POST /channels/50/threads"); len(got) != 1 {
@@ -350,7 +350,7 @@ func TestTicketOpenAnswersWhenNotConfigured(t *testing.T) {
 	b.ticketConfigs = nil
 
 	e, _ := componentEvent(t, b.Client, "ticket_open", "", "")
-	b.handleTicketOpen(e)
+	b.handleTicketOpen(t.Context(), e)
 
 	msgs := stub.followups(t, "tok")
 	if len(msgs) != 1 || !msgs[0].Flags.Has(discord.MessageFlagEphemeral) || !strings.Contains(msgs[0].Content, "aren't set up") {
@@ -370,7 +370,7 @@ func TestTicketOpenUnavailableWhileNotLoaded(t *testing.T) {
 	b.tickets.mu.Unlock()
 
 	e, _ := componentEvent(t, b.Client, "ticket_open", "", "")
-	b.handleTicketOpen(e)
+	b.handleTicketOpen(t.Context(), e)
 
 	msgs := stub.followups(t, "tok")
 	if len(msgs) != 1 || !msgs[0].Flags.Has(discord.MessageFlagEphemeral) || !strings.Contains(msgs[0].Content, "temporarily unavailable") {
@@ -388,7 +388,7 @@ func TestTicketCloseLocksBeforeSayingClosed(t *testing.T) {
 	b, stub := newTicketBot(t)
 
 	e, replies := componentEvent(t, b.Client, "ticket_close_yes:30", `"60"`, "")
-	b.handleTicketClose(e, 30)
+	b.handleTicketClose(t.Context(), e, 30)
 
 	if typ, _ := replies.only(t); typ != discord.InteractionResponseTypeDeferredUpdateMessage {
 		t.Errorf("acknowledged with %v, want a deferred update", typ)
@@ -407,7 +407,7 @@ func TestTicketCloseReportsLockFailure(t *testing.T) {
 	stub.on("PATCH /channels/20", 403, discordError(50013, "Missing Permissions"))
 
 	e, _ := componentEvent(t, b.Client, "ticket_close_yes:30", `"60"`, "")
-	b.handleTicketClose(e, 30)
+	b.handleTicketClose(t.Context(), e, 30)
 
 	if got := stub.bodies("PATCH /webhooks/2/tok/messages/@original"); len(got) != 0 {
 		t.Errorf("marked the ticket closed although locking failed: %v", got)

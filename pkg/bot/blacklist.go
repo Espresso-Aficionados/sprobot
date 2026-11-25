@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -43,11 +44,11 @@ type blacklistable interface {
 	setBlacklist([]snowflake.ID)
 }
 
-func (b *Bot) handleBlacklistAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, bl blacklistable, persist func() error, prefix string) {
+func (b *Bot) handleBlacklistAdd(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, bl blacklistable, persist func() error, prefix string) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 	ch, ok := data.OptChannel("channel")
 	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a channel.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a channel.")
 		return
 	}
 
@@ -56,7 +57,7 @@ func (b *Bot) handleBlacklistAdd(e *events.ApplicationCommandInteractionCreate, 
 	bl.lock()
 	if containsAny(bl.getBlacklist(), ch.ID) {
 		bl.unlock()
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> is already blacklisted.", ch.ID))
+		botutil.RespondEphemeral(ctx, e, fmt.Sprintf("<#%d> is already blacklisted.", ch.ID))
 		return
 	}
 	bl.setBlacklist(append(bl.getBlacklist(), ch.ID))
@@ -64,18 +65,18 @@ func (b *Bot) handleBlacklistAdd(e *events.ApplicationCommandInteractionCreate, 
 
 	if err := persist(); err != nil {
 		b.Log.Error("Failed to persist "+prefix+" blacklist", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save blacklist.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save blacklist.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> added to blacklist.", ch.ID))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("<#%d> added to blacklist.", ch.ID))
 }
 
-func (b *Bot) handleBlacklistRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, bl blacklistable, persist func() error, prefix string) {
+func (b *Bot) handleBlacklistRemove(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, bl blacklistable, persist func() error, prefix string) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 	ch, ok := data.OptChannel("channel")
 	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a channel.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a channel.")
 		return
 	}
 
@@ -89,20 +90,20 @@ func (b *Bot) handleBlacklistRemove(e *events.ApplicationCommandInteractionCreat
 	bl.unlock()
 
 	if !found {
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> is not blacklisted.", ch.ID))
+		botutil.RespondEphemeral(ctx, e, fmt.Sprintf("<#%d> is not blacklisted.", ch.ID))
 		return
 	}
 
 	if err := persist(); err != nil {
 		b.Log.Error("Failed to persist "+prefix+" blacklist", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save blacklist.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save blacklist.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> removed from blacklist.", ch.ID))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("<#%d> removed from blacklist.", ch.ID))
 }
 
-func (b *Bot) handleBlacklistList(e *events.ApplicationCommandInteractionCreate, bl blacklistable, prefix string) {
+func (b *Bot) handleBlacklistList(ctx context.Context, e *events.ApplicationCommandInteractionCreate, bl blacklistable, prefix string) {
 	b.Log.Info(prefix+" blacklist list", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	bl.lock()
@@ -111,7 +112,7 @@ func (b *Bot) handleBlacklistList(e *events.ApplicationCommandInteractionCreate,
 	bl.unlock()
 
 	if len(list) == 0 {
-		botutil.RespondEphemeral(e, "No channels are blacklisted.")
+		botutil.RespondEphemeral(ctx, e, "No channels are blacklisted.")
 		return
 	}
 
@@ -119,10 +120,10 @@ func (b *Bot) handleBlacklistList(e *events.ApplicationCommandInteractionCreate,
 	for _, id := range list {
 		lines = append(lines, fmt.Sprintf("<#%d>", id))
 	}
-	botutil.RespondEphemeral(e, "**Blacklisted channels:**\n"+strings.Join(lines, "\n"))
+	botutil.RespondEphemeral(ctx, e, "**Blacklisted channels:**\n"+strings.Join(lines, "\n"))
 }
 
-func (b *Bot) handleBlacklistClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, bl blacklistable, persist func() error, prefix string) {
+func (b *Bot) handleBlacklistClear(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, bl blacklistable, persist func() error, prefix string) {
 	b.Log.Info(prefix+" blacklist clear", "user_id", e.User().ID, "guild_id", guildID)
 
 	bl.lock()
@@ -131,15 +132,15 @@ func (b *Bot) handleBlacklistClear(e *events.ApplicationCommandInteractionCreate
 	bl.unlock()
 
 	if count == 0 {
-		botutil.RespondEphemeral(e, "Blacklist is already empty.")
+		botutil.RespondEphemeral(ctx, e, "Blacklist is already empty.")
 		return
 	}
 
 	if err := persist(); err != nil {
 		b.Log.Error("Failed to persist "+prefix+" blacklist", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save blacklist.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save blacklist.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Cleared %d entries from the blacklist.", count))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("Cleared %d entries from the blacklist.", count))
 }

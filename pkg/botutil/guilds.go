@@ -1,6 +1,7 @@
 package botutil
 
 import (
+	"context"
 	"slices"
 
 	"github.com/disgoorg/disgo/events"
@@ -32,13 +33,13 @@ type GuildInteraction interface {
 // interaction handler calls it first: commands registered in a guild before it
 // was dropped stay registered on Discord, and must not create state there.
 // Interactions outside a guild are not rejected.
-func (b *BaseBot) RejectGuildNotAllowed(e GuildInteraction) bool {
+func (b *BaseBot) RejectGuildNotAllowed(ctx context.Context, e GuildInteraction) bool {
 	guildID := e.GuildID()
 	if guildID == nil || GuildAllowed(*guildID) {
 		return false
 	}
 	b.Log.Info("Rejecting interaction from guild that is not in botutil.AllowedGuildIDs", "guild_id", *guildID)
-	RespondEphemeral(e, "This bot isn't set up for this server.")
+	RespondEphemeral(ctx, e, "This bot isn't set up for this server.")
 	return true
 }
 

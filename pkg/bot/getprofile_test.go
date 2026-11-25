@@ -21,7 +21,7 @@ func TestGetProfileNotFoundIsPrivate(t *testing.T) {
 	tmpl := sprobot.ProfileTemplate
 
 	e, replies := commandEvent(t, b.Client, getprofileData)
-	b.handleGet(e, tmpl)
+	b.handleGet(t.Context(), e, tmpl)
 
 	if typ, data := replies.only(t); typ != discord.InteractionResponseTypeDeferredCreateMessage || isEphemeral(data) {
 		t.Errorf("deferred with %v (ephemeral %v), want a public defer", typ, isEphemeral(data))
@@ -46,7 +46,7 @@ func TestGetProfileShowsFoundProfilePublicly(t *testing.T) {
 	fake.Objects["/test-bucket/"+sprobot.ProfileS3Path("10", tmpl.Name, "31")] = []byte(`{"Machine":"Lever"}`)
 
 	e, _ := commandEvent(t, b.Client, getprofileData)
-	b.handleGet(e, tmpl)
+	b.handleGet(t.Context(), e, tmpl)
 
 	if got := stub.bodies("DELETE /webhooks/2/tok/messages/@original"); len(got) != 0 {
 		t.Error("deleted the deferred response for a found profile")
@@ -85,7 +85,7 @@ func TestGetProfileMenuNames(t *testing.T) {
 			stub.on("GET /guilds/10/members/31", 200, `{"user":{"id":"31","username":"bob"},"nick":"Bobby","roles":[]}`)
 
 			e, _ := commandEvent(t, b.Client, tt.data)
-			b.handleGetMenu(e, tmpl)
+			b.handleGetMenu(t.Context(), e, tmpl)
 
 			if got := len(stub.bodies("GET /guilds/10/members/31")) == 1; got != tt.wantLookup {
 				t.Errorf("member lookup made = %v, want %v", got, tt.wantLookup)

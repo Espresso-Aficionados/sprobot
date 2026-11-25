@@ -141,7 +141,7 @@ func TestRejectGuildNotAllowed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := &fakeInteraction{guildID: tt.guildID}
-			if got := b.RejectGuildNotAllowed(e); got != tt.reject {
+			if got := b.RejectGuildNotAllowed(t.Context(), e); got != tt.reject {
 				t.Fatalf("RejectGuildNotAllowed = %v, want %v", got, tt.reject)
 			}
 			if !tt.reject {

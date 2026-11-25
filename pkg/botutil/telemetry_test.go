@@ -16,6 +16,7 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/sadbox/svc/telemetry"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/telemetrytest"
 )
@@ -122,7 +123,7 @@ func TestCommandLabel(t *testing.T) {
 func TestTraceModals(t *testing.T) {
 	rec := telemetrytest.Install(t)
 	ran := false
-	h := TraceModals([]string{"test_modlog"}, func(*events.ModalSubmitInteractionCreate) { ran = true })
+	h := TraceModals([]string{"test_modlog"}, func(context.Context, *events.ModalSubmitInteractionCreate) { ran = true })
 	h(&events.ModalSubmitInteractionCreate{ModalSubmitInteraction: discord.ModalSubmitInteraction{
 		Data: discord.ModalSubmitInteractionData{CustomID: "test_modlog_1013566342345019512_1300000000000000000"},
 	}})
@@ -151,6 +152,57 @@ func TestTraceModals(t *testing.T) {
 		return
 	}
 	t.Error("no span for modal test_modlog")
+}
+
+// Each wrapper hands its handler the interaction span's context, so the
+// handler's downstream calls are that span's children.
+func TestTraceHandlerContextCarriesSpan(t *testing.T) {
+	rec := telemetrytest.Install(t)
+	tests := []struct {
+		name string
+		run  func(record func(context.Context))
+	}{
+		{"interaction command other", func(record func(context.Context)) {
+			TraceCommands(func(ctx context.Context, _ *events.ApplicationCommandInteractionCreate) { record(ctx) })(
+				&events.ApplicationCommandInteractionCreate{ApplicationCommandInteraction: discord.ApplicationCommandInteraction{
+					Data: discord.SlashCommandInteractionData{},
+				}})
+		}},
+		{"interaction autocomplete other", func(record func(context.Context)) {
+			TraceAutocomplete(func(ctx context.Context, _ *events.AutocompleteInteractionCreate) { record(ctx) })(
+				&events.AutocompleteInteractionCreate{})
+		}},
+		{"interaction component other", func(record func(context.Context)) {
+			TraceComponents(nil, func(ctx context.Context, _ *events.ComponentInteractionCreate) { record(ctx) })(
+				&events.ComponentInteractionCreate{ComponentInteraction: discord.ComponentInteraction{
+					Data: discord.ButtonInteractionData{},
+				}})
+		}},
+		{"interaction modal test_ctx", func(record func(context.Context)) {
+			TraceModals([]string{"test_ctx"}, func(ctx context.Context, _ *events.ModalSubmitInteractionCreate) { record(ctx) })(
+				&events.ModalSubmitInteractionCreate{ModalSubmitInteraction: discord.ModalSubmitInteraction{
+					Data: discord.ModalSubmitInteractionData{CustomID: "test_ctx_1"},
+				}})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got trace.SpanContext
+			tt.run(func(ctx context.Context) { got = trace.SpanFromContext(ctx).SpanContext() })
+			if !got.IsValid() {
+				t.Fatal("handler's context carries no span")
+			}
+			for _, s := range rec.Spans() {
+				if s.SpanContext.Equal(got) {
+					if s.Name != tt.name {
+						t.Errorf("handler's span is %q, want %q", s.Name, tt.name)
+					}
+					return
+				}
+			}
+			t.Errorf("handler's span %s is not a recorded span", got.SpanID())
+		})
+	}
 }
 
 func TestEventName(t *testing.T) {

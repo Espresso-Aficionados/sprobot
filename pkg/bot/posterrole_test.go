@@ -521,12 +521,12 @@ func TestCheckPosterRoleRunsOneSearchPerUser(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+		b.checkPosterRole(t.Context(), roleTestGuild, 500, messageFrom(20))
 		close(done)
 	}()
 	waitFor(t, "the first search", func() bool { return searches.Load() == 1 })
-	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
-	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(t.Context(), roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(t.Context(), roleTestGuild, 500, messageFrom(20))
 	close(release)
 	<-done
 
@@ -565,12 +565,12 @@ func TestCheckPosterRoleDropsSearchAfterBan(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+		b.checkPosterRole(t.Context(), roleTestGuild, 500, messageFrom(20))
 		close(done)
 	}()
 	waitFor(t, "the search", func() bool { return searches.Load() == 1 })
 	e, responses := banEvent(t, 20)
-	b.handleMarketConfig(e)
+	b.handleMarketConfig(t.Context(), e)
 	response(t, responses)
 	close(release)
 	<-done
@@ -597,7 +597,7 @@ func TestPosterRoleRevokedWhenBanLandsDuringGrant(t *testing.T) {
 		return http.StatusNoContent, ""
 	})
 
-	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(t.Context(), roleTestGuild, 500, messageFrom(20))
 
 	if n := api.count(roleCall("PUT", 20, posterTestRole)); n != 1 {
 		t.Fatalf("%d grants, want 1", n)
@@ -615,8 +615,8 @@ func TestPosterRoleGrantBacksOffAfterFailure(t *testing.T) {
 		return restError(http.StatusForbidden, 50013, "Missing Permissions")
 	})
 
-	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
-	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(t.Context(), roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(t.Context(), roleTestGuild, 500, messageFrom(20))
 	if n := api.count(roleCall("PUT", 20, posterTestRole)); n != 1 {
 		t.Errorf("%d grant attempts, want 1", n)
 	}
@@ -631,8 +631,8 @@ func TestPosterRoleSearchBacksOffWhileIndexing(t *testing.T) {
 		return http.StatusNoContent, ""
 	})
 
-	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
-	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(t.Context(), roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(t.Context(), roleTestGuild, 500, messageFrom(20))
 	if n := api.countSuffix("/messages/search"); n != 1 {
 		t.Errorf("%d searches while the index builds, want 1", n)
 	}
@@ -649,7 +649,7 @@ func TestPosterRoleRefusesUngrantableRole(t *testing.T) {
 	st.Counts["20"] = 150
 	st.Fetched["20"] = true
 
-	b.checkPosterRole(roleTestGuild, 500, messageFrom(20))
+	b.checkPosterRole(t.Context(), roleTestGuild, 500, messageFrom(20))
 	if n := api.count(roleCall("PUT", 20, posterTestRole)); n != 0 {
 		t.Errorf("moderator role granted %d times", n)
 	}
@@ -665,7 +665,7 @@ func TestMarketBanRollsBackWhenSaveFails(t *testing.T) {
 	fakeS3.Mu.Unlock()
 
 	e, responses := banEvent(t, 20)
-	b.handleMarketConfig(e)
+	b.handleMarketConfig(t.Context(), e)
 	if got := response(t, responses).Content; got != "Failed to save ban." {
 		t.Errorf("response = %q", got)
 	}
@@ -677,7 +677,7 @@ func TestMarketBanRollsBackWhenSaveFails(t *testing.T) {
 	delete(fakeS3.Fail, key)
 	fakeS3.Mu.Unlock()
 	e, responses = banEvent(t, 20)
-	b.handleMarketConfig(e)
+	b.handleMarketConfig(t.Context(), e)
 	if got := response(t, responses).Content; !strings.Contains(got, "has been banned") {
 		t.Errorf("retry response = %q", got)
 	}
@@ -695,7 +695,7 @@ func TestMarketBanOfBannedUserStillClearsTrackingAndRole(t *testing.T) {
 	st.Counts["20"] = 5
 
 	e, responses := banEvent(t, 20)
-	b.handleMarketConfig(e)
+	b.handleMarketConfig(t.Context(), e)
 	if got := response(t, responses).Content; !strings.Contains(got, "already banned") {
 		t.Errorf("response = %q", got)
 	}
@@ -712,7 +712,7 @@ func TestMarketConfigRejectsUngrantableRole(t *testing.T) {
 	target := discord.Role{ID: 301, GuildID: roleTestGuild, Position: 5, Permissions: discord.PermissionMentionEveryone}
 	opts := `[{"name":"market","type":2,"options":[{"name":"config","type":1,"options":[{"name":"role","type":8,"value":"301"},{"name":"threshold","type":4,"value":5}]}]}]`
 	e, responses := roleCommand(t, roleTestOwner, nil, opts, resolvedRole(target))
-	b.handleMarketConfig(e)
+	b.handleMarketConfig(t.Context(), e)
 	if got := response(t, responses).Content; !strings.Contains(got, "moderator permissions") {
 		t.Errorf("response = %q", got)
 	}
@@ -774,7 +774,7 @@ func TestCheckPosterRoleForgetsMembersWithTheRole(t *testing.T) {
 	}
 	b.posterRole.set(guildID, st)
 
-	b.checkPosterRole(guildID, 100, discord.Message{
+	b.checkPosterRole(t.Context(), guildID, 100, discord.Message{
 		Author: discord.User{ID: 2},
 		Member: &discord.Member{RoleIDs: []snowflake.ID{9, roleID}},
 	})

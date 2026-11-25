@@ -103,13 +103,13 @@ func (b *Bot) Run() error {
 	// against a guild whose stored state isn't in place yet. Nothing has
 	// been saved, and nothing will be: a newer build's state is left as it
 	// is.
-	if err := errors.Join(b.loadReminders(), b.loadMemberCounts(), b.loadHiddenThreads()); err != nil {
+	if err := errors.Join(b.loadReminders(ctx), b.loadMemberCounts(ctx), b.loadHiddenThreads(ctx)); err != nil {
 		return err
 	}
 
 	b.ServeHealth()
 	if err := b.OpenGateway(ctx); err != nil {
-		b.shutdown()
+		b.shutdown(ctx)
 		return err
 	}
 	defer b.Client.Close(ctx)
@@ -117,24 +117,24 @@ func (b *Bot) Run() error {
 	b.WaitForGuilds(30 * time.Second)
 
 	if err := b.registerAllCommands(); err != nil {
-		b.shutdown()
+		b.shutdown(ctx)
 		return fmt.Errorf("registering commands: %w", err)
 	}
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.Heartbeat)
-	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, saveRemindersJob, func(context.Context) error { return b.retryAndSaveReminders() })
-	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, saveMemberCountsJob, func(context.Context) error { return b.saveMemberCounts() })
+	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, saveRemindersJob, b.retryAndSaveReminders)
+	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, saveMemberCountsJob, b.saveMemberCounts)
 
 	shutdownErr := b.WaitForShutdown("Threadbot")
-	b.shutdown()
+	b.shutdown(ctx)
 	return shutdownErr
 }
 
 // shutdown stops the repost loops, waiting out reposts in flight, and saves
 // state. It runs before the client closes, which the reposts still need.
-func (b *Bot) shutdown() {
+func (b *Bot) shutdown(ctx context.Context) {
 	close(b.stop)
 	b.stopAllReminderGoroutines()
-	_ = errors.Join(b.saveAllReminders(), b.saveMemberCounts()) // each failure is logged
+	_ = errors.Join(b.saveAllReminders(ctx), b.saveMemberCounts(ctx)) // each failure is logged
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {

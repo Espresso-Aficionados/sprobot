@@ -13,9 +13,9 @@ import (
 // no one, since a stickied mention would otherwise ping on every repost.
 func TestStickyPostsLinkFilesAndPingNoOne(t *testing.T) {
 	posts := map[string]func(*Bot, *stickyMessage) error{
-		"initial post": func(b *Bot, s *stickyMessage) error { return b.installSticky(s) },
+		"initial post": func(b *Bot, s *stickyMessage) error { return b.installSticky(t.Context(), s) },
 		"repost": func(b *Bot, s *stickyMessage) error {
-			if !b.repostSticky(s) {
+			if !b.repostSticky(t.Context(), s) {
 				return errors.New("repost failed")
 			}
 			return nil

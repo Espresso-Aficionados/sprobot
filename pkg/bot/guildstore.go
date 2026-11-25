@@ -135,7 +135,7 @@ func (s *guildStateStore[T]) persistLock(guildID snowflake.ID) *sync.Mutex {
 	return l
 }
 
-func (s *guildStateStore[T]) persist(guildID snowflake.ID) error {
+func (s *guildStateStore[T]) persist(ctx context.Context, guildID snowflake.ID) error {
 	lock := s.persistLock(guildID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -159,17 +159,17 @@ func (s *guildStateStore[T]) persist(guildID snowflake.ID) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), storeS3Timeout)
+	ctx, cancel := context.WithTimeout(ctx, storeS3Timeout)
 	defer cancel()
 	return s.s3.SaveGuildJSON(ctx, s.s3Key, guildID.String(), data)
 }
 
 // save persists every guild with state that this instance is in. It logs
 // each failure and returns them all.
-func (s *guildStateStore[T]) save() error {
+func (s *guildStateStore[T]) save(ctx context.Context) error {
 	var errs []error
 	for guildID := range s.served() {
-		if err := s.persist(guildID); err != nil {
+		if err := s.persist(ctx, guildID); err != nil {
 			s.log.Error("Failed to save "+s.s3Key, "guild_id", guildID, "error", err)
 			errs = append(errs, fmt.Errorf("saving %s: %w", s.s3Key, err))
 		}
@@ -181,10 +181,10 @@ func (s *guildStateStore[T]) save() error {
 // left without state and marked for retryFailedLoads. It returns the
 // refusals of state a newer build wrote (statever.NewerError), which
 // startup exits on.
-func (s *guildStateStore[T]) load(guildIDs []snowflake.ID) error {
+func (s *guildStateStore[T]) load(ctx context.Context, guildIDs []snowflake.ID) error {
 	var refused []error
 	for _, guildID := range guildIDs {
-		st, err := s.fetch(guildID)
+		st, err := s.fetch(ctx, guildID)
 		s.mu.Lock()
 		retried := s.failed[guildID]
 		if err != nil {
@@ -210,11 +210,11 @@ func (s *guildStateStore[T]) load(guildIDs []snowflake.ID) error {
 
 // retryFailedLoads loads again every guild whose load failed. It fails
 // while any guild is still unloaded.
-func (s *guildStateStore[T]) retryFailedLoads() error {
+func (s *guildStateStore[T]) retryFailedLoads(ctx context.Context) error {
 	s.mu.RLock()
 	guildIDs := slices.Collect(maps.Keys(s.failed))
 	s.mu.RUnlock()
-	s.load(guildIDs) // refusals are logged; only startup exits on them
+	s.load(ctx, guildIDs) // refusals are logged; only startup exits on them
 	s.mu.RLock()
 	unloaded := len(s.failed)
 	s.mu.RUnlock()
@@ -229,9 +229,9 @@ func (s *guildStateStore[T]) retryFailedLoads() error {
 // error: the guild stays unloaded, so nothing saves over it. Undecodable
 // data is copied under corruptPrefix and then also replaced by fresh state,
 // so the feature keeps working; recovering it is left to a human.
-func (s *guildStateStore[T]) fetch(guildID snowflake.ID) (*T, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), storeS3Timeout)
-	data, err := s.s3.FetchGuildJSON(ctx, s.s3Key, guildID.String())
+func (s *guildStateStore[T]) fetch(ctx context.Context, guildID snowflake.ID) (*T, error) {
+	fetchCtx, cancel := context.WithTimeout(ctx, storeS3Timeout)
+	data, err := s.s3.FetchGuildJSON(fetchCtx, s.s3Key, guildID.String())
 	cancel()
 	if errors.Is(err, s3client.ErrNotFound) {
 		s.log.Info("No existing "+s.s3Key+" data, starting fresh", "guild_id", guildID)
@@ -248,9 +248,9 @@ func (s *guildStateStore[T]) fetch(guildID snowflake.ID) (*T, error) {
 	if decodeErr := json.Unmarshal(data, st); decodeErr != nil {
 		backupPrefix := corruptPrefix + "/" + s.s3Key
 		backupID := fmt.Sprintf("%d-%d", guildID, time.Now().Unix())
-		ctx, cancel = context.WithTimeout(context.Background(), storeS3Timeout)
+		backupCtx, cancel := context.WithTimeout(ctx, storeS3Timeout)
 		defer cancel()
-		if err := s.s3.SaveGuildJSON(ctx, backupPrefix, backupID, data); err != nil {
+		if err := s.s3.SaveGuildJSON(backupCtx, backupPrefix, backupID, data); err != nil {
 			return nil, fmt.Errorf("decoding: %w; backing up: %w", decodeErr, err)
 		}
 		s.log.Error("Failed to decode "+s.s3Key+", backed it up and starting fresh",
@@ -305,8 +305,8 @@ func (s *guildStateStore[T]) served() map[snowflake.ID]*T {
 
 // pruneCorruptBackups deletes the copies fetch made of undecodable state once
 // they are older than corruptRetention. Keys it can't date are left alone.
-func pruneCorruptBackups(s3 *s3client.Client, log *slog.Logger, now time.Time) error {
-	ctx, cancel := context.WithTimeout(context.Background(), storeS3Timeout)
+func pruneCorruptBackups(ctx context.Context, s3 *s3client.Client, log *slog.Logger, now time.Time) error {
+	ctx, cancel := context.WithTimeout(ctx, storeS3Timeout)
 	defer cancel()
 	objects, err := s3.ListObjects(ctx, corruptPrefix+"/")
 	if err != nil {

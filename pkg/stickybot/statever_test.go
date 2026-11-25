@@ -22,14 +22,14 @@ func TestLoadStickiesRefusesNewer(t *testing.T) {
 	fake.Objects[testStickiesObject] = []byte(newer)
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, server))
-	err := b.loadStickies()
+	err := b.loadStickies(t.Context())
 	if !statever.IsNewer(err) || !strings.Contains(err.Error(), "stickies/1013566342345019512.json is state version 2") {
 		t.Fatalf("loadStickies = %v, want a refusal", err)
 	}
 	if b.guildLoaded(t.Context(), testGuildID) {
 		t.Fatal("guild loaded from a newer build's stickies")
 	}
-	b.saveUnsavedStickies()
+	b.saveUnsavedStickies(t.Context())
 	if got := string(fake.Objects[testStickiesObject]); got != newer {
 		t.Fatalf("stickies changed: %s", got)
 	}
@@ -46,7 +46,7 @@ func TestLoadStickiesVersionedOrNot(t *testing.T) {
 		server := httptest.NewServer(fake)
 		fake.Objects[testStickiesObject] = []byte(stored)
 		b := newTestBot(t, testutil.NewTestS3Client(t, server))
-		if err := b.loadStickies(); err != nil {
+		if err := b.loadStickies(t.Context()); err != nil {
 			t.Fatalf("%s: %v", stored, err)
 		}
 		b.mu.Lock()
@@ -56,7 +56,7 @@ func TestLoadStickiesVersionedOrNot(t *testing.T) {
 			t.Errorf("%s: loaded %d stickies, want 1", stored, n)
 		}
 		b.stopAllStickyGoroutines()
-		b.saveStickiesForGuild(testGuildID)
+		b.saveStickiesForGuild(t.Context(), testGuildID)
 		if got := string(fake.Objects[testStickiesObject]); strings.Contains(got, "version") {
 			t.Errorf("saved %s: stickies must stay unversioned until older builds read a version", got)
 		}

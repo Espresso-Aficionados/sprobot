@@ -31,16 +31,16 @@ func TestLoadRefusesNewer(t *testing.T) {
 			fake.Objects[obj] = []byte(newer)
 			b := newTestBot(t, testutil.NewTestS3Client(t, server))
 
-			err := errors.Join(b.loadReminders(), b.loadMemberCounts(), b.loadHiddenThreads())
+			err := errors.Join(b.loadReminders(t.Context()), b.loadMemberCounts(t.Context()), b.loadHiddenThreads(t.Context()))
 			if !statever.IsNewer(err) || !strings.Contains(err.Error(), "is state version 2") {
 				t.Fatalf("loads = %v, want one refusal", err)
 			}
-			b.saveAllReminders()
-			b.saveMemberCounts()
-			if err := b.resetMemberCounts(testGuild, func() {}); obj == memberCountsObject && !statever.IsNewer(err) {
+			b.saveAllReminders(t.Context())
+			b.saveMemberCounts(t.Context())
+			if err := b.resetMemberCounts(t.Context(), testGuild, func() {}); obj == memberCountsObject && !statever.IsNewer(err) {
 				t.Errorf("/threadbot refreshcounts: %v, want a refusal", err)
 			}
-			if _, err := b.setHidden(testGuild, 5, true); obj == hiddenObject && err == nil {
+			if _, err := b.setHidden(t.Context(), testGuild, 5, true); obj == hiddenObject && err == nil {
 				t.Error("setHidden saved over a newer build's list")
 			}
 			if got := string(fake.Objects[obj]); got != newer {
@@ -60,15 +60,15 @@ func TestSavedVersions(t *testing.T) {
 	fake.Objects[remindersObject] = []byte(`{"version":1,"111":{"channel_id":"111","guild_id":"1013566342345019512","min_idle_mins":30,"max_idle_mins":720,"time_threshold_mins":60}}`)
 	fake.Objects[memberCountsObject] = []byte(`{"counts":{"5":3}}`)
 	b := newTestBot(t, testutil.NewTestS3Client(t, server))
-	if err := errors.Join(b.loadReminders(), b.loadMemberCounts(), b.loadHiddenThreads()); err != nil {
+	if err := errors.Join(b.loadReminders(t.Context()), b.loadMemberCounts(t.Context()), b.loadHiddenThreads(t.Context())); err != nil {
 		t.Fatal(err)
 	}
 	if len(b.reminders[testGuild]) != 1 || b.memberCounts[testGuild].Counts[5] != 3 {
 		t.Fatalf("loaded reminders %v, counts %v", b.reminders[testGuild], b.memberCounts[testGuild])
 	}
-	b.saveAllReminders()
-	b.saveMemberCounts()
-	if _, err := b.setHidden(testGuild, 7, true); err != nil {
+	b.saveAllReminders(t.Context())
+	b.saveMemberCounts(t.Context())
+	if _, err := b.setHidden(t.Context(), testGuild, 7, true); err != nil {
 		t.Fatal(err)
 	}
 	if got := string(fake.Objects[remindersObject]); strings.Contains(got, "version") {

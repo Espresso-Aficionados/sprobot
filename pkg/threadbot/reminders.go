@@ -172,10 +172,10 @@ func (r *threadReminder) settingsError() string {
 // loop, so a failed load is retried; so does the next command that needs the
 // guild's reminders. It returns the refusals of reminders a newer build
 // wrote, which startup exits on.
-func (b *Bot) loadReminders() error {
+func (b *Bot) loadReminders(ctx context.Context) error {
 	var refused []error
 	for _, guildID := range botutil.AllowedGuildIDs {
-		err := b.ensureRemindersLoaded(guildID)
+		err := b.ensureRemindersLoaded(ctx, guildID)
 		switch {
 		case statever.IsNewer(err):
 			refused = append(refused, err)
@@ -192,7 +192,7 @@ func (b *Bot) loadReminders() error {
 // succeeded or found nothing stored, and never loses it, so stored reminders
 // that failed to load are never saved over. Their loops start once the bot is
 // in the guild: on its GuildReady, or here if that has already arrived.
-func (b *Bot) ensureRemindersLoaded(guildID snowflake.ID) error {
+func (b *Bot) ensureRemindersLoaded(ctx context.Context, guildID snowflake.ID) error {
 	b.mu.Lock()
 	_, loaded := b.reminders[guildID]
 	b.mu.Unlock()
@@ -201,7 +201,7 @@ func (b *Bot) ensureRemindersLoaded(guildID snowflake.ID) error {
 	}
 
 	channels := make(map[snowflake.ID]*threadReminder)
-	data, err := b.S3.FetchThreadReminders(context.Background(), fmt.Sprintf("%d", guildID))
+	data, err := b.S3.FetchThreadReminders(ctx, fmt.Sprintf("%d", guildID))
 	switch {
 	case errors.Is(err, s3client.ErrNotFound):
 	case err != nil:
@@ -234,7 +234,7 @@ func (b *Bot) ensureRemindersLoaded(guildID snowflake.ID) error {
 	b.mu.Unlock()
 	b.Log.Info("Loaded thread reminders", "guild_id", guildID, "count", len(channels))
 	if ready {
-		b.startGuildReminders(guildID)
+		b.startGuildReminders(ctx, guildID)
 	}
 	return nil
 }
@@ -245,6 +245,7 @@ func (b *Bot) ensureRemindersLoaded(guildID snowflake.ID) error {
 // guilds the gateway says the bot is in. GuildReady fires again for every new
 // gateway session.
 func (b *Bot) onGuildReady(e *events.GuildReady) {
+	ctx := context.Background()
 	if !botutil.GuildAllowed(e.GuildID) {
 		return
 	}
@@ -257,7 +258,7 @@ func (b *Bot) onGuildReady(e *events.GuildReady) {
 	b.mu.Unlock()
 	// Otherwise the load failed, and the retry that loads them starts them.
 	if loaded {
-		b.startGuildReminders(e.GuildID)
+		b.startGuildReminders(ctx, e.GuildID)
 	}
 }
 
@@ -266,7 +267,7 @@ func (b *Bot) onGuildReady(e *events.GuildReady) {
 // replays a channel delete, so this catches channels deleted while nothing
 // was listening: the bot was down, its session was replaced rather than
 // resumed, or the guild's reminders hadn't loaded.
-func (b *Bot) startGuildReminders(guildID snowflake.ID) {
+func (b *Bot) startGuildReminders(ctx context.Context, guildID snowflake.ID) {
 	b.mu.Lock()
 	channelIDs := slices.Collect(maps.Keys(b.reminders[guildID]))
 	b.mu.Unlock()
@@ -276,7 +277,7 @@ func (b *Bot) startGuildReminders(guildID snowflake.ID) {
 		// Only Unknown Channel means deleted; a channel the bot can't see is
 		// Missing Access.
 		var restErr *rest.Error
-		if _, err := b.Client.Rest.GetChannel(channelID); errors.As(err, &restErr) && restErr.Code == rest.JSONErrorCodeUnknownChannel && b.dropReminder(guildID, channelID) {
+		if _, err := b.Client.Rest.GetChannel(channelID, rest.WithCtx(ctx)); errors.As(err, &restErr) && restErr.Code == rest.JSONErrorCodeUnknownChannel && b.dropReminder(guildID, channelID) {
 			b.Log.Info("Dropped reminder of deleted channel", "guild_id", guildID, "channel_id", channelID)
 			dropped = true
 		}
@@ -290,11 +291,11 @@ func (b *Bot) startGuildReminders(guildID snowflake.ID) {
 	}
 	b.mu.Unlock()
 	if dropped {
-		b.saveRemindersForGuild(guildID)
+		b.saveRemindersForGuild(ctx, guildID)
 	}
 }
 
-func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) error {
+func (b *Bot) saveRemindersForGuild(ctx context.Context, guildID snowflake.ID) error {
 	b.saveMu.Lock()
 	defer b.saveMu.Unlock()
 	b.mu.Lock()
@@ -315,7 +316,6 @@ func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) error {
 		return err
 	}
 
-	ctx := context.Background()
 	if err := b.S3.SaveThreadReminders(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
 		b.Log.Error("Failed to save thread reminders", "guild_id", guildID, "error", err)
 		return err
@@ -329,10 +329,10 @@ func (b *Bot) saveRemindersForGuild(guildID snowflake.ID) error {
 // another deployment of the bot (prod or dev) may be the one changing a guild
 // this one isn't in, so its copy from startup is never written back. Changes
 // in the bot's own guilds are saved as they happen; this is the backstop.
-func (b *Bot) saveAllReminders() error {
+func (b *Bot) saveAllReminders(ctx context.Context) error {
 	var errs []error
 	for _, guildID := range b.GuildIDs() {
-		errs = append(errs, b.saveRemindersForGuild(guildID))
+		errs = append(errs, b.saveRemindersForGuild(ctx, guildID))
 	}
 	return errors.Join(errs...)
 }
@@ -340,9 +340,9 @@ func (b *Bot) saveAllReminders() error {
 // retryAndSaveReminders is the 5-minute reminders pass: it retries the
 // guilds whose load failed and saves the rest, and fails while a guild is
 // unloaded or a save fails.
-func (b *Bot) retryAndSaveReminders() error {
-	_ = b.loadReminders() // refusals are logged; only startup exits on them
-	err := b.saveAllReminders()
+func (b *Bot) retryAndSaveReminders(ctx context.Context) error {
+	_ = b.loadReminders(ctx) // refusals are logged; only startup exits on them
+	err := b.saveAllReminders(ctx)
 	b.mu.Lock()
 	unloaded := 0
 	for _, guildID := range botutil.AllowedGuildIDs {
@@ -379,7 +379,7 @@ func (b *Bot) startReminderGoroutine(r *threadReminder) {
 		MsgThreshold:      r.MsgThreshold,
 		TimeThresholdMins: r.TimeThresholdMins,
 		LastPostTime:      r.LastPostTime,
-	}, func() bool { return b.repostReminder(r) })
+	}, func() bool { return b.repostReminder(context.Background(), r) })
 }
 
 // stopReminderGoroutine stops r's repost loop and waits out any repost in
@@ -398,8 +398,9 @@ func (b *Bot) stopReminderGoroutine(r *threadReminder) {
 // can disable it since the channel is gone. Deletes this misses are caught by
 // startGuildReminders.
 func (b *Bot) onChannelDelete(e *events.GuildChannelDelete) {
+	ctx := context.Background()
 	if b.dropReminder(e.GuildID, e.ChannelID) {
-		b.saveRemindersForGuild(e.GuildID)
+		b.saveRemindersForGuild(ctx, e.GuildID)
 		b.Log.Info("Dropped reminder of deleted channel", "guild_id", e.GuildID, "channel_id", e.ChannelID)
 	}
 }
@@ -484,12 +485,12 @@ func listedThreads(all []discord.GuildThread, channelID snowflake.ID, hidden map
 // buildThreadsEmbed fetches the guild's active threads and returns an embed
 // of the busiest: up to 10 under channelID, or with channelID 0, up to 25
 // across the server. The embed is nil if there are none to show.
-func (b *Bot) buildThreadsEmbed(guildID, channelID snowflake.ID) (*discord.Embed, error) {
-	hidden, err := b.hiddenSet(guildID)
+func (b *Bot) buildThreadsEmbed(ctx context.Context, guildID, channelID snowflake.ID) (*discord.Embed, error) {
+	hidden, err := b.hiddenSet(ctx, guildID)
 	if err != nil {
 		return nil, err
 	}
-	result, err := b.Client.Rest.GetActiveGuildThreads(guildID)
+	result, err := b.Client.Rest.GetActiveGuildThreads(guildID, rest.WithCtx(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("fetching active threads: %w", err)
 	}
@@ -511,7 +512,7 @@ func (b *Bot) buildThreadsEmbed(guildID, channelID snowflake.ID) (*discord.Embed
 			capped = append(capped, t.ID)
 		}
 	}
-	b.refreshMemberCounts(guildID, capped)
+	b.refreshMemberCounts(ctx, guildID, capped)
 
 	var cachedCount int
 	b.mu.Lock()
@@ -578,8 +579,8 @@ func threadsEmbed(guildID, channelID snowflake.ID, threads []threadInfo, total i
 	}
 }
 
-func (b *Bot) repostReminder(r *threadReminder) bool {
-	embed, err := b.buildThreadsEmbed(r.GuildID, r.ChannelID)
+func (b *Bot) repostReminder(ctx context.Context, r *threadReminder) bool {
+	embed, err := b.buildThreadsEmbed(ctx, r.GuildID, r.ChannelID)
 	if err != nil {
 		b.Log.Error("Failed to build thread reminder", "guild_id", r.GuildID, "channel_id", r.ChannelID, "error", err)
 		return false
@@ -591,8 +592,8 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 	// Update the reminder in place while it is still among the channel's last
 	// Buffer messages, or when only bots have posted since: reposting then
 	// would start a repost loop between bots.
-	if r.LastMessageID != 0 && (b.reminderInBuffer(r) || botutil.OnlyBotsAfter(b.Client.Rest, r.ChannelID, r.LastMessageID, b.Log)) {
-		if b.editReminder(r, *embed) {
+	if r.LastMessageID != 0 && (b.reminderInBuffer(ctx, r) || botutil.OnlyBotsAfter(ctx, b.Client.Rest, r.ChannelID, r.LastMessageID, b.Log)) {
+		if b.editReminder(ctx, r, *embed) {
 			return true
 		}
 		// Edit failed; fall through to delete+repost
@@ -600,14 +601,14 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 
 	// Delete old message (best-effort)
 	if r.LastMessageID != 0 {
-		_ = b.Client.Rest.DeleteMessage(r.ChannelID, r.LastMessageID)
+		_ = b.Client.Rest.DeleteMessage(r.ChannelID, r.LastMessageID, rest.WithCtx(ctx))
 	}
 
 	msg := discord.MessageCreate{
 		Embeds: []discord.Embed{*embed},
 	}
 
-	sent, err := botutil.PostWithRetry(b.Client.Rest, r.ChannelID, msg, b.Log)
+	sent, err := botutil.PostWithRetry(ctx, b.Client.Rest, r.ChannelID, msg, b.Log)
 	if err != nil {
 		b.Log.Error("Failed to repost thread reminder after retries", "channel_id", r.ChannelID, "error", err)
 		return false
@@ -617,17 +618,17 @@ func (b *Bot) repostReminder(r *threadReminder) bool {
 	r.LastMessageID = sent.ID
 	r.LastPostTime = time.Now()
 	b.mu.Unlock()
-	b.saveRemindersForGuild(r.GuildID)
+	b.saveRemindersForGuild(ctx, r.GuildID)
 	return true
 }
 
 // reminderInBuffer reports whether r's message is among the channel's last
 // r.Buffer messages.
-func (b *Bot) reminderInBuffer(r *threadReminder) bool {
+func (b *Bot) reminderInBuffer(ctx context.Context, r *threadReminder) bool {
 	if r.Buffer <= 0 {
 		return false
 	}
-	msgs, err := b.Client.Rest.GetMessages(r.ChannelID, 0, 0, 0, r.Buffer)
+	msgs, err := b.Client.Rest.GetMessages(r.ChannelID, 0, 0, 0, r.Buffer, rest.WithCtx(ctx))
 	if err != nil {
 		return false
 	}
@@ -636,26 +637,26 @@ func (b *Bot) reminderInBuffer(r *threadReminder) bool {
 
 // editReminder replaces the embed on r's message and records the post time.
 // It reports whether the edit succeeded.
-func (b *Bot) editReminder(r *threadReminder, embed discord.Embed) bool {
+func (b *Bot) editReminder(ctx context.Context, r *threadReminder, embed discord.Embed) bool {
 	if _, err := b.Client.Rest.UpdateMessage(r.ChannelID, r.LastMessageID, discord.MessageUpdate{
 		Embeds: &[]discord.Embed{embed},
-	}); err != nil {
+	}, rest.WithCtx(ctx)); err != nil {
 		return false
 	}
 	b.mu.Lock()
 	r.LastPostTime = time.Now()
 	b.mu.Unlock()
-	b.saveRemindersForGuild(r.GuildID)
+	b.saveRemindersForGuild(ctx, r.GuildID)
 	return true
 }
 
 // loadMemberCounts loads the stored member counts of every allowed guild. A
 // failed load is retried the next time the guild's counts are needed. It
 // returns the refusals of counts a newer build wrote.
-func (b *Bot) loadMemberCounts() error {
+func (b *Bot) loadMemberCounts(ctx context.Context) error {
 	var refused []error
 	for _, guildID := range botutil.AllowedGuildIDs {
-		err := b.ensureMemberCountsLoaded(guildID)
+		err := b.ensureMemberCountsLoaded(ctx, guildID)
 		switch {
 		case statever.IsNewer(err):
 			refused = append(refused, err)
@@ -672,7 +673,7 @@ func (b *Bot) loadMemberCounts() error {
 // entry only from a load that succeeded or found nothing stored (or from
 // /threadbot refreshcounts), so counts that failed to load are never saved
 // over.
-func (b *Bot) ensureMemberCountsLoaded(guildID snowflake.ID) error {
+func (b *Bot) ensureMemberCountsLoaded(ctx context.Context, guildID snowflake.ID) error {
 	b.mu.Lock()
 	_, loaded := b.memberCounts[guildID]
 	b.mu.Unlock()
@@ -681,7 +682,7 @@ func (b *Bot) ensureMemberCountsLoaded(guildID snowflake.ID) error {
 	}
 
 	cache := newMemberCountCache()
-	data, err := b.S3.FetchThreadMemberCounts(context.Background(), fmt.Sprintf("%d", guildID))
+	data, err := b.S3.FetchThreadMemberCounts(ctx, fmt.Sprintf("%d", guildID))
 	switch {
 	case errors.Is(err, s3client.ErrNotFound):
 	case err != nil:
@@ -714,17 +715,17 @@ func (b *Bot) ensureMemberCountsLoaded(guildID snowflake.ID) error {
 
 // saveMemberCounts saves the member counts of the guilds the bot is in, for
 // the reason given at saveAllReminders.
-func (b *Bot) saveMemberCounts() error {
+func (b *Bot) saveMemberCounts(ctx context.Context) error {
 	var errs []error
 	for _, guildID := range b.GuildIDs() {
-		errs = append(errs, b.saveMemberCountsForGuild(guildID))
+		errs = append(errs, b.saveMemberCountsForGuild(ctx, guildID))
 	}
 	return errors.Join(errs...)
 }
 
 // saveMemberCountsForGuild persists a guild's member counts. A guild whose
 // counts haven't loaded has nothing to save.
-func (b *Bot) saveMemberCountsForGuild(guildID snowflake.ID) error {
+func (b *Bot) saveMemberCountsForGuild(ctx context.Context, guildID snowflake.ID) error {
 	b.saveMu.Lock()
 	defer b.saveMu.Unlock()
 	b.mu.Lock()
@@ -743,7 +744,7 @@ func (b *Bot) saveMemberCountsForGuild(guildID snowflake.ID) error {
 		return err
 	}
 
-	if err := b.S3.SaveThreadMemberCounts(context.Background(), fmt.Sprintf("%d", guildID), data); err != nil {
+	if err := b.S3.SaveThreadMemberCounts(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
 		b.Log.Error("Failed to save thread member counts", "guild_id", guildID, "error", err)
 		return err
 	}
@@ -751,11 +752,11 @@ func (b *Bot) saveMemberCountsForGuild(guildID snowflake.ID) error {
 	return nil
 }
 
-func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID) {
+func (b *Bot) refreshMemberCounts(ctx context.Context, guildID snowflake.ID, threadIDs []snowflake.ID) {
 	if len(threadIDs) == 0 {
 		return
 	}
-	if err := b.ensureMemberCountsLoaded(guildID); err != nil {
+	if err := b.ensureMemberCountsLoaded(ctx, guildID); err != nil {
 		// Counts fetched now couldn't be saved without overwriting the stored
 		// ones, so member_count is shown until the load succeeds.
 		b.Log.Error("Failed to load thread member counts; showing capped counts", "guild_id", guildID, "error", err)
@@ -778,7 +779,7 @@ func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID
 	b.Log.Info("Refreshing thread member counts", "guild_id", guildID, "fetching", len(toFetch))
 	var fetched int
 	for _, threadID := range toFetch {
-		n := b.countThreadMembers(threadID)
+		n := b.countThreadMembers(ctx, threadID)
 		if n == 0 {
 			// Failed; leave it unrecorded so the next use retries it.
 			continue
@@ -801,7 +802,7 @@ func (b *Bot) refreshMemberCounts(guildID snowflake.ID, threadIDs []snowflake.ID
 	cache.prune(time.Now())
 	b.mu.Unlock()
 	b.Log.Info("Finished refreshing thread member counts", "guild_id", guildID, "fetched", fetched, "failed", len(toFetch)-fetched)
-	b.saveMemberCountsForGuild(guildID)
+	b.saveMemberCountsForGuild(ctx, guildID)
 }
 
 // threadMembersPageSize is the most members List Thread Members returns at a
@@ -811,13 +812,13 @@ const threadMembersPageSize = 100
 // countThreadMembers counts a thread's members with List Thread Members, page
 // by page: from API v11 the endpoint always paginates, so a single call would
 // stop at 100. Members are counted, never stored. Returns 0 on failure.
-func (b *Bot) countThreadMembers(threadID snowflake.ID) int {
+func (b *Bot) countThreadMembers(ctx context.Context, threadID snowflake.ID) int {
 	var n int
 	var after snowflake.ID
 	for {
 		// A new page per request: disgo's ThreadMemberPage.Next continues
 		// after the first member of the previous page instead of the last.
-		page := b.Client.Rest.GetThreadMembersPage(threadID, after, threadMembersPageSize)
+		page := b.Client.Rest.GetThreadMembersPage(threadID, after, threadMembersPageSize, rest.WithCtx(ctx))
 		if !page.Next() {
 			if errors.Is(page.Err, rest.ErrNoMorePages) {
 				break

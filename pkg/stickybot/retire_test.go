@@ -63,7 +63,7 @@ func TestRetireStickyDeletesMessageAndFiles(t *testing.T) {
 		FileURLs: []string{key, b.S3.Origin() + "/test-bucket/" + url.PathEscape(legacyKey)},
 	}
 
-	b.retireSticky(s)
+	b.retireSticky(t.Context(), s)
 
 	if got := f.deletedIDs(); !slices.Equal(got, []snowflake.ID{100}) {
 		t.Errorf("deleted messages %v, want [100]", got)
@@ -82,7 +82,7 @@ func TestInstallStickyRetiresReplacedSticky(t *testing.T) {
 	b.stickies[testGuildID] = map[snowflake.ID]*stickyMessage{500: old}
 
 	s := &stickyMessage{ChannelID: 500, GuildID: testGuildID, Content: "new", Active: true, FileURLs: []string{newKey}, MaxIdleMins: 10, MsgThreshold: 1}
-	if err := b.installSticky(s); err != nil {
+	if err := b.installSticky(t.Context(), s); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +112,7 @@ func TestRestickyingOwnPostCopiesFiles(t *testing.T) {
 	post := old.messageCreate(b.S3.FileURL)
 
 	s := &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
-	reply := b.createSticky(s, discord.Message{ID: 100, ChannelID: 500, Content: post.Content, Embeds: post.Embeds})
+	reply := b.createSticky(t.Context(), s, discord.Message{ID: 100, ChannelID: 500, Content: post.Content, Embeds: post.Embeds})
 
 	if !strings.HasPrefix(reply, "Sticky created") || strings.Contains(reply, "Couldn't save") {
 		t.Errorf("reply = %q, want a plain confirmation", reply)
@@ -149,14 +149,14 @@ func TestFailedFileDeletesAreRetried(t *testing.T) {
 	fakeS3.Fail["/test-bucket/"+key] = http.StatusForbidden
 	fakeS3.Mu.Unlock()
 
-	b.retireSticky(&stickyMessage{ChannelID: 500, GuildID: testGuildID, FileURLs: []string{key}})
+	b.retireSticky(t.Context(), &stickyMessage{ChannelID: 500, GuildID: testGuildID, FileURLs: []string{key}})
 	if left := stored(); len(left) != 1 {
 		t.Fatalf("files left %q, want the one whose delete failed", left)
 	}
 	fakeS3.Mu.Lock()
 	delete(fakeS3.Fail, "/test-bucket/"+key)
 	fakeS3.Mu.Unlock()
-	b.retryFailed()
+	b.retryFailed(t.Context())
 
 	if left := stored(); len(left) != 0 {
 		t.Errorf("files left %q after the retry, want none", left)
@@ -175,7 +175,7 @@ func TestInstallStickyPostFailureDeletesFiles(t *testing.T) {
 	stored := seedFiles(fakeS3, key)
 	s := &stickyMessage{ChannelID: 500, GuildID: testGuildID, Content: "new", Active: true, FileURLs: []string{key}, MaxIdleMins: 10, MsgThreshold: 1}
 
-	if err := b.installSticky(s); err == nil {
+	if err := b.installSticky(t.Context(), s); err == nil {
 		t.Fatal("installSticky succeeded, want the post's error")
 	}
 	if left := stored(); len(left) != 0 {
@@ -197,7 +197,7 @@ func TestRetireStickyDeletesInFlightRepostMessage(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.retireSticky(s)
+		b.retireSticky(t.Context(), s)
 		close(done)
 	}()
 	select {

@@ -27,7 +27,7 @@ func TestGuildStateStoreRefusesNewerState(t *testing.T) {
 	const newer = `{"version":2,"value":"from the future","renamed":[1]}`
 	h.put(testObject(testGuild), newer)
 
-	err := store.load([]snowflake.ID{testGuild})
+	err := store.load(t.Context(), []snowflake.ID{testGuild})
 	var n *statever.NewerError
 	if !errors.As(err, &n) || n.Version != 2 || n.Name != "test/123.json" {
 		t.Fatalf("load = %v, want a NewerError for test/123.json", err)
@@ -35,11 +35,11 @@ func TestGuildStateStoreRefusesNewerState(t *testing.T) {
 	if st := store.getOrCreate(testGuild); st != nil {
 		t.Fatalf("getOrCreate = %+v, want nil for refused state", st)
 	}
-	if err := store.persist(testGuild); !errors.Is(err, errNotLoaded) {
+	if err := store.persist(t.Context(), testGuild); !errors.Is(err, errNotLoaded) {
 		t.Fatalf("persist = %v, want errNotLoaded", err)
 	}
-	store.retryFailedLoads()
-	store.save()
+	store.retryFailedLoads(t.Context())
+	store.save(t.Context())
 	if got, _ := h.object(testObject(testGuild)); got != newer {
 		t.Fatalf("stored data = %s, want it untouched", got)
 	}
@@ -53,13 +53,13 @@ func TestGuildStateStoreRefusesNewerState(t *testing.T) {
 func TestGuildStateStoreLoadsUnversionedAndStamps(t *testing.T) {
 	store, h := newTestStore(t)
 	h.put(testObject(testGuild), `{"value":"old"}`)
-	if err := store.load([]snowflake.ID{testGuild}); err != nil {
+	if err := store.load(t.Context(), []snowflake.ID{testGuild}); err != nil {
 		t.Fatal(err)
 	}
 	if v := value(store.get(testGuild)); v != "old" {
 		t.Fatalf("Value = %q", v)
 	}
-	if err := store.persist(testGuild); err != nil {
+	if err := store.persist(t.Context(), testGuild); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := h.object(testObject(testGuild)); got != `{"version":1,"value":"old"}` {
@@ -71,10 +71,10 @@ func TestGuildStateStoreLoadsUnversionedAndStamps(t *testing.T) {
 // decodes (it ignores "version"), and that this build loads back.
 func TestEveryStoreSavesStateOldBuildsRead(t *testing.T) {
 	b, h := newStateBot(t)
-	if err := b.loadState(); err != nil {
+	if err := b.loadState(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	b.saveState()
+	b.saveState(t.Context())
 	for _, s := range b.stateStores() {
 		decodeOld := s.(interface{ decodeIgnoringVersion([]byte) error }).decodeIgnoringVersion
 		for _, guildID := range botutil.AllowedGuildIDs {
@@ -91,7 +91,7 @@ func TestEveryStoreSavesStateOldBuildsRead(t *testing.T) {
 			}
 		}
 	}
-	if err := b.loadState(); err != nil {
+	if err := b.loadState(t.Context()); err != nil {
 		t.Fatalf("loading back: %v", err)
 	}
 }
@@ -101,7 +101,7 @@ func TestLoadStateRefusesNewerState(t *testing.T) {
 	b, h := newStateBot(t)
 	guildID := botutil.AllowedGuildIDs[0]
 	h.put(fmt.Sprintf("/test-bucket/tickets/%d.json", guildID), `{"version":9}`)
-	err := b.loadState()
+	err := b.loadState(t.Context())
 	if !statever.IsNewer(err) || !strings.Contains(err.Error(), fmt.Sprintf("tickets/%d.json is state version 9", guildID)) {
 		t.Fatalf("loadState = %v, want the tickets refusal", err)
 	}
@@ -146,10 +146,10 @@ func TestCacheDirVersion(t *testing.T) {
 // cache dir, sends nothing but GETs, and writes nothing locally.
 func TestCheckState(t *testing.T) {
 	b, h := newStateBot(t)
-	if err := b.loadState(); err != nil {
+	if err := b.loadState(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	b.saveState()
+	b.saveState(t.Context())
 	dir := t.TempDir()
 	cb := newCacheTestBot(t)
 	cb.cacheDir = dir

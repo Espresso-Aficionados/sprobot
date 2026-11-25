@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
@@ -38,7 +40,7 @@ func defaultEventLogConfig() map[snowflake.ID]snowflake.ID {
 	}
 }
 
-func (b *Bot) postEventLog(guildID snowflake.ID, embed discord.Embed) {
+func (b *Bot) postEventLog(ctx context.Context, guildID snowflake.ID, embed discord.Embed) {
 	st := b.eventLog.get(guildID)
 	if st == nil {
 		return
@@ -52,7 +54,7 @@ func (b *Bot) postEventLog(guildID snowflake.ID, embed discord.Embed) {
 	embed.Timestamp = timePtr(time.Now())
 	if _, err := b.Client.Rest.CreateMessage(channelID, discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
-	}); err != nil {
+	}, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to post event log", "guild_id", guildID, "error", err)
 	}
 }
@@ -124,6 +126,7 @@ func (b *Bot) isEventLogChannel(guildID, channelID snowflake.ID) bool {
 // --- Message events ---
 
 func (b *Bot) onMessageDelete(e *events.GuildMessageDelete) {
+	ctx := context.Background()
 	if b.isEventLogChannel(e.GuildID, e.ChannelID) {
 		return
 	}
@@ -165,10 +168,11 @@ func (b *Bot) onMessageDelete(e *events.GuildMessageDelete) {
 	} else {
 		embed.Description = "*Message content not cached*"
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 func (b *Bot) onMessageUpdate(e *events.GuildMessageUpdate) {
+	ctx := context.Background()
 	if b.isEventLogChannel(e.GuildID, e.ChannelID) {
 		return
 	}
@@ -215,12 +219,12 @@ func (b *Bot) onMessageUpdate(e *events.GuildMessageUpdate) {
 	embed.Fields = append(embed.Fields, discord.EmbedField{
 		Name: "After", Value: "```\n" + truncate(e.Message.Content, 1016) + "\n```",
 	})
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 // --- Member events ---
 
-func (b *Bot) logMemberJoin(guildID snowflake.ID, member discord.Member) {
+func (b *Bot) logMemberJoin(ctx context.Context, guildID snowflake.ID, member discord.Member) {
 	accountAge := time.Since(member.User.CreatedAt())
 	embed := discord.Embed{
 		Title:       "Member Joined",
@@ -235,10 +239,11 @@ func (b *Bot) logMemberJoin(guildID snowflake.ID, member discord.Member) {
 			{Name: "User ID", Value: fmt.Sprintf("`%d`", member.User.ID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
 func (b *Bot) onMemberLeave(e *events.GuildMemberLeave) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title:       "Member Left",
 		Color:       colorOrange,
@@ -252,16 +257,17 @@ func (b *Bot) onMemberLeave(e *events.GuildMemberLeave) {
 			{Name: "User ID", Value: fmt.Sprintf("`%d`", e.User.ID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
+	ctx := context.Background()
 	// Skip if old member wasn't in cache (zero value)
 	if e.OldMember.User.ID == 0 {
 		return
 	}
 
-	b.checkTempRolesOnMemberUpdate(e)
+	b.checkTempRolesOnMemberUpdate(ctx, e)
 
 	var fields []discord.EmbedField
 	title := "Member Updated"
@@ -302,7 +308,7 @@ func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
 		},
 		Fields: fields,
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 // --- Moderation events ---
@@ -310,58 +316,59 @@ func (b *Bot) onMemberUpdate(e *events.GuildMemberUpdate) {
 // which includes moderator + reason and cross-posts to the mod log.
 
 func (b *Bot) onAuditLogEntry(e *events.GuildAuditLogEntryCreate) {
+	ctx := context.Background()
 	entry := e.AuditLogEntry
 
 	switch entry.ActionType {
 	case discord.AuditLogEventMemberKick:
-		b.handleKickEntry(e.GuildID, entry)
+		b.handleKickEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventMemberBanAdd, discord.AuditLogEventMemberBanRemove:
-		b.handleBanEntry(e.GuildID, entry)
+		b.handleBanEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventMemberUpdate:
-		b.handleMemberUpdateEntry(e.GuildID, entry)
+		b.handleMemberUpdateEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventMemberRoleUpdate:
-		b.handleMemberRoleUpdateEntry(e.GuildID, entry)
+		b.handleMemberRoleUpdateEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventMessageDelete:
-		b.handleMessageDeleteEntry(e.GuildID, entry)
+		b.handleMessageDeleteEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventChannelUpdate, discord.AuditLogEventChannelDelete:
-		b.handleChannelAuditEntry(e.GuildID, entry)
+		b.handleChannelAuditEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventChannelOverwriteCreate,
 		discord.AuditLogEventChannelOverwriteUpdate,
 		discord.AuditLogEventChannelOverwriteDelete:
-		b.handleChannelOverwriteEntry(e.GuildID, entry)
+		b.handleChannelOverwriteEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventRoleCreate, discord.AuditLogEventRoleUpdate, discord.AuditLogEventRoleDelete:
-		b.handleRoleAuditEntry(e.GuildID, entry)
+		b.handleRoleAuditEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventGuildUpdate:
-		b.handleGuildUpdateEntry(e.GuildID, entry)
+		b.handleGuildUpdateEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogThreadUpdate:
-		b.handleThreadAuditEntry(e.GuildID, entry)
+		b.handleThreadAuditEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventEmojiCreate, discord.AuditLogEventEmojiUpdate, discord.AuditLogEventEmojiDelete:
-		b.handleEmojiAuditEntry(e.GuildID, entry)
+		b.handleEmojiAuditEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventStickerCreate, discord.AuditLogEventStickerUpdate, discord.AuditLogEventStickerDelete:
-		b.handleStickerAuditEntry(e.GuildID, entry)
+		b.handleStickerAuditEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogEventStageInstanceCreate, discord.AuditLogEventStageInstanceUpdate, discord.AuditLogEventStageInstanceDelete:
-		b.handleStageInstanceAuditEntry(e.GuildID, entry)
+		b.handleStageInstanceAuditEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogGuildScheduledEventCreate, discord.AuditLogGuildScheduledEventUpdate, discord.AuditLogGuildScheduledEventDelete:
-		b.handleScheduledEventAuditEntry(e.GuildID, entry)
+		b.handleScheduledEventAuditEntry(ctx, e.GuildID, entry)
 	case discord.AuditLogSoundboardSoundCreate, discord.AuditLogSoundboardSoundUpdate, discord.AuditLogSoundboardSoundDelete:
-		b.handleSoundboardSoundAuditEntry(e.GuildID, entry)
+		b.handleSoundboardSoundAuditEntry(ctx, e.GuildID, entry)
 	}
 }
 
-func (b *Bot) handleKickEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
-	b.postModAction(guildID, entry, "Member Kicked", colorRed, true)
+func (b *Bot) handleKickEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
+	b.postModAction(ctx, guildID, entry, "Member Kicked", colorRed, true)
 }
 
-func (b *Bot) handleBanEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleBanEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	isBan := entry.ActionType == discord.AuditLogEventMemberBanAdd
 	if isBan {
-		b.postModAction(guildID, entry, "Member Banned", colorDarkRed, true)
+		b.postModAction(ctx, guildID, entry, "Member Banned", colorDarkRed, true)
 	} else {
-		b.postModAction(guildID, entry, "Member Unbanned", colorTeal, true)
+		b.postModAction(ctx, guildID, entry, "Member Unbanned", colorTeal, true)
 	}
 }
 
-func (b *Bot) handleMemberUpdateEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleMemberUpdateEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	// Only handle timeout changes
 	isTimeout := false
 	for _, change := range entry.Changes {
@@ -374,12 +381,12 @@ func (b *Bot) handleMemberUpdateEntry(guildID snowflake.ID, entry discord.AuditL
 		return
 	}
 
-	b.postModAction(guildID, entry, "Member Timed Out", colorOrange, true)
+	b.postModAction(ctx, guildID, entry, "Member Timed Out", colorOrange, true)
 }
 
 // postModAction builds and posts a mod action embed with moderator, reason,
 // target user info, and optional cross-post to the mod log.
-func (b *Bot) postModAction(guildID snowflake.ID, entry discord.AuditLogEntry, title string, color int, crossPost bool) {
+func (b *Bot) postModAction(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry, title string, color int, crossPost bool) {
 	embed := discord.Embed{
 		Title: title,
 		Color: color,
@@ -400,7 +407,7 @@ func (b *Bot) postModAction(guildID snowflake.ID, entry discord.AuditLogEntry, t
 
 	var targetUser *discord.User
 	if entry.TargetID != nil {
-		if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
+		if user, err := b.Client.Rest.GetUser(*entry.TargetID, rest.WithCtx(ctx)); err == nil {
 			targetUser = user
 			embed.Author = &discord.EmbedAuthor{
 				Name:    user.Username,
@@ -412,14 +419,14 @@ func (b *Bot) postModAction(guildID snowflake.ID, entry discord.AuditLogEntry, t
 		}
 	}
 
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 
 	if crossPost && targetUser != nil {
-		b.crossPostToModLog(guildID, *targetUser, embed)
+		b.crossPostToModLog(ctx, guildID, *targetUser, embed)
 	}
 }
 
-func (b *Bot) handleMemberRoleUpdateEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleMemberRoleUpdateEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	if entry.TargetID == nil {
 		return
 	}
@@ -469,17 +476,17 @@ func (b *Bot) handleMemberRoleUpdateEntry(guildID snowflake.ID, entry discord.Au
 	}
 	appendAuditFields(&embed, entry)
 
-	if user, err := b.Client.Rest.GetUser(*entry.TargetID); err == nil {
+	if user, err := b.Client.Rest.GetUser(*entry.TargetID, rest.WithCtx(ctx)); err == nil {
 		embed.Author = &discord.EmbedAuthor{
 			Name:    user.Username,
 			IconURL: user.EffectiveAvatarURL(),
 		}
 	}
 
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) handleMessageDeleteEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleMessageDeleteEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	// Only fires for mod-deletes (not self-deletes).
 	if entry.UserID == 0 {
 		return
@@ -500,10 +507,10 @@ func (b *Bot) handleMessageDeleteEntry(guildID snowflake.ID, entry discord.Audit
 		})
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) handleChannelAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleChannelAuditEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	var title string
 	var color int
 	switch entry.ActionType {
@@ -552,10 +559,10 @@ func (b *Bot) handleChannelAuditEntry(guildID snowflake.ID, entry discord.AuditL
 		}
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) handleRoleAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleRoleAuditEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	var title string
 	var color int
 	switch entry.ActionType {
@@ -599,19 +606,19 @@ func (b *Bot) handleRoleAuditEntry(guildID snowflake.ID, entry discord.AuditLogE
 		})
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) handleGuildUpdateEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleGuildUpdateEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	embed := discord.Embed{
 		Title: "Server Updated",
 		Color: colorYellow,
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) handleThreadAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleThreadAuditEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	embed := discord.Embed{
 		Title: "Thread Updated",
 		Color: colorYellow,
@@ -622,10 +629,10 @@ func (b *Bot) handleThreadAuditEntry(guildID snowflake.ID, entry discord.AuditLo
 		})
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) handleEmojiAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleEmojiAuditEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	var title string
 	var color int
 	switch entry.ActionType {
@@ -651,10 +658,10 @@ func (b *Bot) handleEmojiAuditEntry(guildID snowflake.ID, entry discord.AuditLog
 		})
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) handleStickerAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleStickerAuditEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	var title string
 	var color int
 	switch entry.ActionType {
@@ -680,10 +687,10 @@ func (b *Bot) handleStickerAuditEntry(guildID snowflake.ID, entry discord.AuditL
 		})
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) handleStageInstanceAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleStageInstanceAuditEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	var title string
 	var color int
 	switch entry.ActionType {
@@ -717,10 +724,10 @@ func (b *Bot) handleStageInstanceAuditEntry(guildID snowflake.ID, entry discord.
 		}
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) handleScheduledEventAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleScheduledEventAuditEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	var title string
 	var color int
 	switch entry.ActionType {
@@ -747,10 +754,10 @@ func (b *Bot) handleScheduledEventAuditEntry(guildID snowflake.ID, entry discord
 		})
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
-func (b *Bot) handleSoundboardSoundAuditEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleSoundboardSoundAuditEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	var title string
 	var color int
 	switch entry.ActionType {
@@ -777,7 +784,7 @@ func (b *Bot) handleSoundboardSoundAuditEntry(guildID snowflake.ID, entry discor
 		})
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
 // auditLogChangeName extracts the "name" field from audit log changes.
@@ -812,7 +819,7 @@ func appendAuditFields(embed *discord.Embed, entry discord.AuditLogEntry) {
 	}
 }
 
-func (b *Bot) handleChannelOverwriteEntry(guildID snowflake.ID, entry discord.AuditLogEntry) {
+func (b *Bot) handleChannelOverwriteEntry(ctx context.Context, guildID snowflake.ID, entry discord.AuditLogEntry) {
 	if entry.TargetID == nil {
 		return
 	}
@@ -831,7 +838,7 @@ func (b *Bot) handleChannelOverwriteEntry(guildID snowflake.ID, entry discord.Au
 
 	// Get channel name for the title
 	channelName := fmt.Sprintf("%d", channelID)
-	if ch, err := b.Client.Rest.GetChannel(channelID); err == nil && ch.Name() != hiddenChannelName {
+	if ch, err := b.Client.Rest.GetChannel(channelID, rest.WithCtx(ctx)); err == nil && ch.Name() != hiddenChannelName {
 		channelName = ch.Name()
 	}
 
@@ -900,7 +907,7 @@ func (b *Bot) handleChannelOverwriteEntry(guildID snowflake.ID, entry discord.Au
 		},
 	}
 	appendAuditFields(&embed, entry)
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
 // channelPermissionBits is an ordered list of channel-relevant permission bits and their display names.
@@ -980,7 +987,7 @@ func formatPermissionDiff(action discord.AuditLogEvent, oldAllow, oldDeny, newAl
 // crossPostToModLog posts embed in user's mod log thread in the background:
 // finding the thread can take a scan of the forum, longer than an interaction
 // can wait for its response.
-func (b *Bot) crossPostToModLog(guildID snowflake.ID, user discord.User, embed discord.Embed) {
+func (b *Bot) crossPostToModLog(ctx context.Context, guildID snowflake.ID, user discord.User, embed discord.Embed) {
 	st := b.modLog.get(guildID)
 	if st == nil {
 		return
@@ -991,18 +998,19 @@ func (b *Bot) crossPostToModLog(guildID snowflake.ID, user discord.User, embed d
 	if channelID == 0 {
 		return
 	}
-	go func() {
-		if _, _, err := b.postToModLogThread(channelID, user, discord.MessageCreate{
+	go func(ctx context.Context) {
+		if _, _, err := b.postToModLogThread(ctx, channelID, user, discord.MessageCreate{
 			Embeds: []discord.Embed{embed},
 		}); err != nil {
 			b.Log.Error("Failed to cross-post to mod log thread", "guild_id", guildID, "user_id", user.ID, "error", err)
 		}
-	}()
+	}(context.WithoutCancel(ctx))
 }
 
 // --- Channel events ---
 
 func (b *Bot) onChannelCreate(e *events.GuildChannelCreate) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title: "Channel Created",
 		Color: colorGreen,
@@ -1012,11 +1020,12 @@ func (b *Bot) onChannelCreate(e *events.GuildChannelCreate) {
 			{Name: "Type", Value: channelTypeName(e.Channel.Type()), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
-	b.checkChannelRename(e)
+	ctx := context.Background()
+	b.checkChannelRename(ctx, e)
 
 	var fields []discord.EmbedField
 	// A channel becoming visible to (or hidden from) the bot changes its name,
@@ -1059,7 +1068,7 @@ func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
 		Color:  colorYellow,
 		Fields: fields,
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 // Channel delete is handled by the audit log handler (handleChannelAuditEntry)
@@ -1068,6 +1077,7 @@ func (b *Bot) onChannelUpdate(e *events.GuildChannelUpdate) {
 // --- Thread events ---
 
 func (b *Bot) onThreadCreate(e *events.ThreadCreate) {
+	ctx := context.Background()
 	// THREAD_CREATE is also sent when the bot is added to an existing thread.
 	if !e.NewlyCreated {
 		return
@@ -1083,14 +1093,15 @@ func (b *Bot) onThreadCreate(e *events.ThreadCreate) {
 			{Name: "Creator", Value: userMention(e.Thread.OwnerID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 func (b *Bot) onThreadUpdate(e *events.ThreadUpdate) {
+	ctx := context.Background()
 	if e.OldThread.ID() == 0 {
 		return
 	}
-	b.checkThreadRename(e)
+	b.checkThreadRename(ctx, e)
 
 	var fields []discord.EmbedField
 	if isChannelRename(e.OldThread.Name(), e.Thread.Name()) {
@@ -1132,10 +1143,11 @@ func (b *Bot) onThreadUpdate(e *events.ThreadUpdate) {
 		Color:  colorYellow,
 		Fields: fields,
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title: "Thread Deleted",
 		Color: colorRed,
@@ -1144,12 +1156,13 @@ func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
 			{Name: "Parent", Value: channelMention(e.ParentID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 // --- Emoji events ---
 
 func (b *Bot) onEmojiCreate(e *events.EmojiCreate) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title: "Emoji Created",
 		Color: colorGreen,
@@ -1163,10 +1176,11 @@ func (b *Bot) onEmojiCreate(e *events.EmojiCreate) {
 			Name: "Animated", Value: "Yes", Inline: boolPtr(true),
 		})
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 func (b *Bot) onEmojiUpdate(e *events.EmojiUpdate) {
+	ctx := context.Background()
 	if e.OldEmoji.ID == 0 {
 		return
 	}
@@ -1188,10 +1202,11 @@ func (b *Bot) onEmojiUpdate(e *events.EmojiUpdate) {
 		Color:  colorYellow,
 		Fields: fields,
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 func (b *Bot) onEmojiDelete(e *events.EmojiDelete) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title: "Emoji Deleted",
 		Color: colorRed,
@@ -1200,12 +1215,13 @@ func (b *Bot) onEmojiDelete(e *events.EmojiDelete) {
 			{Name: "ID", Value: fmt.Sprintf("`%d`", e.Emoji.ID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 // --- Sticker events ---
 
 func (b *Bot) onStickerCreate(e *events.StickerCreate) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title: "Sticker Created",
 		Color: colorGreen,
@@ -1214,10 +1230,11 @@ func (b *Bot) onStickerCreate(e *events.StickerCreate) {
 			{Name: "ID", Value: fmt.Sprintf("`%d`", e.Sticker.ID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 func (b *Bot) onStickerUpdate(e *events.StickerUpdate) {
+	ctx := context.Background()
 	if e.OldSticker.ID == 0 {
 		return
 	}
@@ -1245,10 +1262,11 @@ func (b *Bot) onStickerUpdate(e *events.StickerUpdate) {
 		Color:  colorYellow,
 		Fields: fields,
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 func (b *Bot) onStickerDelete(e *events.StickerDelete) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title: "Sticker Deleted",
 		Color: colorRed,
@@ -1257,12 +1275,13 @@ func (b *Bot) onStickerDelete(e *events.StickerDelete) {
 			{Name: "ID", Value: fmt.Sprintf("`%d`", e.Sticker.ID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 // --- Stage Instance events ---
 
 func (b *Bot) onStageInstanceCreate(e *events.StageInstanceCreate) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title: "Stage Started",
 		Color: colorGreen,
@@ -1271,10 +1290,11 @@ func (b *Bot) onStageInstanceCreate(e *events.StageInstanceCreate) {
 			{Name: "Channel", Value: channelMention(e.StageInstance.ChannelID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.StageInstance.GuildID, embed)
+	b.postEventLog(ctx, e.StageInstance.GuildID, embed)
 }
 
 func (b *Bot) onStageInstanceUpdate(e *events.StageInstanceUpdate) {
+	ctx := context.Background()
 	if e.OldStageInstance.ID == 0 {
 		return
 	}
@@ -1296,10 +1316,11 @@ func (b *Bot) onStageInstanceUpdate(e *events.StageInstanceUpdate) {
 		Color:  colorYellow,
 		Fields: fields,
 	}
-	b.postEventLog(e.StageInstance.GuildID, embed)
+	b.postEventLog(ctx, e.StageInstance.GuildID, embed)
 }
 
 func (b *Bot) onStageInstanceDelete(e *events.StageInstanceDelete) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title: "Stage Ended",
 		Color: colorRed,
@@ -1308,12 +1329,13 @@ func (b *Bot) onStageInstanceDelete(e *events.StageInstanceDelete) {
 			{Name: "Channel", Value: channelMention(e.StageInstance.ChannelID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.StageInstance.GuildID, embed)
+	b.postEventLog(ctx, e.StageInstance.GuildID, embed)
 }
 
 // --- Scheduled Event events ---
 
 func (b *Bot) onScheduledEventCreate(e *events.GuildScheduledEventCreate) {
+	ctx := context.Background()
 	fields := []discord.EmbedField{
 		{Name: "Name", Value: e.GuildScheduled.Name, Inline: boolPtr(true)},
 		{Name: "Start", Value: fmt.Sprintf("<t:%d:F>", e.GuildScheduled.ScheduledStartTime.Unix()), Inline: boolPtr(true)},
@@ -1323,10 +1345,11 @@ func (b *Bot) onScheduledEventCreate(e *events.GuildScheduledEventCreate) {
 		Color:  colorGreen,
 		Fields: fields,
 	}
-	b.postEventLog(e.GuildScheduled.GuildID, embed)
+	b.postEventLog(ctx, e.GuildScheduled.GuildID, embed)
 }
 
 func (b *Bot) onScheduledEventUpdate(e *events.GuildScheduledEventUpdate) {
+	ctx := context.Background()
 	if e.OldGuildScheduled.ID == 0 {
 		return
 	}
@@ -1355,10 +1378,11 @@ func (b *Bot) onScheduledEventUpdate(e *events.GuildScheduledEventUpdate) {
 		Color:  colorYellow,
 		Fields: fields,
 	}
-	b.postEventLog(e.GuildScheduled.GuildID, embed)
+	b.postEventLog(ctx, e.GuildScheduled.GuildID, embed)
 }
 
 func (b *Bot) onScheduledEventDelete(e *events.GuildScheduledEventDelete) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title: "Scheduled Event Deleted",
 		Color: colorRed,
@@ -1366,7 +1390,7 @@ func (b *Bot) onScheduledEventDelete(e *events.GuildScheduledEventDelete) {
 			{Name: "Name", Value: e.GuildScheduled.Name, Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.GuildScheduled.GuildID, embed)
+	b.postEventLog(ctx, e.GuildScheduled.GuildID, embed)
 }
 
 func scheduledEventStatusName(s discord.ScheduledEventStatus) string {
@@ -1387,6 +1411,7 @@ func scheduledEventStatusName(s discord.ScheduledEventStatus) string {
 // --- Soundboard Sound events ---
 
 func (b *Bot) onSoundboardSoundCreate(e *events.GuildSoundboardSoundCreate) {
+	ctx := context.Background()
 	guildID := snowflake.ID(0)
 	if e.SoundboardSound.GuildID != nil {
 		guildID = *e.SoundboardSound.GuildID
@@ -1399,10 +1424,11 @@ func (b *Bot) onSoundboardSoundCreate(e *events.GuildSoundboardSoundCreate) {
 			{Name: "ID", Value: fmt.Sprintf("`%d`", e.SoundboardSound.SoundID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
 func (b *Bot) onSoundboardSoundUpdate(e *events.GuildSoundboardSoundUpdate) {
+	ctx := context.Background()
 	if e.OldGuildSoundboardSound.SoundID == 0 {
 		return
 	}
@@ -1428,10 +1454,11 @@ func (b *Bot) onSoundboardSoundUpdate(e *events.GuildSoundboardSoundUpdate) {
 		Color:  colorYellow,
 		Fields: fields,
 	}
-	b.postEventLog(guildID, embed)
+	b.postEventLog(ctx, guildID, embed)
 }
 
 func (b *Bot) onSoundboardSoundDelete(e *events.GuildSoundboardSoundDelete) {
+	ctx := context.Background()
 	embed := discord.Embed{
 		Title: "Soundboard Sound Deleted",
 		Color: colorRed,
@@ -1439,7 +1466,7 @@ func (b *Bot) onSoundboardSoundDelete(e *events.GuildSoundboardSoundDelete) {
 			{Name: "Sound ID", Value: fmt.Sprintf("`%d`", e.SoundID), Inline: boolPtr(true)},
 		},
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 // --- Role events ---
@@ -1447,6 +1474,7 @@ func (b *Bot) onSoundboardSoundDelete(e *events.GuildSoundboardSoundDelete) {
 // which includes moderator + reason info.
 
 func (b *Bot) onRoleUpdate(e *events.RoleUpdate) {
+	ctx := context.Background()
 	var fields []discord.EmbedField
 	if e.OldRole.Name != e.Role.Name {
 		fields = append(fields,
@@ -1507,12 +1535,13 @@ func (b *Bot) onRoleUpdate(e *events.RoleUpdate) {
 		Color:  colorYellow,
 		Fields: fields,
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 // --- Server events ---
 
 func (b *Bot) onGuildUpdate(e *events.GuildUpdate) {
+	ctx := context.Background()
 	var fields []discord.EmbedField
 	if e.OldGuild.Name != e.Guild.Name {
 		fields = append(fields,
@@ -1590,7 +1619,7 @@ func (b *Bot) onGuildUpdate(e *events.GuildUpdate) {
 		Color:  colorYellow,
 		Fields: fields,
 	}
-	b.postEventLog(e.GuildID, embed)
+	b.postEventLog(ctx, e.GuildID, embed)
 }
 
 // --- Helpers ---
@@ -1635,7 +1664,7 @@ func formatPartialRoleMentions(roles []discord.PartialRole) string {
 
 // --- /config eventlog handlers ---
 
-func (b *Bot) handleEventLogConfig(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleEventLogConfig(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -1648,7 +1677,7 @@ func (b *Bot) handleEventLogConfig(e *events.ApplicationCommandInteractionCreate
 
 	st := b.eventLog.getOrCreate(*guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "The event log config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
+		botutil.RespondEphemeral(ctx, e, "The event log config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
 		return
 	}
 
@@ -1659,26 +1688,26 @@ func (b *Bot) handleEventLogConfig(e *events.ApplicationCommandInteractionCreate
 
 	switch *subCmd {
 	case "set":
-		b.handleEventLogConfigSet(e, *guildID, st)
+		b.handleEventLogConfigSet(ctx, e, *guildID, st)
 	case "show":
-		b.handleEventLogConfigShow(e, st)
+		b.handleEventLogConfigShow(ctx, e, st)
 	case "clear":
-		b.handleEventLogConfigClear(e, *guildID, st)
+		b.handleEventLogConfigClear(ctx, e, *guildID, st)
 	}
 }
 
-func (b *Bot) handleEventLogConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *eventLogState) {
+func (b *Bot) handleEventLogConfigSet(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *eventLogState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
 	ch, ok := data.OptChannel("channel")
 	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a channel.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a channel.")
 		return
 	}
 	// The option restricts the picker, but a command registered before it
 	// did, or a client that ignores it, can still send any channel.
 	if !slices.Contains(logChannelTypes, ch.Type) {
-		botutil.RespondEphemeral(e, "The event log must be a text or announcement channel.")
+		botutil.RespondEphemeral(ctx, e, "The event log must be a text or announcement channel.")
 		return
 	}
 
@@ -1688,16 +1717,16 @@ func (b *Bot) handleEventLogConfigSet(e *events.ApplicationCommandInteractionCre
 	st.ChannelID = ch.ID
 	st.mu.Unlock()
 
-	if err := b.eventLog.persist(guildID); err != nil {
+	if err := b.eventLog.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist eventlog config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Event log channel set to <#%d>.", ch.ID))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("Event log channel set to <#%d>.", ch.ID))
 }
 
-func (b *Bot) handleEventLogConfigShow(e *events.ApplicationCommandInteractionCreate, st *eventLogState) {
+func (b *Bot) handleEventLogConfigShow(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *eventLogState) {
 	b.Log.Info("Eventlog config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
@@ -1705,26 +1734,26 @@ func (b *Bot) handleEventLogConfigShow(e *events.ApplicationCommandInteractionCr
 	st.mu.Unlock()
 
 	if channelID == 0 {
-		botutil.RespondEphemeral(e, "**Event log channel:** Not set")
+		botutil.RespondEphemeral(ctx, e, "**Event log channel:** Not set")
 		return
 	}
-	botutil.RespondEphemeral(e, fmt.Sprintf("**Event log channel:** <#%d>", channelID))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("**Event log channel:** <#%d>", channelID))
 }
 
-func (b *Bot) handleEventLogConfigClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *eventLogState) {
+func (b *Bot) handleEventLogConfigClear(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *eventLogState) {
 	b.Log.Info("Eventlog config clear", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
 	st.ChannelID = 0
 	st.mu.Unlock()
 
-	if err := b.eventLog.persist(guildID); err != nil {
+	if err := b.eventLog.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist eventlog config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, "Event logging disabled.")
+	botutil.RespondEphemeral(ctx, e, "Event logging disabled.")
 }
 
 func channelTypeName(t discord.ChannelType) string {

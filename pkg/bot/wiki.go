@@ -1,17 +1,19 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
-func (b *Bot) handleWiki(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleWiki(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -19,7 +21,7 @@ func (b *Bot) handleWiki(e *events.ApplicationCommandInteractionCreate) {
 
 	page := data.String("page")
 	if page == "" {
-		botutil.RespondEphemeral(e, "Please provide a page name.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a page name.")
 		return
 	}
 
@@ -29,25 +31,25 @@ func (b *Bot) handleWiki(e *events.ApplicationCommandInteractionCreate) {
 		if link.Shortcut == page {
 			e.CreateMessage(discord.MessageCreate{
 				Content: link.URL,
-			})
+			}, rest.WithCtx(ctx))
 			return
 		}
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Can't find a link for page %s!", page))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("Can't find a link for page %s!", page))
 }
 
-func (b *Bot) handleAutocomplete(e *events.AutocompleteInteractionCreate) {
+func (b *Bot) handleAutocomplete(ctx context.Context, e *events.AutocompleteInteractionCreate) {
 	switch e.Data.CommandName {
 	case "s":
-		b.handleShortcutAutocomplete(e)
+		b.handleShortcutAutocomplete(ctx, e)
 		return
 	case "temprole":
-		b.handleTempRoleAutocomplete(e)
+		b.handleTempRoleAutocomplete(ctx, e)
 		return
 	case "config":
 		if e.Data.SubCommandGroupName != nil && *e.Data.SubCommandGroupName == "shortcuts" {
-			b.handleShortcutAutocomplete(e)
+			b.handleShortcutAutocomplete(ctx, e)
 		}
 		return
 	}
@@ -79,5 +81,5 @@ func (b *Bot) handleAutocomplete(e *events.AutocompleteInteractionCreate) {
 		}
 	}
 
-	e.AutocompleteResult(choices)
+	e.AutocompleteResult(choices, rest.WithCtx(ctx))
 }

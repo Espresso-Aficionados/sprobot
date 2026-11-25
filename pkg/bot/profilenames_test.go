@@ -64,7 +64,7 @@ func nameMessage(userID snowflake.ID, username string, nick *string) discord.Mes
 // syncAndWait runs syncProfileName and waits for any update it started.
 func syncAndWait(t *testing.T, b *Bot, msg discord.Message) *profileOwner {
 	t.Helper()
-	b.syncProfileName(1, msg)
+	b.syncProfileName(t.Context(), 1, msg)
 	key := profileKey("1", msg.Author.ID.String())
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -138,10 +138,10 @@ func TestSyncProfileNameDoesNotRecreateDeletedProfile(t *testing.T) {
 
 func TestSyncProfileNameIgnoresOtherGuildsAndWebhooks(t *testing.T) {
 	b, _ := newProfileNamesBot(t)
-	b.syncProfileName(9, nameMessage(5, "dave", nil))
+	b.syncProfileName(t.Context(), 9, nameMessage(5, "dave", nil))
 	webhook := nameMessage(6, "hook", nil)
 	webhook.WebhookID = &webhook.Author.ID
-	b.syncProfileName(1, webhook)
+	b.syncProfileName(t.Context(), 1, webhook)
 	if len(b.profileNames.owners) != 0 {
 		t.Errorf("tracked %v", b.profileNames.owners)
 	}
@@ -203,7 +203,7 @@ func profileRequests(fake *testutil.FakeS3, userID string) []string {
 func TestSyncProfileNameAfterListing(t *testing.T) {
 	b, fake := newProfileNamesBot(t)
 	fake.Objects[profileObject(sprobot.ProfileTemplate, "2")] = []byte(`{"Grinder":"Niche"}`)
-	b.loadProfileOwners([]snowflake.ID{1})
+	b.loadProfileOwners(t.Context(), []snowflake.ID{1})
 
 	// An author without a profile costs no S3 reads.
 	if o := syncAndWait(t, b, nameMessage(3, "bob", nil)); o == nil || !o.none {
@@ -229,7 +229,7 @@ func TestSyncProfileNameAfterListingAndDelete(t *testing.T) {
 	b, fake := newProfileNamesBot(t)
 	fake.Objects[profileObject(sprobot.ProfileTemplate, "4")] = []byte(`{}`)
 	fake.Objects[profileObject(sprobot.RoasterTemplate, "4")] = []byte(`{}`)
-	b.loadProfileOwners([]snowflake.ID{1})
+	b.loadProfileOwners(t.Context(), []snowflake.ID{1})
 
 	// Deleting one profile must not make the other look absent.
 	fake.Mu.Lock()
@@ -246,7 +246,7 @@ func TestSyncProfileNameAfterListingAndDelete(t *testing.T) {
 func TestSyncProfileNameWhenListingFails(t *testing.T) {
 	b, fake := newProfileNamesBot(t)
 	fake.Fail["/test-bucket"] = http.StatusForbidden
-	b.loadProfileOwners([]snowflake.ID{1})
+	b.loadProfileOwners(t.Context(), []snowflake.ID{1})
 	fake.Mu.Lock()
 	delete(fake.Fail, "/test-bucket")
 	fake.Objects[profileObject(sprobot.ProfileTemplate, "5")] = []byte(`{}`)

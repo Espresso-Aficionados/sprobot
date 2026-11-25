@@ -55,10 +55,10 @@ func defaultModLogConfig() map[snowflake.ID]snowflake.ID {
 	}
 }
 
-func (b *Bot) handleModLogMenu(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleModLogMenu(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.MessageCommandInteractionData)
 	if !ok {
-		botutil.RespondEphemeral(e, "Oops! Something went wrong.")
+		botutil.RespondEphemeral(ctx, e, "Oops! Something went wrong.")
 		return
 	}
 	msg := data.TargetMessage()
@@ -85,26 +85,26 @@ func (b *Bot) handleModLogMenu(e *events.ApplicationCommandInteractionCreate) {
 				},
 			),
 		},
-	})
+	}, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to respond with mod log modal", "error", err)
 	}
 }
 
-func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, channelID, messageID snowflake.ID) {
+func (b *Bot) handleModLogModalSubmit(ctx context.Context, e *events.ModalSubmitInteractionCreate, channelID, messageID snowflake.ID) {
 	// Defer the response since this might take a while
-	if err := e.DeferCreateMessage(true); err != nil {
+	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer mod log modal response", "error", err)
 		return
 	}
-	followup := func(content string) { botutil.FollowupEphemeral(b.Client, e.Token(), content) }
+	followup := func(content string) { botutil.FollowupEphemeral(ctx, b.Client, e.Token(), content) }
 
 	// Use the message captured when the menu was opened, so it can still be
 	// saved if it is deleted while the mod writes the note. Fall back to REST
 	// for modals submitted across a bot restart.
 	msg, ok := b.modLogPending.Get(messageID)
 	if !ok {
-		fetched, err := b.Client.Rest.GetMessage(channelID, messageID)
+		fetched, err := b.Client.Rest.GetMessage(channelID, messageID, rest.WithCtx(ctx))
 		if err != nil {
 			b.Log.Error("Failed to fetch original message", "error", err)
 			followup("Couldn't fetch the message. It may have been deleted while the bot restarted.")
@@ -128,7 +128,7 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 		followup("No mod log channel is configured; set one with /config modlog set.")
 		return
 	}
-	if _, err := b.findOrCreateModLogThread(modLogChannelID, msg.Author); err != nil {
+	if _, err := b.findOrCreateModLogThread(ctx, modLogChannelID, msg.Author); err != nil {
 		b.Log.Error("Failed to find mod log thread", "guild_id", guildID, "user_id", msg.Author.ID, "error", err)
 		followup("Couldn't find or create the user's mod log thread, so nothing was saved. Try again in a minute.")
 		return
@@ -136,7 +136,7 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 
 	var saved []savedModFile
 	if len(msg.Attachments) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), botutil.DeferredWorkBudget)
+		ctx, cancel := context.WithTimeout(ctx, botutil.DeferredWorkBudget)
 		guildStr := guildID.String()
 		saved = saveModFiles(ctx, msg.Attachments, modFileSaveConcurrency, func(ctx context.Context, att discord.Attachment) savedModFile {
 			return b.saveModAttachment(ctx, guildStr, att)
@@ -153,26 +153,26 @@ func (b *Bot) handleModLogModalSubmit(e *events.ModalSubmitInteractionCreate, ch
 
 	embed := buildModLogEmbed(modLogEntry{
 		msg:         msg,
-		channelName: b.channelNameOrID(channelID),
+		channelName: b.channelNameOrID(ctx, channelID),
 		requester:   e.User(),
 		attachments: lines,
 		link:        messageLink(guildID, channelID, messageID),
 		note:        e.Data.Text("mod_note"),
 		archivedAt:  time.Now().UTC(),
 	})
-	threadID, sentMsg, err := b.postModLogEntry(modLogChannelID, msg.Author, embed, keys)
+	threadID, sentMsg, err := b.postModLogEntry(ctx, modLogChannelID, msg.Author, embed, keys)
 	if err != nil {
 		b.Log.Error("Failed to send mod log message", "guild_id", guildID, "error", err)
 		followup("Oops! Something went wrong posting to the mod log.")
 		return
 	}
 
-	notice := modLogSavedNotice(msg.Author.Username, b.channelNameOrID(modLogChannelID), b.channelNameOrID(threadID),
+	notice := modLogSavedNotice(msg.Author.Username, b.channelNameOrID(ctx, modLogChannelID), b.channelNameOrID(ctx, threadID),
 		messageLink(guildID, threadID, sentMsg.ID), len(msg.Attachments)-len(keys), len(msg.Attachments))
 	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{notice},
 		Flags:  discord.MessageFlagEphemeral,
-	}); err != nil {
+	}, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to send mod log confirmation", "error", err)
 	}
 }
@@ -394,10 +394,10 @@ func attachmentFields(lines []string) []discord.EmbedField {
 // entry wasn't posted (its thread couldn't be found or created, or Discord
 // rejected the post), the files saved for it are deleted, since nothing links
 // to them. Other failures may have posted it anyway, so the files are kept.
-func (b *Bot) postModLogEntry(forumID snowflake.ID, author discord.User, embed discord.Embed, keys []string) (snowflake.ID, *discord.Message, error) {
-	threadID, sent, err := b.postToModLogThread(forumID, author, discord.MessageCreate{Embeds: []discord.Embed{embed}})
+func (b *Bot) postModLogEntry(ctx context.Context, forumID snowflake.ID, author discord.User, embed discord.Embed, keys []string) (snowflake.ID, *discord.Message, error) {
+	threadID, sent, err := b.postToModLogThread(ctx, forumID, author, discord.MessageCreate{Embeds: []discord.Embed{embed}})
 	if err != nil && len(keys) > 0 && (errors.Is(err, errNotSent) || !mayHavePosted(err)) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
 		if delErr := b.S3.DeleteKeys(ctx, keys...); delErr != nil {
 			b.Log.Error("Failed to delete files of an unposted mod log entry", "keys", keys, "error", delErr)
@@ -420,13 +420,13 @@ func mayHavePosted(err error) bool {
 // creating the thread if needed. If the thread turns out to be gone, the forum
 // is rescanned and the post retried once. Failures to find or create the
 // thread are wrapped in errNotSent.
-func (b *Bot) postToModLogThread(forumID snowflake.ID, author discord.User, msg discord.MessageCreate) (snowflake.ID, *discord.Message, error) {
+func (b *Bot) postToModLogThread(ctx context.Context, forumID snowflake.ID, author discord.User, msg discord.MessageCreate) (snowflake.ID, *discord.Message, error) {
 	for attempt := 0; ; attempt++ {
-		threadID, err := b.findOrCreateModLogThread(forumID, author)
+		threadID, err := b.findOrCreateModLogThread(ctx, forumID, author)
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: %w", errNotSent, err)
 		}
-		sent, err := b.Client.Rest.CreateMessage(threadID, msg)
+		sent, err := b.Client.Rest.CreateMessage(threadID, msg, rest.WithCtx(ctx))
 		if err == nil {
 			return threadID, sent, nil
 		}
@@ -442,11 +442,11 @@ func (b *Bot) postToModLogThread(forumID snowflake.ID, author discord.User, msg 
 // forum, creating it if there is none. Calls for the same user are serialized
 // so that concurrent posts about them can't both create a thread. A failure to
 // list the forum's threads is returned rather than risking a duplicate.
-func (b *Bot) findOrCreateModLogThread(forumID snowflake.ID, author discord.User) (snowflake.ID, error) {
+func (b *Bot) findOrCreateModLogThread(ctx context.Context, forumID snowflake.ID, author discord.User) (snowflake.ID, error) {
 	unlock := b.modLogThreads.lock(modLogLockKey{forumID: forumID, userID: author.ID})
 	defer unlock()
 
-	threadID, found, err := b.findModLogThread(forumID, author)
+	threadID, found, err := b.findModLogThread(ctx, forumID, author)
 	if err != nil || found {
 		return threadID, err
 	}
@@ -460,7 +460,7 @@ func (b *Bot) findOrCreateModLogThread(forumID snowflake.ID, author discord.User
 		Message: discord.MessageCreate{
 			Content: fmt.Sprintf("Topic for thread about @%s.", author.Username),
 		},
-	})
+	}, rest.WithCtx(ctx))
 	if err != nil {
 		return 0, fmt.Errorf("creating mod log thread: %w", err)
 	}
@@ -470,7 +470,7 @@ func (b *Bot) findOrCreateModLogThread(forumID snowflake.ID, author discord.User
 
 // findModLogThread looks author up in the forum's thread index, scanning the
 // forum first if it isn't indexed yet.
-func (b *Bot) findModLogThread(forumID snowflake.ID, author discord.User) (snowflake.ID, bool, error) {
+func (b *Bot) findModLogThread(ctx context.Context, forumID snowflake.ID, author discord.User) (snowflake.ID, bool, error) {
 	if threadID, found, indexed := b.modLogThreads.find(forumID, author); indexed {
 		return threadID, found, nil
 	}
@@ -484,7 +484,7 @@ func (b *Bot) findModLogThread(forumID snowflake.ID, author discord.User) (snowf
 		if attempt == 3 {
 			return 0, false, errors.New("the mod log forum kept changing while it was scanned")
 		}
-		if err := b.scanModLogForum(forumID); err != nil {
+		if err := b.scanModLogForum(ctx, forumID); err != nil {
 			return 0, false, err
 		}
 	}
@@ -493,13 +493,13 @@ func (b *Bot) findModLogThread(forumID snowflake.ID, author discord.User) (snowf
 // scanModLogForum lists the forum's threads and indexes them. Threads created
 // or renamed during the listing are added to the result; a thread deleted
 // during it, or a reset, discards the result.
-func (b *Bot) scanModLogForum(forumID snowflake.ID) error {
-	forum, err := b.modLogForumChannel(forumID)
+func (b *Bot) scanModLogForum(ctx context.Context, forumID snowflake.ID) error {
+	forum, err := b.modLogForumChannel(ctx, forumID)
 	if err != nil {
 		return err
 	}
 	b.modLogThreads.startScan(forumID)
-	threads, err := b.listModLogThreads(forum)
+	threads, err := b.listModLogThreads(ctx, forum)
 	if err != nil {
 		b.modLogThreads.abortScan(forumID)
 		return err
@@ -510,8 +510,8 @@ func (b *Bot) scanModLogForum(forumID snowflake.ID) error {
 
 // modLogForumChannel returns the mod log forum from the channel cache, or
 // from REST if it isn't cached.
-func (b *Bot) modLogForumChannel(forumID snowflake.ID) (discord.GuildForumChannel, error) {
-	ch, err := b.cachedChannel(forumID)
+func (b *Bot) modLogForumChannel(ctx context.Context, forumID snowflake.ID) (discord.GuildForumChannel, error) {
+	ch, err := b.cachedChannel(ctx, forumID)
 	if err != nil {
 		return discord.GuildForumChannel{}, fmt.Errorf("fetching mod log channel: %w", err)
 	}
@@ -525,7 +525,7 @@ func (b *Bot) modLogForumChannel(forumID snowflake.ID) (discord.GuildForumChanne
 // listModLogThreads lists every thread in the mod log forum: active ones
 // first, then archived ones, most recently archived first. On error it also
 // returns the threads listed before it.
-func (b *Bot) listModLogThreads(forum discord.GuildForumChannel) ([]discord.GuildThread, error) {
+func (b *Bot) listModLogThreads(ctx context.Context, forum discord.GuildForumChannel) ([]discord.GuildThread, error) {
 	var threads []discord.GuildThread
 	seen := map[snowflake.ID]bool{}
 	add := func(t discord.GuildThread) {
@@ -535,7 +535,7 @@ func (b *Bot) listModLogThreads(forum discord.GuildForumChannel) ([]discord.Guil
 		}
 	}
 
-	active, err := b.Client.Rest.GetActiveGuildThreads(forum.GuildID())
+	active, err := b.Client.Rest.GetActiveGuildThreads(forum.GuildID(), rest.WithCtx(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("listing active threads: %w", err)
 	}
@@ -545,7 +545,7 @@ func (b *Bot) listModLogThreads(forum discord.GuildForumChannel) ([]discord.Guil
 		}
 	}
 
-	var cursor []rest.RequestOpt
+	cursor := []rest.RequestOpt{rest.WithCtx(ctx)}
 	for {
 		page, err := b.Client.Rest.GetPublicArchivedThreads(forum.ID(), time.Time{}, 100, cursor...)
 		if err != nil {
@@ -557,7 +557,7 @@ func (b *Bot) listModLogThreads(forum discord.GuildForumChannel) ([]discord.Guil
 		if !page.HasMore || len(page.Threads) == 0 {
 			return threads, nil
 		}
-		cursor = []rest.RequestOpt{archivedBefore(page.Threads[len(page.Threads)-1].ThreadMetadata.ArchiveTimestamp)}
+		cursor = []rest.RequestOpt{rest.WithCtx(ctx), archivedBefore(page.Threads[len(page.Threads)-1].ThreadMetadata.ArchiveTimestamp)}
 	}
 }
 
@@ -571,16 +571,16 @@ func archivedBefore(t time.Time) rest.RequestOpt {
 
 // cachedChannel returns a channel from the cache, or from REST if it isn't
 // cached.
-func (b *Bot) cachedChannel(channelID snowflake.ID) (discord.Channel, error) {
+func (b *Bot) cachedChannel(ctx context.Context, channelID snowflake.ID) (discord.Channel, error) {
 	if ch, ok := b.Client.Caches.Channel(channelID); ok {
 		return ch, nil
 	}
-	return b.Client.Rest.GetChannel(channelID)
+	return b.Client.Rest.GetChannel(channelID, rest.WithCtx(ctx))
 }
 
 // channelNameOrID returns a channel's name, or its ID if it can't be found.
-func (b *Bot) channelNameOrID(channelID snowflake.ID) string {
-	ch, err := b.cachedChannel(channelID)
+func (b *Bot) channelNameOrID(ctx context.Context, channelID snowflake.ID) string {
+	ch, err := b.cachedChannel(ctx, channelID)
 	if err != nil {
 		b.Log.Warn("Failed to look up channel name", "channel_id", channelID, "error", err)
 		return channelID.String()
@@ -813,7 +813,7 @@ func messageLink(guildID, channelID, messageID snowflake.ID) string {
 
 // --- /config modlog handlers ---
 
-func (b *Bot) handleModLogConfig(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleModLogConfig(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -826,7 +826,7 @@ func (b *Bot) handleModLogConfig(e *events.ApplicationCommandInteractionCreate) 
 
 	st := b.modLog.getOrCreate(*guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "The mod log config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
+		botutil.RespondEphemeral(ctx, e, "The mod log config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
 		return
 	}
 
@@ -837,26 +837,26 @@ func (b *Bot) handleModLogConfig(e *events.ApplicationCommandInteractionCreate) 
 
 	switch *subCmd {
 	case "set":
-		b.handleModLogConfigSet(e, *guildID, st)
+		b.handleModLogConfigSet(ctx, e, *guildID, st)
 	case "show":
-		b.handleModLogConfigShow(e, st)
+		b.handleModLogConfigShow(ctx, e, st)
 	case "clear":
-		b.handleModLogConfigClear(e, *guildID, st)
+		b.handleModLogConfigClear(ctx, e, *guildID, st)
 	case "audit":
-		b.handleModLogAudit(e, *guildID, st)
+		b.handleModLogAudit(ctx, e, *guildID, st)
 	}
 }
 
-func (b *Bot) handleModLogConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *modLogState) {
+func (b *Bot) handleModLogConfigSet(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *modLogState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
 	ch, ok := data.OptChannel("channel")
 	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a channel.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a channel.")
 		return
 	}
 	if ch.Type != discord.ChannelTypeGuildForum {
-		botutil.RespondEphemeral(e, fmt.Sprintf("<#%d> isn't a forum channel. The mod log needs a forum, where each user gets their own post.", ch.ID))
+		botutil.RespondEphemeral(ctx, e, fmt.Sprintf("<#%d> isn't a forum channel. The mod log needs a forum, where each user gets their own post.", ch.ID))
 		return
 	}
 
@@ -866,16 +866,16 @@ func (b *Bot) handleModLogConfigSet(e *events.ApplicationCommandInteractionCreat
 	st.ChannelID = ch.ID
 	st.mu.Unlock()
 
-	if err := b.modLog.persist(guildID); err != nil {
+	if err := b.modLog.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist modlog config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Mod log forum channel set to <#%d>.", ch.ID))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("Mod log forum channel set to <#%d>.", ch.ID))
 }
 
-func (b *Bot) handleModLogConfigShow(e *events.ApplicationCommandInteractionCreate, st *modLogState) {
+func (b *Bot) handleModLogConfigShow(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *modLogState) {
 	b.Log.Info("Modlog config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
@@ -883,26 +883,26 @@ func (b *Bot) handleModLogConfigShow(e *events.ApplicationCommandInteractionCrea
 	st.mu.Unlock()
 
 	if channelID == 0 {
-		botutil.RespondEphemeral(e, "**Mod log channel:** Not set")
+		botutil.RespondEphemeral(ctx, e, "**Mod log channel:** Not set")
 		return
 	}
-	botutil.RespondEphemeral(e, fmt.Sprintf("**Mod log channel:** <#%d>", channelID))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("**Mod log channel:** <#%d>", channelID))
 }
 
-func (b *Bot) handleModLogConfigClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *modLogState) {
+func (b *Bot) handleModLogConfigClear(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *modLogState) {
 	b.Log.Info("Modlog config clear", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
 	st.ChannelID = 0
 	st.mu.Unlock()
 
-	if err := b.modLog.persist(guildID); err != nil {
+	if err := b.modLog.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist modlog config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, "Mod log disabled.")
+	botutil.RespondEphemeral(ctx, e, "Mod log disabled.")
 }
 
 var threadUserIDRegex = regexp.MustCompile(`- (\d+)\b`)
@@ -923,7 +923,7 @@ func parseThreadUserID(name string) snowflake.ID {
 	return id
 }
 
-func (b *Bot) handleModLogAudit(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *modLogState) {
+func (b *Bot) handleModLogAudit(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *modLogState) {
 	b.Log.Info("Modlog audit", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
@@ -931,31 +931,31 @@ func (b *Bot) handleModLogAudit(e *events.ApplicationCommandInteractionCreate, g
 	st.mu.Unlock()
 
 	if channelID == 0 {
-		botutil.RespondEphemeral(e, "Mod log channel is not configured.")
+		botutil.RespondEphemeral(ctx, e, "Mod log channel is not configured.")
 		return
 	}
 
-	if err := e.DeferCreateMessage(true); err != nil {
+	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer modlog audit response", "error", err)
 		return
 	}
 
-	forum, err := b.modLogForumChannel(channelID)
+	forum, err := b.modLogForumChannel(ctx, channelID)
 	if errors.Is(err, errNotForum) {
-		botutil.FollowupEphemeral(b.Client, e.Token(), "Mod log channel is not a forum channel.")
+		botutil.FollowupEphemeral(ctx, b.Client, e.Token(), "Mod log channel is not a forum channel.")
 		return
 	}
 	if err != nil {
 		b.Log.Error("Failed to get mod log channel for audit", "error", err)
-		botutil.FollowupEphemeral(b.Client, e.Token(), "Failed to access the mod log channel.")
+		botutil.FollowupEphemeral(ctx, b.Client, e.Token(), "Failed to access the mod log channel.")
 		return
 	}
 
-	threads, err := b.listModLogThreads(forum)
+	threads, err := b.listModLogThreads(ctx, forum)
 	if err != nil {
 		b.Log.Error("Failed to list mod log threads for audit", "guild_id", guildID, "listed", len(threads), "error", err)
 	}
-	botutil.FollowupEphemeral(b.Client, e.Token(), modLogAuditReport(threads, err != nil))
+	botutil.FollowupEphemeral(ctx, b.Client, e.Token(), modLogAuditReport(threads, err != nil))
 }
 
 // modLogAuditReport lists users with more than one mod log thread, and threads

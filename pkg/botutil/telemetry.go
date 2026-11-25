@@ -137,10 +137,11 @@ func CustomIDLabel(customID string, names []string) string {
 }
 
 // traceInteraction runs handle as one interaction, in a span named
-// "interaction <kind> <name>", and records its duration.
-func traceInteraction(kind, name string, handle func()) {
+// "interaction <kind> <name>", and records its duration. handle gets the
+// span's context.
+func traceInteraction(kind, name string, handle func(context.Context)) {
 	attrs := []attribute.KeyValue{interactionType.String(kind), interactionName.String(name)}
-	_, span := otel.Tracer(scope).Start(context.Background(), "interaction "+kind+" "+name,
+	ctx, span := otel.Tracer(scope).Start(context.Background(), "interaction "+kind+" "+name,
 		trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attrs...))
 	start := time.Now()
 	defer func() {
@@ -149,38 +150,38 @@ func traceInteraction(kind, name string, handle func()) {
 			d.Record(context.Background(), time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 		}
 	}()
-	handle()
+	handle(ctx)
 }
 
 // TraceCommands instruments an application command listener, labelled by
 // command name.
-func TraceCommands(h func(*events.ApplicationCommandInteractionCreate)) func(*events.ApplicationCommandInteractionCreate) {
+func TraceCommands(h func(context.Context, *events.ApplicationCommandInteractionCreate)) func(*events.ApplicationCommandInteractionCreate) {
 	return func(e *events.ApplicationCommandInteractionCreate) {
-		traceInteraction("command", commandLabel(e.Data.CommandName()), func() { h(e) })
+		traceInteraction("command", commandLabel(e.Data.CommandName()), func(ctx context.Context) { h(ctx, e) })
 	}
 }
 
 // TraceAutocomplete instruments an autocomplete listener, labelled by
 // command name.
-func TraceAutocomplete(h func(*events.AutocompleteInteractionCreate)) func(*events.AutocompleteInteractionCreate) {
+func TraceAutocomplete(h func(context.Context, *events.AutocompleteInteractionCreate)) func(*events.AutocompleteInteractionCreate) {
 	return func(e *events.AutocompleteInteractionCreate) {
-		traceInteraction("autocomplete", commandLabel(e.Data.CommandName), func() { h(e) })
+		traceInteraction("autocomplete", commandLabel(e.Data.CommandName), func(ctx context.Context) { h(ctx, e) })
 	}
 }
 
 // TraceComponents instruments a component listener, labelled by the custom
 // ID's prefix among names.
-func TraceComponents(names []string, h func(*events.ComponentInteractionCreate)) func(*events.ComponentInteractionCreate) {
+func TraceComponents(names []string, h func(context.Context, *events.ComponentInteractionCreate)) func(*events.ComponentInteractionCreate) {
 	return func(e *events.ComponentInteractionCreate) {
-		traceInteraction("component", CustomIDLabel(e.Data.CustomID(), names), func() { h(e) })
+		traceInteraction("component", CustomIDLabel(e.Data.CustomID(), names), func(ctx context.Context) { h(ctx, e) })
 	}
 }
 
 // TraceModals instruments a modal submit listener, labelled by the custom
 // ID's prefix among names.
-func TraceModals(names []string, h func(*events.ModalSubmitInteractionCreate)) func(*events.ModalSubmitInteractionCreate) {
+func TraceModals(names []string, h func(context.Context, *events.ModalSubmitInteractionCreate)) func(*events.ModalSubmitInteractionCreate) {
 	return func(e *events.ModalSubmitInteractionCreate) {
-		traceInteraction("modal", CustomIDLabel(e.Data.CustomID, names), func() { h(e) })
+		traceInteraction("modal", CustomIDLabel(e.Data.CustomID, names), func(ctx context.Context) { h(ctx, e) })
 	}
 }
 

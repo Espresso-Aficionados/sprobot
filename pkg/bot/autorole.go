@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -30,8 +31,9 @@ func defaultAutoRoleConfig() map[snowflake.ID]snowflake.ID {
 }
 
 func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
-	b.logMemberJoin(e.GuildID, e.Member)
-	b.sendWelcomeDM(e.GuildID, e.Member.User.ID)
+	ctx := context.Background()
+	b.logMemberJoin(ctx, e.GuildID, e.Member)
+	b.sendWelcomeDM(ctx, e.GuildID, e.Member.User.ID)
 
 	st := b.autoRole.get(e.GuildID)
 	if st == nil {
@@ -47,12 +49,12 @@ func (b *Bot) onMemberJoin(e *events.GuildMemberJoin) {
 		b.Log.Error("Refusing to assign auto-role on join", "user_id", e.Member.User.ID, "guild_id", e.GuildID, "role_id", roleID, "reason", reason)
 		return
 	}
-	if err := b.Client.Rest.AddMemberRole(e.GuildID, e.Member.User.ID, roleID, rest.WithReason("Auto-role on member join")); err != nil {
+	if err := b.Client.Rest.AddMemberRole(e.GuildID, e.Member.User.ID, roleID, rest.WithReason("Auto-role on member join"), rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to assign auto-role on join", "user_id", e.Member.User.ID, "guild_id", e.GuildID, "error", err)
 	}
 }
 
-func (b *Bot) ensureAutoRole(guildID snowflake.ID, msg discord.Message) {
+func (b *Bot) ensureAutoRole(ctx context.Context, guildID snowflake.ID, msg discord.Message) {
 	st := b.autoRole.get(guildID)
 	if st == nil {
 		return
@@ -74,7 +76,7 @@ func (b *Bot) ensureAutoRole(guildID snowflake.ID, msg discord.Message) {
 	if reason := b.grantBlocked(guildID, roleID); reason != "" {
 		err = errors.New(reason)
 	} else {
-		err = b.Client.Rest.AddMemberRole(guildID, userID, roleID, rest.WithReason("Auto-role on first message"))
+		err = b.Client.Rest.AddMemberRole(guildID, userID, roleID, rest.WithReason("Auto-role on first message"), rest.WithCtx(ctx))
 	}
 	st.mu.Lock()
 	if err != nil {
@@ -90,7 +92,7 @@ func (b *Bot) ensureAutoRole(guildID snowflake.ID, msg discord.Message) {
 
 // --- /config autorole handlers ---
 
-func (b *Bot) handleAutoRoleConfig(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleAutoRoleConfig(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -103,7 +105,7 @@ func (b *Bot) handleAutoRoleConfig(e *events.ApplicationCommandInteractionCreate
 
 	st := b.autoRole.getOrCreate(*guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "The autorole config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
+		botutil.RespondEphemeral(ctx, e, "The autorole config couldn't be loaded, so it can't be changed right now. Please try again in a few minutes.")
 		return
 	}
 
@@ -114,27 +116,27 @@ func (b *Bot) handleAutoRoleConfig(e *events.ApplicationCommandInteractionCreate
 
 	switch *subCmd {
 	case "set":
-		b.handleAutoRoleConfigSet(e, *guildID, st)
+		b.handleAutoRoleConfigSet(ctx, e, *guildID, st)
 	case "show":
-		b.handleAutoRoleConfigShow(e, st)
+		b.handleAutoRoleConfigShow(ctx, e, st)
 	case "clear":
-		b.handleAutoRoleConfigClear(e, *guildID, st)
+		b.handleAutoRoleConfigClear(ctx, e, *guildID, st)
 	}
 }
 
-func (b *Bot) handleAutoRoleConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *autoRoleState) {
+func (b *Bot) handleAutoRoleConfigSet(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *autoRoleState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
 	role, ok := data.OptRole("role")
 	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a role.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a role.")
 		return
 	}
 
 	b.Log.Info("Autorole config set", "user_id", e.User().ID, "guild_id", guildID, "role_id", role.ID)
 
-	if reason := b.checkGrantableRole(e, guildID, role); reason != "" {
-		botutil.RespondEphemeral(e, reason)
+	if reason := b.checkGrantableRole(ctx, e, guildID, role); reason != "" {
+		botutil.RespondEphemeral(ctx, e, reason)
 		return
 	}
 
@@ -143,16 +145,16 @@ func (b *Bot) handleAutoRoleConfigSet(e *events.ApplicationCommandInteractionCre
 	st.retry = retryAfter{}
 	st.mu.Unlock()
 
-	if err := b.autoRole.persist(guildID); err != nil {
+	if err := b.autoRole.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist autorole config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Auto-role set to <@&%d>.", role.ID))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("Auto-role set to <@&%d>.", role.ID))
 }
 
-func (b *Bot) handleAutoRoleConfigShow(e *events.ApplicationCommandInteractionCreate, st *autoRoleState) {
+func (b *Bot) handleAutoRoleConfigShow(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *autoRoleState) {
 	b.Log.Info("Autorole config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
@@ -160,24 +162,24 @@ func (b *Bot) handleAutoRoleConfigShow(e *events.ApplicationCommandInteractionCr
 	st.mu.Unlock()
 
 	if roleID == 0 {
-		botutil.RespondEphemeral(e, "**Auto-role:** Not set")
+		botutil.RespondEphemeral(ctx, e, "**Auto-role:** Not set")
 		return
 	}
-	botutil.RespondEphemeral(e, fmt.Sprintf("**Auto-role:** <@&%d>", roleID))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("**Auto-role:** <@&%d>", roleID))
 }
 
-func (b *Bot) handleAutoRoleConfigClear(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *autoRoleState) {
+func (b *Bot) handleAutoRoleConfigClear(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *autoRoleState) {
 	b.Log.Info("Autorole config clear", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
 	st.RoleID = 0
 	st.mu.Unlock()
 
-	if err := b.autoRole.persist(guildID); err != nil {
+	if err := b.autoRole.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist autorole config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, "Auto-role disabled.")
+	botutil.RespondEphemeral(ctx, e, "Auto-role disabled.")
 }

@@ -9,13 +9,14 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
-func (b *Bot) handleDelete(e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
+func (b *Bot) handleDelete(ctx context.Context, e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
 	b.Log.Info("Processing delete",
 		"user_id", userIDStr(e),
 		"template", tmpl.Name,
@@ -41,31 +42,31 @@ func (b *Bot) handleDelete(e *events.ApplicationCommandInteractionCreate, tmpl s
 				),
 			),
 		},
-	})
+	}, rest.WithCtx(ctx))
 }
 
-func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
+func (b *Bot) handleComponentInteraction(ctx context.Context, e *events.ComponentInteractionCreate) {
 	customID := e.Data.CustomID()
 
 	if roleID, ok := isSelfroleInteraction(customID); ok {
-		b.handleSelfroleToggle(e, roleID)
+		b.handleSelfroleToggle(ctx, e, roleID)
 		return
 	}
 
 	if customID == "ticket_open" {
-		b.handleTicketOpen(e)
+		b.handleTicketOpen(ctx, e)
 		return
 	}
 	if customID == "ticket_close" {
-		b.handleTicketCloseConfirm(e)
+		b.handleTicketCloseConfirm(ctx, e)
 		return
 	}
 	if opener, ok := parseTicketCloseCustomID(customID, "ticket_close_yes"); ok {
-		b.handleTicketClose(e, opener)
+		b.handleTicketClose(ctx, e, opener)
 		return
 	}
 	if opener, ok := parseTicketCloseCustomID(customID, "ticket_close_no"); ok {
-		b.handleTicketCloseCancel(e, opener)
+		b.handleTicketCloseCancel(ctx, e, opener)
 		return
 	}
 
@@ -74,7 +75,7 @@ func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
 		e.UpdateMessage(discord.MessageUpdate{
 			Content:    &content,
 			Components: &[]discord.LayoutComponent{},
-		})
+		}, rest.WithCtx(ctx))
 		return
 	}
 
@@ -97,7 +98,7 @@ func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
 							),
 						),
 					},
-				})
+				}, rest.WithCtx(ctx))
 				return
 
 			case fmt.Sprintf("del_image_%s", tmpl.ShortName):
@@ -116,29 +117,29 @@ func (b *Bot) handleComponentInteraction(e *events.ComponentInteractionCreate) {
 							),
 						),
 					},
-				})
+				}, rest.WithCtx(ctx))
 				return
 
 			case fmt.Sprintf("del_confirm_profile_%s", tmpl.ShortName):
-				b.confirmDeleteProfile(e, tmpl)
+				b.confirmDeleteProfile(ctx, e, tmpl)
 				return
 
 			case fmt.Sprintf("del_confirm_image_%s", tmpl.ShortName):
-				b.confirmDeleteImage(e, tmpl)
+				b.confirmDeleteImage(ctx, e, tmpl)
 				return
 			}
 		}
 	}
 
 	// A button from an older build, or for something since removed.
-	botutil.RespondEphemeral(e, noLongerAvailable)
+	botutil.RespondEphemeral(ctx, e, noLongerAvailable)
 }
 
-func (b *Bot) confirmDeleteProfile(e *events.ComponentInteractionCreate, tmpl sprobot.Template) {
+func (b *Bot) confirmDeleteProfile(ctx context.Context, e *events.ComponentInteractionCreate, tmpl sprobot.Template) {
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	respond, ok := b.deferDelete(e)
+	respond, ok := b.deferDelete(ctx, e)
 	if !ok {
 		return
 	}
@@ -148,7 +149,7 @@ func (b *Bot) confirmDeleteProfile(e *events.ComponentInteractionCreate, tmpl sp
 	defer lock.Unlock()
 	defer b.profileDeleted(guildStr, userStr)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	err := b.S3.DeleteProfile(ctx, tmpl, guildStr, userStr)
@@ -165,29 +166,29 @@ func (b *Bot) confirmDeleteProfile(e *events.ComponentInteractionCreate, tmpl sp
 // deferDelete acknowledges a delete confirmation by swapping its buttons for a
 // progress note, since the delete may wait behind a slow save (say, an image
 // still uploading). The returned func replaces the note with the result.
-func (b *Bot) deferDelete(e *events.ComponentInteractionCreate) (respond func(string), ok bool) {
+func (b *Bot) deferDelete(ctx context.Context, e *events.ComponentInteractionCreate) (respond func(string), ok bool) {
 	content := "Deleting…"
 	if err := e.UpdateMessage(discord.MessageUpdate{
 		Content:    &content,
 		Components: &[]discord.LayoutComponent{},
-	}); err != nil {
+	}, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to acknowledge delete", "error", err)
 		return nil, false
 	}
 	return func(content string) {
 		if _, err := b.Client.Rest.UpdateInteractionResponse(b.Client.ApplicationID, e.Token(), discord.MessageUpdate{
 			Content: &content,
-		}); err != nil {
+		}, rest.WithCtx(ctx)); err != nil {
 			b.Log.Error("Failed to update delete response", "error", err)
 		}
 	}, true
 }
 
-func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl sprobot.Template) {
+func (b *Bot) confirmDeleteImage(ctx context.Context, e *events.ComponentInteractionCreate, tmpl sprobot.Template) {
 	guildStr := guildIDStr(e)
 	userStr := userIDStr(e)
 
-	respond, ok := b.deferDelete(e)
+	respond, ok := b.deferDelete(ctx, e)
 	if !ok {
 		return
 	}
@@ -197,7 +198,7 @@ func (b *Bot) confirmDeleteImage(e *events.ComponentInteractionCreate, tmpl spro
 	defer lock.Unlock()
 	defer b.profileDeleted(guildStr, userStr)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	respond(b.deleteProfileImage(ctx, tmpl, guildStr, userStr))

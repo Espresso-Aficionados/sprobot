@@ -1,12 +1,14 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 )
 
@@ -111,7 +113,7 @@ func validateGrantableRole(guildID snowflake.ID, role discord.Role, c roleGrantC
 
 // checkGrantableRole runs validateGrantableRole for a /config interaction,
 // taking the bot's and the invoker's roles from the role cache.
-func (b *Bot) checkGrantableRole(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, role discord.Role) string {
+func (b *Bot) checkGrantableRole(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, role discord.Role) string {
 	caches := b.Client.Caches
 	self, ok := caches.SelfMember(guildID)
 	if !ok {
@@ -120,7 +122,7 @@ func (b *Bot) checkGrantableRole(e *events.ApplicationCommandInteractionCreate, 
 		if !ok {
 			return "Couldn't look up the bot's roles. Try again in a minute."
 		}
-		m, err := b.Client.Rest.GetMember(guildID, selfUser.ID)
+		m, err := b.Client.Rest.GetMember(guildID, selfUser.ID, rest.WithCtx(ctx))
 		if err != nil {
 			b.Log.Error("Failed to fetch the bot's own member", "guild_id", guildID, "error", err)
 			return "Couldn't look up the bot's roles. Try again in a minute."
