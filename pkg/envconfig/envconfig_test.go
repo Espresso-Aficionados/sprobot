@@ -15,6 +15,7 @@ import (
 var allVars = []string{
 	"SPROBOT_DISCORD_TOKEN", "SPROBOT_HEALTHCHECK_ENDPOINT",
 	"S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_BUCKET", "WEB_ENDPOINT", "PORT",
+	"EGRESS_FETCH_GATEWAY",
 }
 
 // setEnv clears every variable the loaders read, then sets env.
@@ -83,6 +84,25 @@ func TestLoadBotOptionalUnset(t *testing.T) {
 	}
 	if cfg.WebEndpoint != "http://localhost:8080/" {
 		t.Fatalf("LoadBot = %+v", cfg)
+	}
+}
+
+// Production names the egress fetch gateway; a value that isn't a plain
+// HTTP URL stops the bot starting, so a typo never means fetching direct.
+func TestLoadBotFetchGateway(t *testing.T) {
+	env := prodLike()
+	env["EGRESS_FETCH_GATEWAY"] = "http://10.89.3.3:4751"
+	setEnv(t, env)
+	cfg, err := LoadBot("SPROBOT")
+	if err != nil || cfg.FetchGateway != "http://10.89.3.3:4751" {
+		t.Fatalf("LoadBot = %+v, %v", cfg, err)
+	}
+
+	env["EGRESS_FETCH_GATEWAY"] = "10.89.3.3:4751"
+	setEnv(t, env)
+	_, err = LoadBot("SPROBOT")
+	if got := problems(t, err); len(got) != 1 || !strings.HasPrefix(got[0], "EGRESS_FETCH_GATEWAY ") {
+		t.Fatalf("problems = %q, want one for EGRESS_FETCH_GATEWAY", got)
 	}
 }
 
@@ -231,6 +251,10 @@ func TestChecks(t *testing.T) {
 		{httpURL, "ftp://a.example/", false},
 		{httpURL, "a.example", false},
 		{httpURL, "https://", false},
+		{plainHTTPURL, "http://10.89.3.3:4751", true},
+		{plainHTTPURL, "https://10.89.3.3:4751", false},
+		{plainHTTPURL, "10.89.3.3:4751", false},
+		{plainHTTPURL, "http://", false},
 		{webEndpoint, "https://bot.espressoaf.com/", true},
 		{webEndpoint, "https://bot.espressoaf.com", false},
 		{bucketName, "profile-bot", true},

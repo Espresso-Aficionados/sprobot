@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -156,13 +157,27 @@ const (
 	fetchErrorHeader  = "Egress-Fetch-Error"
 )
 
-// fetchGateway is the egress fetch gateway's URL, nil when there is none
-// (EGRESS_FETCH_GATEWAY unset: local development). A value that isn't an
-// http URL is an error on every fetch, not a silent direct fetch. A
-// variable so tests can set one.
-var fetchGateway = sync.OnceValues(func() (*url.URL, error) {
-	return parseFetchGateway(os.Getenv(fetchGatewayEnv))
-})
+// fetchGatewayURL is the egress fetch gateway, nil when there is none
+// (EGRESS_FETCH_GATEWAY unset: local development). SetFetchGateway sets
+// it, at startup.
+var fetchGatewayURL atomic.Pointer[url.URL]
+
+// fetchGateway is what the fetch clients ask for it. A variable so tests
+// can set one; an error fails the fetch, never a silent direct one.
+var fetchGateway = func() (*url.URL, error) { return fetchGatewayURL.Load(), nil }
+
+// SetFetchGateway names the egress fetch gateway the fetch clients use
+// from now on: envconfig's Bot.FetchGateway, which has checked it. "" is
+// none: user-supplied URLs are fetched directly, through the checked
+// transport.
+func SetFetchGateway(v string) error {
+	u, err := parseFetchGateway(v)
+	if err != nil {
+		return err
+	}
+	fetchGatewayURL.Store(u)
+	return nil
+}
 
 func parseFetchGateway(v string) (*url.URL, error) {
 	if v == "" {

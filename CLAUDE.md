@@ -210,7 +210,10 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
   the request on, not an `r.WithContext` copy, or the route is lost). Every
   outbound client has a fixed peer name: `discord` (disgo's REST client,
   `botutil.RESTClient`, and sprobot's search client), `s3`, `fetch`
-  (user-supplied URLs, wrapped outside the dial check).
+  (user-supplied URLs, wrapped outside the dial check; in production they
+  are asked of the egress proxy's fetch gateway, `EGRESS_FETCH_GATEWAY`,
+  which fetches them itself and hands back only an image), `discord-cdn`
+  (Discord's own attachment URLs, for mod-log and sticky saves).
   logsetup's handler adds `trace_id` to `*Context` log calls made inside a
   span.
   - **Bots:** each periodic loop is a `telemetry.Job`, a package-level var

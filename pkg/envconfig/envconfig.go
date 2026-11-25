@@ -37,6 +37,9 @@ type Storage struct {
 // Bot is a Discord bot's environment.
 type Bot struct {
 	Token string
+	// FetchGateway is the egress proxy's fetch gateway, which fetches
+	// user-supplied URLs for the bot; "" when there is none (development).
+	FetchGateway string
 	Storage
 }
 
@@ -55,14 +58,15 @@ func (e *Error) Error() string {
 	return "invalid environment: " + strings.Join(e.Problems, "; ")
 }
 
-// LoadBot reads a bot's environment: {prefix}_DISCORD_TOKEN and the
-// storage variables. The retired {prefix}_HEALTHCHECK_ENDPOINT is ignored,
+// LoadBot reads a bot's environment: {prefix}_DISCORD_TOKEN, the optional
+// EGRESS_FETCH_GATEWAY and the storage variables. The retired {prefix}_HEALTHCHECK_ENDPOINT is ignored,
 // like any variable nothing reads, whatever its value.
 func LoadBot(prefix string) (Bot, error) {
 	r := &reader{}
 	cfg := Bot{
-		Token:   r.required(prefix+"_DISCORD_TOKEN", noSpaces),
-		Storage: r.storage(),
+		Token:        r.required(prefix+"_DISCORD_TOKEN", noSpaces),
+		FetchGateway: r.optional("EGRESS_FETCH_GATEWAY", "", plainHTTPURL),
+		Storage:      r.storage(),
 	}
 	return cfg, r.err()
 }
@@ -178,6 +182,16 @@ func httpURL(v string) string {
 	u, err := url.Parse(v)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return "is not an absolute http(s) URL"
+	}
+	return ""
+}
+
+// plainHTTPURL is for the fetch gateway, which speaks plain HTTP on the
+// bot's own network.
+func plainHTTPURL(v string) string {
+	u, err := url.Parse(v)
+	if err != nil || u.Scheme != "http" || u.Host == "" {
+		return "is not an absolute http:// URL"
 	}
 	return ""
 }
