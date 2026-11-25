@@ -471,9 +471,15 @@ func New(cfg envconfig.Storage) (*Client, error) {
 }
 
 // s3HTTPClient is the SDK's default HTTP client (its transport, timeouts and
-// redirect handling), traced and timed as calls to the "s3" dependency.
-func s3HTTPClient() s3.HTTPClient {
-	def := awshttp.NewBuildableClient().Freeze()
+// redirect handling), traced and timed as calls to the "s3" dependency. The
+// SDK wraps its *http.Transport, so telemetry.Client can't reach it to put the
+// trace on the CONNECT to egress: TraceConnects does, on the transport itself.
+func s3HTTPClient() s3.HTTPClient { return s3HTTPClientWith() }
+
+// s3HTTPClientWith is s3HTTPClient with opts applied to the SDK's transport
+// first (tests: a proxy and the test server's CA).
+func s3HTTPClientWith(opts ...func(*http.Transport)) s3.HTTPClient {
+	def := awshttp.NewBuildableClient().WithTransportOptions(append(opts, telemetry.TraceConnects)...).Freeze()
 	c, ok := def.(*http.Client)
 	if !ok {
 		return def // a future SDK's client: uninstrumented rather than replaced
