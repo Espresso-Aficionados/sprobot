@@ -267,7 +267,9 @@ func (b *Bot) startStickyGoroutine(s *stickyMessage) {
 		MsgThreshold:      s.MsgThreshold,
 		TimeThresholdMins: s.TimeThresholdMins,
 		LastPostTime:      lastPostTime,
-	}, func() bool { return b.repostSticky(context.Background(), s) })
+	}, func() bool {
+		return botutil.TraceTask("repost sticky", func(ctx context.Context) bool { return b.repostSticky(ctx, s) })
+	})
 }
 
 // stopStickyGoroutine stops s's repost loop and waits out any repost in

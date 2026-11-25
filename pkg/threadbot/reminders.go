@@ -378,7 +378,9 @@ func (b *Bot) startReminderGoroutine(r *threadReminder) {
 		MsgThreshold:      r.MsgThreshold,
 		TimeThresholdMins: r.TimeThresholdMins,
 		LastPostTime:      r.LastPostTime,
-	}, func() bool { return b.repostReminder(context.Background(), r) })
+	}, func() bool {
+		return botutil.TraceTask("repost reminder", func(ctx context.Context) bool { return b.repostReminder(ctx, r) })
+	})
 }
 
 // stopReminderGoroutine stops r's repost loop and waits out any repost in

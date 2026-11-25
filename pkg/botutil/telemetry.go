@@ -110,6 +110,14 @@ func TraceEvent[E bot.Event](handler string, h func(context.Context, E)) func(E)
 	}
 }
 
+// TraceTask runs f, work no event or job starts (a repost timer's post), in
+// a span named name, and hands f the span's context.
+func TraceTask[T any](name string, f func(context.Context) T) T {
+	ctx, span := otel.Tracer(scope).Start(context.Background(), name)
+	defer span.End()
+	return f(ctx)
+}
+
 // registeredCommands are the command names this process registered
 // (RegisterGuildCommands, RegisterCommandNames): the only command names a
 // label may carry.
