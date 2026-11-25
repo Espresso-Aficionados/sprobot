@@ -110,9 +110,9 @@ func TestLogChannelSetChecksType(t *testing.T) {
 		e, replies := commandEvent(t, b.Client, data)
 		switch group {
 		case "eventlog":
-			b.handleEventLogConfig(e)
+			b.handleEventLogConfig(t.Context(), e)
 		case "renamelog":
-			b.handleRenameLog(e)
+			b.handleRenameLog(t.Context(), e)
 		}
 		_, resp := replies.only(t)
 		return resp
@@ -142,7 +142,7 @@ func TestEventLogConfigNeedsLoadedState(t *testing.T) {
 	b.eventLog.failed[10] = true
 	b.eventLog.mu.Unlock()
 	e, replies := commandEvent(t, b.Client, configSetData("eventlog", discord.ChannelTypeGuildText))
-	b.handleEventLogConfig(e)
+	b.handleEventLogConfig(t.Context(), e)
 	if _, resp := replies.only(t); !isEphemeral(resp) || !strings.Contains(contentOf(resp), "can't be changed right now") {
 		t.Errorf("reply while the load has failed = %q, want an ephemeral refusal", contentOf(resp))
 	}
@@ -154,7 +154,7 @@ func TestEventLogConfigNeedsLoadedState(t *testing.T) {
 	delete(b.eventLog.failed, 10)
 	b.eventLog.mu.Unlock()
 	e, _ = commandEvent(t, b.Client, configSetData("eventlog", discord.ChannelTypeGuildText))
-	b.handleEventLogConfig(e)
+	b.handleEventLogConfig(t.Context(), e)
 	if st := b.eventLog.get(10); st == nil || st.ChannelID != 77 {
 		t.Errorf("state after set on a guild with none = %+v, want channel 77", st)
 	}
@@ -164,7 +164,7 @@ func TestUnknownComponentIsAnswered(t *testing.T) {
 	b, stub := newStubBot(t)
 
 	e, replies := componentEvent(t, b.Client, "del_profile_retired", "", "")
-	b.handleComponentInteraction(e)
+	b.handleComponentInteraction(t.Context(), e)
 
 	_, data := replies.only(t)
 	if !isEphemeral(data) || contentOf(data) != noLongerAvailable {
@@ -180,7 +180,7 @@ func TestUnknownModalIsAnswered(t *testing.T) {
 
 	for _, id := range []string{"retired_modal", "modlog_notanid_123"} {
 		e, replies := modalEvent(t, b.Client, id, "")
-		b.handleModalSubmit(e)
+		b.handleModalSubmit(t.Context(), e)
 
 		_, data := replies.only(t)
 		if !isEphemeral(data) || contentOf(data) != noLongerAvailable {

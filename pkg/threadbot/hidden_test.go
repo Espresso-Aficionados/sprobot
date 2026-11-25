@@ -51,26 +51,26 @@ func TestHiddenThreadsExcludedPersistedAndPruned(t *testing.T) {
 	api.addThread("201", 5, 5)
 	api.addThread("202", 5, 5)
 
-	b.loadHiddenThreads()
+	b.loadHiddenThreads(t.Context())
 
-	if changed, err := b.setHidden(guildID, 202, true); !changed || err != nil {
+	if changed, err := b.setHidden(t.Context(), guildID, 202, true); !changed || err != nil {
 		t.Fatalf("hide: changed=%v err=%v", changed, err)
 	}
-	if changed, _ := b.setHidden(guildID, 202, true); changed {
+	if changed, _ := b.setHidden(t.Context(), guildID, 202, true); changed {
 		t.Error("hiding an already hidden thread reported a change")
 	}
 
-	all, err := b.buildThreadsEmbed(guildID, 0)
+	all, err := b.buildThreadsEmbed(t.Context(), guildID, 0)
 	if err != nil || !strings.Contains(all.Description, "thread-201") || strings.Contains(all.Description, "thread-202") {
 		t.Errorf("hidden thread shown, or visible thread missing: %+v, %v", all, err)
 	}
-	if e, err := b.buildThreadsEmbed(guildID, 500); e == nil || err != nil || strings.Contains(e.Description, "thread-202") {
+	if e, err := b.buildThreadsEmbed(t.Context(), guildID, 500); e == nil || err != nil || strings.Contains(e.Description, "thread-202") {
 		t.Errorf("hidden thread shown in channel reminder: %+v, %v", e, err)
 	}
 
 	// A restart reloads the hidden list from S3.
 	b2 := newTestBot(t, s3c)
-	b2.loadHiddenThreads()
+	b2.loadHiddenThreads(t.Context())
 	if _, ok := mustHiddenSet(t, b2, guildID)[202]; !ok {
 		t.Fatal("hidden thread not reloaded from S3")
 	}
@@ -81,13 +81,13 @@ func TestHiddenThreadsExcludedPersistedAndPruned(t *testing.T) {
 		t.Error("deleted thread still hidden")
 	}
 	b3 := newTestBot(t, s3c)
-	b3.loadHiddenThreads()
+	b3.loadHiddenThreads(t.Context())
 	if len(mustHiddenSet(t, b3, guildID)) != 0 {
 		t.Error("thread delete was not persisted")
 	}
 
 	// Unhiding something that isn't hidden is a no-op.
-	if changed, _ := b3.setHidden(guildID, 201, false); changed {
+	if changed, _ := b3.setHidden(t.Context(), guildID, 201, false); changed {
 		t.Error("unhiding a visible thread reported a change")
 	}
 }
@@ -114,10 +114,10 @@ func TestSetHiddenRollsBackFailedSave(t *testing.T) {
 	defer srv.Close()
 	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
 	guildID := snowflake.ID(1013566342345019512)
-	b.loadHiddenThreads()
+	b.loadHiddenThreads(t.Context())
 
 	fs.failPut.Store(true)
-	if changed, err := b.setHidden(guildID, 300, true); changed || err == nil {
+	if changed, err := b.setHidden(t.Context(), guildID, 300, true); changed || err == nil {
 		t.Fatalf("failed save: changed=%v err=%v, want rollback with error", changed, err)
 	}
 	if len(mustHiddenSet(t, b, guildID)) != 0 {
@@ -126,11 +126,11 @@ func TestSetHiddenRollsBackFailedSave(t *testing.T) {
 
 	// The retry must actually save, not report "already hidden".
 	fs.failPut.Store(false)
-	if changed, err := b.setHidden(guildID, 300, true); !changed || err != nil {
+	if changed, err := b.setHidden(t.Context(), guildID, 300, true); !changed || err != nil {
 		t.Fatalf("retry: changed=%v err=%v", changed, err)
 	}
 	b2 := newTestBot(t, testutil.NewTestS3Client(t, srv))
-	b2.loadHiddenThreads()
+	b2.loadHiddenThreads(t.Context())
 	if _, ok := mustHiddenSet(t, b2, guildID)[300]; !ok {
 		t.Error("retried hide was not persisted")
 	}
@@ -143,7 +143,7 @@ func TestSetHiddenNeverOverwritesUnloadedList(t *testing.T) {
 	s3c := testutil.NewTestS3Client(t, srv)
 	seed := newTestBot(t, s3c)
 	for _, g := range []snowflake.ID{devGuild, prodGuild} {
-		if _, err := seed.setHidden(g, 10, true); err != nil {
+		if _, err := seed.setHidden(t.Context(), g, 10, true); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -157,14 +157,14 @@ func TestSetHiddenNeverOverwritesUnloadedList(t *testing.T) {
 	// stored list.
 	fs.failGet.Store(true)
 	b := newTestBot(t, s3c)
-	b.loadHiddenThreads()
-	if _, err := b.setHidden(devGuild, 20, true); !errors.Is(err, errHiddenNotLoaded) {
+	b.loadHiddenThreads(t.Context())
+	if _, err := b.setHidden(t.Context(), devGuild, 20, true); !errors.Is(err, errHiddenNotLoaded) {
 		t.Fatalf("hide while unloaded: err=%v, want errHiddenNotLoaded", err)
 	}
 
 	// Once S3 is back the load is retried and the change merges with it.
 	fs.failGet.Store(false)
-	if changed, err := b.setHidden(devGuild, 20, true); !changed || err != nil {
+	if changed, err := b.setHidden(t.Context(), devGuild, 20, true); !changed || err != nil {
 		t.Fatalf("hide after recovery: changed=%v err=%v", changed, err)
 	}
 	if set := stored(devGuild); len(set) != 2 {
@@ -172,7 +172,7 @@ func TestSetHiddenNeverOverwritesUnloadedList(t *testing.T) {
 	}
 
 	// So does every other guild whose startup load failed.
-	if changed, err := b.setHidden(prodGuild, 30, true); !changed || err != nil {
+	if changed, err := b.setHidden(t.Context(), prodGuild, 30, true); !changed || err != nil {
 		t.Fatalf("hide in late guild: changed=%v err=%v", changed, err)
 	}
 	if set := stored(prodGuild); len(set) != 2 {
@@ -209,7 +209,7 @@ func (f *slowS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func mustHiddenSet(t *testing.T, b *Bot, guildID snowflake.ID) map[snowflake.ID]struct{} {
 	t.Helper()
-	set, err := b.hiddenSet(guildID)
+	set, err := b.hiddenSet(t.Context(), guildID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,11 +228,11 @@ func TestUnloadedHiddenListFailsClosed(t *testing.T) {
 	b.S3 = testutil.NewTestS3Client(t, srv)
 	fs.failGet.Store(true)
 
-	if e, err := b.buildThreadsEmbed(devGuild, 500); e != nil || !errors.Is(err, errHiddenNotLoaded) {
+	if e, err := b.buildThreadsEmbed(t.Context(), devGuild, 500); e != nil || !errors.Is(err, errHiddenNotLoaded) {
 		t.Errorf("embed = %+v, %v; want errHiddenNotLoaded", e, err)
 	}
 	r := &threadReminder{ChannelID: 500, GuildID: devGuild, Enabled: true}
-	if b.repostReminder(r) || r.LastMessageID != 0 {
+	if b.repostReminder(t.Context(), r) || r.LastMessageID != 0 {
 		t.Error("reminder reposted without the hidden list")
 	}
 
@@ -241,7 +241,7 @@ func TestUnloadedHiddenListFailsClosed(t *testing.T) {
 		{`{"id":"3","name":"threadbot","type":1,"options":[{"name":"hidden","type":1}]}`, "Couldn't load the hidden thread list"},
 	} {
 		e, responses := commandEvent(t, devGuild, tt.data)
-		b.onCommand(e)
+		b.onCommand(t.Context(), e)
 		if m := <-responses; m.Content != "" {
 			t.Errorf("%s: first response %q, want a deferral", tt.data, m.Content)
 		}
@@ -268,7 +268,7 @@ func TestHideDefersBeforeSaving(t *testing.T) {
 		"resolved":{"channels":{"101":{"id":"101","name":"t","type":11,"permissions":"0","parent_id":"500"}}}}`)
 	done := make(chan struct{})
 	go func() {
-		b.onCommand(e)
+		b.onCommand(t.Context(), e)
 		close(done)
 	}()
 

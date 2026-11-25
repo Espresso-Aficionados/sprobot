@@ -310,8 +310,8 @@ func (b *Bot) servedGuilds() []snowflake.ID {
 // guildStateLoader is the part of a guildStateStore that doesn't depend on
 // its state type.
 type guildStateLoader interface {
-	load(guildIDs []snowflake.ID) error
-	retryFailedLoads() error
+	load(ctx context.Context, guildIDs []snowflake.ID) error
+	retryFailedLoads(ctx context.Context) error
 	prefix() string
 	setGuilds(guilds func() []snowflake.ID)
 }
@@ -329,12 +329,12 @@ func (b *Bot) stateStores() []guildStateLoader {
 // handlers start as soon as it opens, and one that found no state could save
 // fresh state over the real one. It returns the refusals of state a newer
 // build wrote.
-func (b *Bot) loadState() error {
+func (b *Bot) loadState(ctx context.Context) error {
 	stores := b.stateStores()
 	refused := make([]error, len(stores))
 	var wg sync.WaitGroup
 	for i, s := range stores {
-		wg.Go(func() { refused[i] = s.load(botutil.AllowedGuildIDs) })
+		wg.Go(func() { refused[i] = s.load(ctx, botutil.AllowedGuildIDs) })
 	}
 	wg.Wait()
 	return errors.Join(refused...)
@@ -343,42 +343,42 @@ func (b *Bot) loadState() error {
 // retryFailedLoads retries every failed load, the stores concurrently as in
 // loadState, so a hung S3 holds up shutdown by about a storeS3Timeout per
 // guild rather than per guild and store.
-func (b *Bot) retryFailedLoads() error {
+func (b *Bot) retryFailedLoads(ctx context.Context) error {
 	stores := b.stateStores()
 	errs := make([]error, len(stores))
 	var wg sync.WaitGroup
 	for i, s := range stores {
-		wg.Go(func() { errs[i] = s.retryFailedLoads() })
+		wg.Go(func() { errs[i] = s.retryFailedLoads(ctx) })
 	}
 	wg.Wait()
 	return errors.Join(errs...)
 }
 
 // saveState saves every per-guild state store. Each logs its own failures.
-func (b *Bot) saveState() {
+func (b *Bot) saveState(ctx context.Context) {
 	_ = errors.Join(
-		b.autoRole.save(),
-		b.eventLog.save(),
-		b.modLog.save(),
-		b.topPostersConfig.save(),
-		b.saveTopPosters(),
-		b.posterRole.save(),
-		b.tickets.save(),
-		b.shortcuts.save(),
-		b.welcome.save(),
-		b.saveStarboard(),
-		b.renameLogs.save(),
-		b.tempRoleConfig.save(),
-		b.tempRoles.save(),
+		b.autoRole.save(ctx),
+		b.eventLog.save(ctx),
+		b.modLog.save(ctx),
+		b.topPostersConfig.save(ctx),
+		b.saveTopPosters(ctx),
+		b.posterRole.save(ctx),
+		b.tickets.save(ctx),
+		b.shortcuts.save(ctx),
+		b.welcome.save(ctx),
+		b.saveStarboard(ctx),
+		b.renameLogs.save(ctx),
+		b.tempRoleConfig.save(ctx),
+		b.tempRoles.save(ctx),
 	)
 }
 
 // startLoop runs fn every interval, each run a run of job, until b.stop is
 // closed. stopLoops waits for it, so a run in progress finishes before the
 // final saves.
-func (b *Bot) startLoop(interval time.Duration, job *telemetry.Job, fn func() error) {
+func (b *Bot) startLoop(interval time.Duration, job *telemetry.Job, fn func(context.Context) error) {
 	b.loops.Go(func() {
-		botutil.RunJobLoop(&b.Ready, interval, b.stop, job, func(context.Context) error { return fn() })
+		botutil.RunJobLoop(&b.Ready, interval, b.stop, job, fn)
 	})
 }
 
@@ -395,12 +395,12 @@ func (b *Bot) Run() error {
 
 	// Nothing has been saved yet, and nothing will be: a newer build's state
 	// is left as it is.
-	if err := b.loadState(); err != nil {
+	if err := b.loadState(ctx); err != nil {
 		return err
 	}
 	// Lists stored profiles from S3 only; name updates probe authors until it
 	// finishes.
-	go b.loadProfileOwners(botutil.AllowedGuildIDs)
+	go b.loadProfileOwners(ctx, botutil.AllowedGuildIDs)
 
 	b.ServeHealth()
 	if err := b.OpenGateway(ctx); err != nil {
@@ -424,8 +424,8 @@ func (b *Bot) Run() error {
 	b.startLoop(5*time.Minute, saveShortcutsJob, b.shortcuts.save)
 	b.startLoop(5*time.Minute, saveTicketsJob, b.tickets.save)
 	b.startLoop(5*time.Minute, saveWelcomeJob, b.welcome.save)
-	b.startLoop(5*time.Minute, saveCachesJob, b.saveCaches) // also prunes expired messages
-	b.startLoop(1*time.Hour, pruneCorruptBackupsJob, func() error { return pruneCorruptBackups(b.S3, b.Log, time.Now()) })
+	b.startLoop(5*time.Minute, saveCachesJob, func(context.Context) error { return b.saveCaches() }) // local files only; also prunes expired messages
+	b.startLoop(1*time.Hour, pruneCorruptBackupsJob, func(ctx context.Context) error { return pruneCorruptBackups(ctx, b.S3, b.Log, time.Now()) })
 	b.startLoop(5*time.Minute, saveStarboardJob, b.saveStarboard)
 	b.startLoop(5*time.Minute, retryStarboardDeletesJob, b.retryStarboardDeletes)
 	b.startLoop(5*time.Minute, saveRenameLogsJob, b.renameLogs.save)
@@ -434,7 +434,7 @@ func (b *Bot) Run() error {
 
 	shutdownErr := b.WaitForShutdown("Bot")
 	b.stopLoops()
-	b.saveState()
+	b.saveState(ctx)
 	_ = b.saveCaches() // it logs its own failures
 	return shutdownErr
 }

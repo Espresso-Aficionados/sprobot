@@ -50,14 +50,14 @@ func TestRemindersNeverSavedOverFailedLoad(t *testing.T) {
 	b := newThreadListBot(t, api)
 	b.S3 = testutil.NewTestS3Client(t, srv)
 	defer b.stopAllReminderGoroutines()
-	b.loadReminders()
+	b.loadReminders(t.Context())
 	// The reminders pass's job fails while the guild is unloaded.
-	if err := b.retryAndSaveReminders(); err == nil {
+	if err := b.retryAndSaveReminders(t.Context()); err == nil {
 		t.Error("retryAndSaveReminders succeeded while a guild is unloaded")
 	}
 
 	e, responses := commandEvent(t, devGuild, enableData)
-	b.onCommand(e)
+	b.onCommand(t.Context(), e)
 	<-responses // deferred
 	if sent := api.sentFollowups(); len(sent) != 1 || !strings.Contains(sent[0].Content, "Couldn't load") {
 		t.Errorf("enable while unloaded answered %+v, want a load failure notice", sent)
@@ -69,7 +69,7 @@ func TestRemindersNeverSavedOverFailedLoad(t *testing.T) {
 	// Once S3 is back, the save loop's load retry (or the next command)
 	// loads the stored reminders, and a change merges with them.
 	fs.failGet.Store(false)
-	if err := b.retryAndSaveReminders(); err != nil {
+	if err := b.retryAndSaveReminders(t.Context()); err != nil {
 		t.Errorf("retryAndSaveReminders after recovery: %v", err)
 	}
 	b.mu.Lock()
@@ -79,7 +79,7 @@ func TestRemindersNeverSavedOverFailedLoad(t *testing.T) {
 		t.Fatal("load not retried after S3 recovered")
 	}
 	e, responses = commandEvent(t, devGuild, enableData)
-	b.onCommand(e)
+	b.onCommand(t.Context(), e)
 	if m := <-responses; !strings.Contains(m.Content, "enabled") {
 		t.Errorf("enable after recovery answered %q", m.Content)
 	}
@@ -108,16 +108,16 @@ func TestMemberCountsNeverSavedOverFailedLoad(t *testing.T) {
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
 	b.Client = &bot.Client{Rest: rest.New(rest.NewClient("test", rest.WithURL(apiSrv.URL)))}
-	b.loadHiddenThreads() // only the counts fail to load
+	b.loadHiddenThreads(t.Context()) // only the counts fail to load
 	fs.failGet.Store(true)
-	b.loadMemberCounts()
+	b.loadMemberCounts(t.Context())
 
 	// Unloaded: member_count is shown, nothing is fetched or saved.
-	e, err := b.buildThreadsEmbed(devGuild, 500)
+	e, err := b.buildThreadsEmbed(t.Context(), devGuild, 500)
 	if e == nil || err != nil || !strings.Contains(e.Description, "50 members") {
 		t.Fatalf("embed while unloaded = %+v, %v; want member_count shown", e, err)
 	}
-	b.saveMemberCounts()
+	b.saveMemberCounts(t.Context())
 	if api.fetchCount("101") != 0 {
 		t.Error("count fetched while the stored counts were unloaded")
 	}
@@ -128,7 +128,7 @@ func TestMemberCountsNeverSavedOverFailedLoad(t *testing.T) {
 	// Once S3 is back, the stored count loads on next use, fresh, so it is
 	// shown without a fetch.
 	fs.failGet.Store(false)
-	if e, err := b.buildThreadsEmbed(devGuild, 500); e == nil || err != nil || !strings.Contains(e.Description, "130 members") {
+	if e, err := b.buildThreadsEmbed(t.Context(), devGuild, 500); e == nil || err != nil || !strings.Contains(e.Description, "130 members") {
 		t.Errorf("embed after recovery = %+v, %v; want the stored count", e, err)
 	}
 	if api.fetchCount("101") != 0 {
@@ -150,9 +150,9 @@ func TestLoadersCoverAllowedGuilds(t *testing.T) {
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
 	b.TestGuildIDsOverride = []snowflake.ID{} // nothing cached yet
-	b.loadReminders()
-	b.loadMemberCounts()
-	b.loadHiddenThreads()
+	b.loadReminders(t.Context())
+	b.loadMemberCounts(t.Context())
+	b.loadHiddenThreads(t.Context())
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -184,16 +184,16 @@ func TestPeriodicSavesSkipGuildsBotIsNotIn(t *testing.T) {
 	fake.Objects[prodCountsKey] = []byte(`{"counts":{},"fetched":{}}`)
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, srv)) // in the dev guild only
-	b.loadReminders()
-	b.loadMemberCounts()
+	b.loadReminders(t.Context())
+	b.loadMemberCounts(t.Context())
 	// Meanwhile the prod instance enables a reminder and saves it.
 	prodState := []byte(`{"111":{"channel_id":"111","guild_id":"726985544038612993"}}`)
 	fake.Mu.Lock()
 	fake.Objects[prodRemindersKey] = prodState
 	fake.Mu.Unlock()
 
-	b.saveAllReminders()
-	b.saveMemberCounts()
+	b.saveAllReminders(t.Context())
+	b.saveMemberCounts(t.Context())
 
 	fake.Mu.Lock()
 	defer fake.Mu.Unlock()
@@ -228,8 +228,8 @@ func TestLoadRacesWithEvents(t *testing.T) {
 			b.onSessionReady(&events.Ready{EventReady: gateway.EventReady{}})
 		}
 	}()
-	b.loadReminders()
-	b.loadMemberCounts()
+	b.loadReminders(t.Context())
+	b.loadMemberCounts(t.Context())
 	<-done
 }
 
@@ -280,7 +280,7 @@ func TestGuildReadyStartsLoopsAndDropsDeletedChannels(t *testing.T) {
 	seedReminders(fake)
 	defer b.stopAllReminderGoroutines()
 
-	b.loadReminders()
+	b.loadReminders(t.Context())
 	if got := running(b, devGuild); len(got) != 4 || got[500] || got[600] || got[700] || got[900] {
 		t.Fatalf("after load: running = %v, want four loaded and none running", got)
 	}
@@ -295,7 +295,7 @@ func TestGuildReadyStartsLoopsAndDropsDeletedChannels(t *testing.T) {
 	}
 
 	restarted := newTestBot(t, b.S3)
-	restarted.loadReminders()
+	restarted.loadReminders(t.Context())
 	got := running(restarted, devGuild)
 	if _, ok := got[600]; ok || len(got) != 3 {
 		t.Errorf("stored reminders after restart = %v, want 500, 700 and 900", got)
@@ -316,10 +316,10 @@ func TestLateLoadStartsReadyGuild(t *testing.T) {
 	defer b.stopAllReminderGoroutines()
 
 	fs.failGet.Store(true)
-	b.loadReminders()
+	b.loadReminders(t.Context())
 	b.onGuildReady(guildReady(devGuild))
 	fs.failGet.Store(false)
-	b.loadReminders()
+	b.loadReminders(t.Context())
 
 	if got := running(b, devGuild); len(got) != 3 || !got[500] || !got[700] || !got[900] {
 		t.Errorf("running = %v, want 500, 700 and 900 running and 600 dropped", got)
@@ -342,7 +342,7 @@ func TestReminderCommandDefersBeforeLoading(t *testing.T) {
 	e, responses := commandEvent(t, devGuild, enableData)
 	done := make(chan struct{})
 	go func() {
-		b.onCommand(e)
+		b.onCommand(t.Context(), e)
 		close(done)
 	}()
 	select {
@@ -387,7 +387,7 @@ func TestReminderSavesLandInOrder(t *testing.T) {
 
 	first := make(chan struct{})
 	go func() {
-		b.saveRemindersForGuild(devGuild)
+		b.saveRemindersForGuild(t.Context(), devGuild)
 		close(first)
 	}()
 	<-s3.started // the snapshot with 500 and 600 is in flight
@@ -396,7 +396,7 @@ func TestReminderSavesLandInOrder(t *testing.T) {
 	b.mu.Unlock()
 	second := make(chan struct{})
 	go func() {
-		b.saveRemindersForGuild(devGuild)
+		b.saveRemindersForGuild(t.Context(), devGuild)
 		close(second)
 	}()
 	select {

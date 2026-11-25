@@ -169,7 +169,7 @@ func TestThreadEmbedFetchesNewAndUncachedThreads(t *testing.T) {
 
 	desc := func() string {
 		t.Helper()
-		e, err := b.buildThreadsEmbed(guildID, 0)
+		e, err := b.buildThreadsEmbed(t.Context(), guildID, 0)
 		if e == nil || err != nil {
 			t.Fatalf("embed = %v, %v", e, err)
 		}
@@ -247,7 +247,7 @@ func TestCountThreadMembersPagesPast100(t *testing.T) {
 	for _, tt := range tests {
 		api.addThread(tt.id, memberCountCap, tt.members)
 		id, _ := snowflake.Parse(tt.id)
-		if got := b.countThreadMembers(id); got != tt.want {
+		if got := b.countThreadMembers(t.Context(), id); got != tt.want {
 			t.Errorf("thread %s with %d members: counted %d, want %d", tt.id, tt.members, got, tt.want)
 		}
 		api.mu.Lock()

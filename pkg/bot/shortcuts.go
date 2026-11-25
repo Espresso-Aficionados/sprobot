@@ -14,6 +14,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
@@ -90,7 +91,7 @@ func (st *shortcutState) allResponses() []string {
 	return out
 }
 
-func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleShortcut(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -103,13 +104,13 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 
 	name := data.String("shortcut")
 	if name == "" {
-		botutil.RespondEphemeral(e, "Please provide a shortcut name.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a shortcut name.")
 		return
 	}
 
 	st := b.shortcuts.get(*guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "No shortcuts configured.")
+		botutil.RespondEphemeral(ctx, e, "No shortcuts configured.")
 		return
 	}
 
@@ -117,7 +118,7 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 	response, ok := st.next(name)
 	st.mu.Unlock()
 	if !ok {
-		botutil.RespondEphemeral(e, fmt.Sprintf("Shortcut %q not found.", name))
+		botutil.RespondEphemeral(ctx, e, fmt.Sprintf("Shortcut %q not found.", name))
 		return
 	}
 
@@ -141,7 +142,7 @@ func (b *Bot) handleShortcut(e *events.ApplicationCommandInteractionCreate) {
 	}
 	e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
-	})
+	}, rest.WithCtx(ctx))
 }
 
 // expandShortcutVars replaces template placeholders in a shortcut response.
@@ -190,7 +191,7 @@ func shortcutChoices(shortcuts map[string]shortcutEntry, current string) []strin
 	return names
 }
 
-func (b *Bot) handleShortcutAutocomplete(e *events.AutocompleteInteractionCreate) {
+func (b *Bot) handleShortcutAutocomplete(ctx context.Context, e *events.AutocompleteInteractionCreate) {
 	guildID := e.GuildID()
 	if guildID == nil {
 		return
@@ -198,7 +199,7 @@ func (b *Bot) handleShortcutAutocomplete(e *events.AutocompleteInteractionCreate
 
 	st := b.shortcuts.get(*guildID)
 	if st == nil {
-		e.AutocompleteResult(nil)
+		e.AutocompleteResult(nil, rest.WithCtx(ctx))
 		return
 	}
 
@@ -210,10 +211,10 @@ func (b *Bot) handleShortcutAutocomplete(e *events.AutocompleteInteractionCreate
 	for _, name := range names {
 		choices = append(choices, discord.AutocompleteChoiceString{Name: name, Value: name})
 	}
-	e.AutocompleteResult(choices)
+	e.AutocompleteResult(choices, rest.WithCtx(ctx))
 }
 
-func (b *Bot) handleShortcutConfig(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleShortcutConfig(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -226,11 +227,11 @@ func (b *Bot) handleShortcutConfig(e *events.ApplicationCommandInteractionCreate
 
 	switch *subCmd {
 	case "set":
-		b.handleShortcutConfigSet(e)
+		b.handleShortcutConfigSet(ctx, e)
 	case "remove":
-		b.handleShortcutConfigRemove(e)
+		b.handleShortcutConfigRemove(ctx, e)
 	case "list":
-		b.handleShortcutConfigList(e)
+		b.handleShortcutConfigList(ctx, e)
 	}
 }
 
@@ -255,7 +256,7 @@ func utf16Len(r []rune) int {
 	return n
 }
 
-func (b *Bot) handleShortcutConfigSet(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleShortcutConfigSet(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -263,7 +264,7 @@ func (b *Bot) handleShortcutConfigSet(e *events.ApplicationCommandInteractionCre
 
 	name := data.String("shortcut")
 	if name == "" {
-		botutil.RespondEphemeral(e, "Please provide a shortcut name.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a shortcut name.")
 		return
 	}
 
@@ -308,7 +309,7 @@ func (b *Bot) handleShortcutConfigSet(e *events.ApplicationCommandInteractionCre
 		CustomID:   fmt.Sprintf("sconfig_set_%s", name),
 		Title:      shortcutModalTitle(name),
 		Components: components,
-	})
+	}, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to respond with shortcut config modal", "error", err)
 	}
@@ -325,7 +326,7 @@ func nonBlankResponses(texts []string) []string {
 	return responses
 }
 
-func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreate) {
+func (b *Bot) handleShortcutConfigSetModal(ctx context.Context, e *events.ModalSubmitInteractionCreate) {
 	customID := e.Data.CustomID
 	name := strings.TrimPrefix(customID, "sconfig_set_")
 
@@ -335,11 +336,11 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 	}
 
 	// Defer: re-hosting images below can outlast the 3-second response window.
-	if err := e.DeferCreateMessage(true); err != nil {
+	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer shortcut config response", "error", err)
 		return
 	}
-	respond := func(content string) { b.ephemeralFollowup(e.Token(), content) }
+	respond := func(content string) { b.ephemeralFollowup(ctx, e.Token(), content) }
 
 	var texts []string
 	for i := range shortcutResponseSlots {
@@ -353,7 +354,7 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 	}
 
 	// Re-host image URLs to S3 so they don't expire.
-	ctx, cancel := context.WithTimeout(context.Background(), botutil.DeferredWorkBudget)
+	workCtx, cancel := context.WithTimeout(ctx, botutil.DeferredWorkBudget)
 	defer cancel()
 	guildStr := fmt.Sprintf("%d", *guildID)
 	for i, resp := range responses {
@@ -369,7 +370,7 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 				responses[i] = key
 				continue
 			}
-			copied, err := b.S3.CopyShortcutFile(ctx, guildStr, key)
+			copied, err := b.S3.CopyShortcutFile(workCtx, guildStr, key)
 			if err != nil {
 				b.Log.Error("Failed to copy saved file for shortcut", "error", err)
 				continue // keep original URL
@@ -377,7 +378,7 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 			responses[i] = copied
 			continue
 		}
-		s3URL, err := b.S3.SaveShortcutImage(ctx, guildStr, strings.TrimSpace(resp))
+		s3URL, err := b.S3.SaveShortcutImage(workCtx, guildStr, strings.TrimSpace(resp))
 		if errors.Is(err, s3client.ErrNotImage) {
 			host := ""
 			if u, perr := url.Parse(strings.TrimSpace(resp)); perr == nil {
@@ -408,12 +409,12 @@ func (b *Bot) handleShortcutConfigSetModal(e *events.ModalSubmitInteractionCreat
 		return
 	}
 
-	if err := b.shortcuts.persist(*guildID); err != nil {
+	if err := b.shortcuts.persist(ctx, *guildID); err != nil {
 		b.Log.Error("Failed to save shortcut data", "guild_id", *guildID, "error", err)
 		respond("Failed to save shortcut.")
 		return
 	}
-	b.deleteUnusedShortcutFiles(ctx, guildStr, replaced, remaining)
+	b.deleteUnusedShortcutFiles(workCtx, guildStr, replaced, remaining)
 
 	b.Log.Info("Shortcut saved", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name, "responses", len(responses))
 
@@ -483,11 +484,11 @@ func (b *Bot) deleteUnusedShortcutFiles(ctx context.Context, guildID string, old
 }
 
 // ephemeralFollowup answers a deferred interaction.
-func (b *Bot) ephemeralFollowup(token, content string) {
-	botutil.FollowupEphemeral(b.Client, token, content)
+func (b *Bot) ephemeralFollowup(ctx context.Context, token, content string) {
+	botutil.FollowupEphemeral(ctx, b.Client, token, content)
 }
 
-func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleShortcutConfigRemove(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -495,7 +496,7 @@ func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteraction
 
 	name := data.String("shortcut")
 	if name == "" {
-		botutil.RespondEphemeral(e, "Please provide a shortcut name.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a shortcut name.")
 		return
 	}
 
@@ -508,7 +509,7 @@ func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteraction
 
 	st := b.shortcuts.get(*guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "No shortcuts configured.")
+		botutil.RespondEphemeral(ctx, e, "No shortcuts configured.")
 		return
 	}
 
@@ -517,24 +518,24 @@ func (b *Bot) handleShortcutConfigRemove(e *events.ApplicationCommandInteraction
 	remaining := st.allResponses()
 	st.mu.Unlock()
 	if !ok {
-		botutil.RespondEphemeral(e, fmt.Sprintf("Shortcut %q not found.", name))
+		botutil.RespondEphemeral(ctx, e, fmt.Sprintf("Shortcut %q not found.", name))
 		return
 	}
 
-	if err := b.shortcuts.persist(*guildID); err != nil {
+	if err := b.shortcuts.persist(ctx, *guildID); err != nil {
 		b.Log.Error("Failed to save shortcut data", "guild_id", *guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save shortcut.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save shortcut.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("Shortcut %q removed.", name))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("Shortcut %q removed.", name))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	b.deleteUnusedShortcutFiles(ctx, guildIDStr(e), removed, remaining)
 }
 
-func (b *Bot) handleShortcutConfigList(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleShortcutConfigList(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	guildID := e.GuildID()
 	if guildID == nil {
 		return
@@ -544,14 +545,14 @@ func (b *Bot) handleShortcutConfigList(e *events.ApplicationCommandInteractionCr
 
 	st := b.shortcuts.get(*guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "No shortcuts configured.")
+		botutil.RespondEphemeral(ctx, e, "No shortcuts configured.")
 		return
 	}
 
 	st.mu.Lock()
 	if len(st.Shortcuts) == 0 {
 		st.mu.Unlock()
-		botutil.RespondEphemeral(e, "No shortcuts configured.")
+		botutil.RespondEphemeral(ctx, e, "No shortcuts configured.")
 		return
 	}
 	var lines []string
@@ -560,5 +561,5 @@ func (b *Bot) handleShortcutConfigList(e *events.ApplicationCommandInteractionCr
 	}
 	st.mu.Unlock()
 
-	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
+	botutil.RespondEphemeral(ctx, e, strings.Join(lines, "\n"))
 }

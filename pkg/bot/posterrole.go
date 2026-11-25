@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -135,7 +136,7 @@ func (st *posterRoleState) clearTracking(userID snowflake.ID) {
 	st.grantRetry.clear(userID)
 }
 
-func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg discord.Message) {
+func (b *Bot) checkPosterRole(ctx context.Context, guildID snowflake.ID, channelID snowflake.ID, msg discord.Message) {
 	st := b.posterRole.get(guildID)
 	if st == nil {
 		return
@@ -157,7 +158,7 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg 
 		return
 	}
 
-	if cfg.isSkipped(b.resolveChannelParents(channelID, &st.parentCache)...) {
+	if cfg.isSkipped(b.resolveChannelParents(ctx, channelID, &st.parentCache)...) {
 		return
 	}
 
@@ -172,16 +173,16 @@ func (b *Bot) checkPosterRole(guildID snowflake.ID, channelID snowflake.ID, msg 
 	st.mu.Unlock()
 
 	if search != nil {
-		b.fetchPosterRoleHistory(guildID, st, userID, search)
+		b.fetchPosterRoleHistory(ctx, guildID, st, userID, search)
 	}
 
-	b.grantPosterRoleIfDue(guildID, st, userID, now)
+	b.grantPosterRoleIfDue(ctx, guildID, st, userID, now)
 }
 
 // grantPosterRoleIfDue grants the poster role once grantDue says so. A market
 // ban can land while the grant is in flight, so the ban list is checked under
 // the lock right before it and again after it, revoking the role if needed.
-func (b *Bot) grantPosterRoleIfDue(guildID snowflake.ID, st *posterRoleState, userID snowflake.ID, now time.Time) {
+func (b *Bot) grantPosterRoleIfDue(ctx context.Context, guildID snowflake.ID, st *posterRoleState, userID snowflake.ID, now time.Time) {
 	st.mu.Lock()
 	roleID, count, due := st.grantDue(userID, now)
 	st.mu.Unlock()
@@ -193,7 +194,7 @@ func (b *Bot) grantPosterRoleIfDue(guildID snowflake.ID, st *posterRoleState, us
 	if reason := b.grantBlocked(guildID, roleID); reason != "" {
 		err = errors.New(reason)
 	} else {
-		err = b.Client.Rest.AddMemberRole(guildID, userID, roleID, rest.WithReason("Reached marketplace post threshold"))
+		err = b.Client.Rest.AddMemberRole(guildID, userID, roleID, rest.WithReason("Reached marketplace post threshold"), rest.WithCtx(ctx))
 	}
 	if err != nil {
 		st.mu.Lock()
@@ -208,7 +209,7 @@ func (b *Bot) grantPosterRoleIfDue(guildID snowflake.ID, st *posterRoleState, us
 	st.mu.Unlock()
 	if banned {
 		b.Log.Info("Market ban landed while granting poster role, revoking it", "user_id", userID, "guild_id", guildID)
-		if err := b.Client.Rest.RemoveMemberRole(guildID, userID, roleID, rest.WithReason("Banned from the marketplace")); err != nil {
+		if err := b.Client.Rest.RemoveMemberRole(guildID, userID, roleID, rest.WithReason("Banned from the marketplace"), rest.WithCtx(ctx)); err != nil {
 			b.Log.Error("Failed to revoke poster role from banned user", "user_id", userID, "guild_id", guildID, "role_id", roleID, "error", err)
 		}
 		return
@@ -290,10 +291,10 @@ func filterMessages(resp *discordSearchResponse, skip func(snowflake.ID) bool) [
 
 var errSearchIndexing = errors.New("search index not ready")
 
-func (b *Bot) searchUserMessages(guildID, userID snowflake.ID) (*discordSearchResponse, error) {
+func (b *Bot) searchUserMessages(ctx context.Context, guildID, userID snowflake.ID) (*discordSearchResponse, error) {
 	url := fmt.Sprintf("https://discord.com/api/v10/guilds/%d/messages/search?author_id=%d", guildID, userID)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -320,8 +321,8 @@ func (b *Bot) searchUserMessages(guildID, userID snowflake.ID) (*discordSearchRe
 	return &result, nil
 }
 
-func (b *Bot) fetchPosterRoleHistory(guildID snowflake.ID, st *posterRoleState, userID snowflake.ID, search *historySearch) {
-	result, err := b.searchUserMessages(guildID, userID)
+func (b *Bot) fetchPosterRoleHistory(ctx context.Context, guildID snowflake.ID, st *posterRoleState, userID snowflake.ID, search *historySearch) {
+	result, err := b.searchUserMessages(ctx, guildID, userID)
 	if err != nil {
 		st.mu.Lock()
 		st.failSearch(userID, search, time.Now())
@@ -339,7 +340,7 @@ func (b *Bot) fetchPosterRoleHistory(guildID snowflake.ID, st *posterRoleState, 
 	st.mu.Unlock()
 
 	skip := func(chID snowflake.ID) bool {
-		return cfg.isSkipped(b.resolveChannelParents(chID, &st.parentCache)...)
+		return cfg.isSkipped(b.resolveChannelParents(ctx, chID, &st.parentCache)...)
 	}
 	count := filteredSearchCount(result, skip)
 
@@ -376,7 +377,7 @@ func (b *Bot) clearPosterRoleTracking(guildID snowflake.ID, userID snowflake.ID)
 	st.mu.Unlock()
 }
 
-func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleMarketProgress(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	if e.GuildID() == nil {
 		return
 	}
@@ -384,7 +385,7 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 
 	st := b.posterRole.get(guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "Poster role is not configured for this server.")
+		botutil.RespondEphemeral(ctx, e, "Poster role is not configured for this server.")
 		return
 	}
 
@@ -393,7 +394,7 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	st.mu.Unlock()
 
 	if cfg.RoleID == 0 || cfg.Threshold == 0 {
-		botutil.RespondEphemeral(e, "Poster role is not configured. Use `/config market set` first.")
+		botutil.RespondEphemeral(ctx, e, "Poster role is not configured. Use `/config market set` first.")
 		return
 	}
 
@@ -404,7 +405,7 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 
 	user, ok := data.OptUser("user")
 	if !ok {
-		botutil.RespondEphemeral(e, "Please specify a user.")
+		botutil.RespondEphemeral(ctx, e, "Please specify a user.")
 		return
 	}
 
@@ -413,7 +414,7 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 
 	b.Log.Info("Market progress", "user_id", e.User().ID, "guild_id", guildID, "target_user", user.ID, "public", public)
 
-	if err := e.DeferCreateMessage(ephemeral); err != nil {
+	if err := e.DeferCreateMessage(ephemeral, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer marketprogress response", "error", err)
 		return
 	}
@@ -425,14 +426,14 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	}
 
 	// Fetch member info (for role check + join date)
-	if member, err := b.Client.Rest.GetMember(guildID, user.ID); err == nil {
+	if member, err := b.Client.Rest.GetMember(guildID, user.ID, rest.WithCtx(ctx)); err == nil {
 		p.MemberKnown = true
 		p.HasRole = slices.Contains(member.RoleIDs, cfg.RoleID)
 		p.JoinedAt = member.JoinedAt
 	}
 
 	// Fetch live search results
-	searchResult, searchErr := b.searchUserMessages(guildID, user.ID)
+	searchResult, searchErr := b.searchUserMessages(ctx, guildID, user.ID)
 	if errors.Is(searchErr, errSearchIndexing) {
 		msg := discord.MessageCreate{
 			Content: "Search index is building, please try again shortly.",
@@ -440,14 +441,14 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 		if ephemeral {
 			msg.Flags = discord.MessageFlagEphemeral
 		}
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
+		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx))
 		return
 	}
 	if searchErr != nil {
 		b.Log.Error("Failed to search post history for market progress", "guild_id", guildID, "target_user", user.ID, "error", searchErr)
 	} else {
 		skip := func(chID snowflake.ID) bool {
-			return cfg.isSkipped(b.resolveChannelParents(chID, &st.parentCache)...)
+			return cfg.isSkipped(b.resolveChannelParents(ctx, chID, &st.parentCache)...)
 		}
 		p.Searched = true
 		p.Count = filteredSearchCount(searchResult, skip)
@@ -460,7 +461,7 @@ func (b *Bot) handleMarketProgress(e *events.ApplicationCommandInteractionCreate
 	if ephemeral {
 		msg.Flags = discord.MessageFlagEphemeral
 	}
-	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx))
 }
 
 // marketProgress is what /market progress shows about a user.
@@ -557,7 +558,7 @@ type leaderboardEntry struct {
 	Total  int
 }
 
-func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleMarketLeaderboard(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	if e.GuildID() == nil {
 		return
 	}
@@ -565,7 +566,7 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 
 	st := b.posterRole.get(guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "Poster role is not configured for this server.")
+		botutil.RespondEphemeral(ctx, e, "Poster role is not configured for this server.")
 		return
 	}
 
@@ -574,7 +575,7 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 	st.mu.Unlock()
 
 	if cfg.RoleID == 0 || cfg.Threshold == 0 {
-		botutil.RespondEphemeral(e, "Poster role is not configured. Use `/config market set` first.")
+		botutil.RespondEphemeral(ctx, e, "Poster role is not configured. Use `/config market set` first.")
 		return
 	}
 
@@ -588,7 +589,7 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 
 	b.Log.Info("Market leaderboard", "user_id", e.User().ID, "guild_id", guildID, "public", public)
 
-	if err := e.DeferCreateMessage(ephemeral); err != nil {
+	if err := e.DeferCreateMessage(ephemeral, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer marketleaderboard response", "error", err)
 		return
 	}
@@ -638,12 +639,12 @@ func (b *Bot) handleMarketLeaderboard(e *events.ApplicationCommandInteractionCre
 	if ephemeral {
 		msg.Flags = discord.MessageFlagEphemeral
 	}
-	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg)
+	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx))
 }
 
 // --- /config market handlers ---
 
-func (b *Bot) handleMarketConfig(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleMarketConfig(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -656,7 +657,7 @@ func (b *Bot) handleMarketConfig(e *events.ApplicationCommandInteractionCreate) 
 
 	st := b.posterRole.get(*guildID)
 	if st == nil {
-		botutil.RespondEphemeral(e, "Marketplace feature is not available for this server.")
+		botutil.RespondEphemeral(ctx, e, "Marketplace feature is not available for this server.")
 		return
 	}
 
@@ -665,38 +666,38 @@ func (b *Bot) handleMarketConfig(e *events.ApplicationCommandInteractionCreate) 
 		return
 	}
 
-	persist := func() error { return b.posterRole.persist(*guildID) }
+	persist := func() error { return b.posterRole.persist(ctx, *guildID) }
 	switch *subCmd {
 	case "config":
-		b.handleMarketConfigSet(e, *guildID, st)
+		b.handleMarketConfigSet(ctx, e, *guildID, st)
 	case "show-config":
-		b.handleMarketConfigShow(e, st)
+		b.handleMarketConfigShow(ctx, e, st)
 	case "ban":
-		b.handleMarketBanAdd(e, *guildID, st)
+		b.handleMarketBanAdd(ctx, e, *guildID, st)
 	case "unban":
-		b.handleMarketBanRemove(e, *guildID, st)
+		b.handleMarketBanRemove(ctx, e, *guildID, st)
 	case "banlist":
-		b.handleMarketBanList(e, st)
+		b.handleMarketBanList(ctx, e, st)
 	case "filter-add":
-		b.handleBlacklistAdd(e, *guildID, st, persist, "Market")
+		b.handleBlacklistAdd(ctx, e, *guildID, st, persist, "Market")
 	case "filter-remove":
-		b.handleBlacklistRemove(e, *guildID, st, persist, "Market")
+		b.handleBlacklistRemove(ctx, e, *guildID, st, persist, "Market")
 	case "filter-list":
-		b.handleBlacklistList(e, st, "Market")
+		b.handleBlacklistList(ctx, e, st, "Market")
 	case "filter-clear":
-		b.handleBlacklistClear(e, *guildID, st, persist, "Market")
+		b.handleBlacklistClear(ctx, e, *guildID, st, persist, "Market")
 	}
 }
 
-func (b *Bot) handleMarketConfigSet(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
+func (b *Bot) handleMarketConfigSet(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
 	b.Log.Info("Market config set", "user_id", e.User().ID, "guild_id", guildID)
 
 	role, setRole := data.OptRole("role")
 	if setRole {
-		if reason := b.checkGrantableRole(e, guildID, role); reason != "" {
-			botutil.RespondEphemeral(e, reason)
+		if reason := b.checkGrantableRole(ctx, e, guildID, role); reason != "" {
+			botutil.RespondEphemeral(ctx, e, reason)
 			return
 		}
 	}
@@ -710,16 +711,16 @@ func (b *Bot) handleMarketConfigSet(e *events.ApplicationCommandInteractionCreat
 	}
 	st.mu.Unlock()
 
-	if err := b.posterRole.persist(guildID); err != nil {
+	if err := b.posterRole.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist market config", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save configuration.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
 
-	botutil.RespondEphemeral(e, "Marketplace configuration updated.")
+	botutil.RespondEphemeral(ctx, e, "Marketplace configuration updated.")
 }
 
-func (b *Bot) handleMarketConfigShow(e *events.ApplicationCommandInteractionCreate, st *posterRoleState) {
+func (b *Bot) handleMarketConfigShow(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *posterRoleState) {
 	b.Log.Info("Market config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
@@ -747,14 +748,14 @@ func (b *Bot) handleMarketConfigShow(e *events.ApplicationCommandInteractionCrea
 		fmt.Sprintf("**Banned Users:** %d", len(s.BlacklistedUsers)),
 	}
 
-	botutil.RespondEphemeral(e, strings.Join(lines, "\n"))
+	botutil.RespondEphemeral(ctx, e, strings.Join(lines, "\n"))
 }
 
-func (b *Bot) handleMarketBanAdd(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
+func (b *Bot) handleMarketBanAdd(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 	user, ok := data.OptUser("user")
 	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a user.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a user.")
 		return
 	}
 	reason := data.String("reason")
@@ -770,13 +771,13 @@ func (b *Bot) handleMarketBanAdd(e *events.ApplicationCommandInteractionCreate, 
 	st.mu.Unlock()
 
 	if !alreadyBanned {
-		if err := b.posterRole.persist(guildID); err != nil {
+		if err := b.posterRole.persist(ctx, guildID); err != nil {
 			b.Log.Error("Failed to persist market ban", "guild_id", guildID, "error", err)
 			// Undo the ban so that a retry runs all of it, not "already banned".
 			st.mu.Lock()
 			st.Settings.BlacklistedUsers, _ = withoutID(st.Settings.BlacklistedUsers, user.ID)
 			st.mu.Unlock()
-			botutil.RespondEphemeral(e, "Failed to save ban.")
+			botutil.RespondEphemeral(ctx, e, "Failed to save ban.")
 			return
 		}
 	}
@@ -785,29 +786,29 @@ func (b *Bot) handleMarketBanAdd(e *events.ApplicationCommandInteractionCreate, 
 	// banned: an earlier ban may have failed before getting this far.
 	b.clearPosterRoleTracking(guildID, user.ID)
 	if roleID != 0 {
-		if err := b.Client.Rest.RemoveMemberRole(guildID, user.ID, roleID, rest.WithReason(fmt.Sprintf("Marketplace ban by %s: %s", e.User().Username, reason))); err != nil {
+		if err := b.Client.Rest.RemoveMemberRole(guildID, user.ID, roleID, rest.WithReason(fmt.Sprintf("Marketplace ban by %s: %s", e.User().Username, reason)), rest.WithCtx(ctx)); err != nil {
 			b.Log.Error("Failed to remove poster role during market ban", "guild_id", guildID, "user_id", user.ID, "role_id", roleID, "error", err)
 		}
 	}
 
 	if alreadyBanned {
-		botutil.RespondEphemeral(e, fmt.Sprintf("%s is already banned from the marketplace.", userMention(user.ID)))
+		botutil.RespondEphemeral(ctx, e, fmt.Sprintf("%s is already banned from the marketplace.", userMention(user.ID)))
 		return
 	}
 
-	b.crossPostToModLog(guildID, user, discord.Embed{
+	b.crossPostToModLog(ctx, guildID, user, discord.Embed{
 		Title:       "Marketplace Ban",
 		Description: fmt.Sprintf("%s banned %s from the marketplace.\n\n**Reason:** %s", userMention(e.User().ID), userMention(user.ID), reason),
 	})
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("%s has been banned from the marketplace.", userMention(user.ID)))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("%s has been banned from the marketplace.", userMention(user.ID)))
 }
 
-func (b *Bot) handleMarketBanRemove(e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
+func (b *Bot) handleMarketBanRemove(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 	user, ok := data.OptUser("user")
 	if !ok {
-		botutil.RespondEphemeral(e, "Please provide a user.")
+		botutil.RespondEphemeral(ctx, e, "Please provide a user.")
 		return
 	}
 
@@ -819,25 +820,25 @@ func (b *Bot) handleMarketBanRemove(e *events.ApplicationCommandInteractionCreat
 	st.mu.Unlock()
 
 	if !found {
-		botutil.RespondEphemeral(e, fmt.Sprintf("%s is not banned from the marketplace.", userMention(user.ID)))
+		botutil.RespondEphemeral(ctx, e, fmt.Sprintf("%s is not banned from the marketplace.", userMention(user.ID)))
 		return
 	}
 
-	if err := b.posterRole.persist(guildID); err != nil {
+	if err := b.posterRole.persist(ctx, guildID); err != nil {
 		b.Log.Error("Failed to persist market ban removal", "guild_id", guildID, "error", err)
-		botutil.RespondEphemeral(e, "Failed to save changes.")
+		botutil.RespondEphemeral(ctx, e, "Failed to save changes.")
 		return
 	}
 
-	b.crossPostToModLog(guildID, user, discord.Embed{
+	b.crossPostToModLog(ctx, guildID, user, discord.Embed{
 		Title:       "Marketplace Unban",
 		Description: fmt.Sprintf("%s unbanned %s from the marketplace.", userMention(e.User().ID), userMention(user.ID)),
 	})
 
-	botutil.RespondEphemeral(e, fmt.Sprintf("%s has been unbanned from the marketplace.", userMention(user.ID)))
+	botutil.RespondEphemeral(ctx, e, fmt.Sprintf("%s has been unbanned from the marketplace.", userMention(user.ID)))
 }
 
-func (b *Bot) handleMarketBanList(e *events.ApplicationCommandInteractionCreate, st *posterRoleState) {
+func (b *Bot) handleMarketBanList(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *posterRoleState) {
 	b.Log.Info("Market ban list", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
@@ -846,7 +847,7 @@ func (b *Bot) handleMarketBanList(e *events.ApplicationCommandInteractionCreate,
 	st.mu.Unlock()
 
 	if len(list) == 0 {
-		botutil.RespondEphemeral(e, "No users are banned from the marketplace.")
+		botutil.RespondEphemeral(ctx, e, "No users are banned from the marketplace.")
 		return
 	}
 
@@ -854,5 +855,5 @@ func (b *Bot) handleMarketBanList(e *events.ApplicationCommandInteractionCreate,
 	for _, id := range list {
 		lines = append(lines, fmt.Sprintf("- %s", userMention(id)))
 	}
-	botutil.RespondEphemeral(e, "**Banned users:**\n"+strings.Join(lines, "\n"))
+	botutil.RespondEphemeral(ctx, e, "**Banned users:**\n"+strings.Join(lines, "\n"))
 }

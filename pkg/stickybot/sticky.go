@@ -66,7 +66,7 @@ func (s *stickyMessage) messageCreate(fileURL func(string) string) discord.Messa
 // that fails to load stays out of b.stickies; retryFailed calls this again,
 // and guildLoaded retries it when it is next used. It returns the refusals
 // of stickies a newer build wrote, which startup exits on.
-func (b *Bot) loadStickies() error {
+func (b *Bot) loadStickies(ctx context.Context) error {
 	var refused []error
 	for _, guildID := range botutil.AllowedGuildIDs {
 		b.mu.Lock()
@@ -77,8 +77,8 @@ func (b *Bot) loadStickies() error {
 		}
 		// Bounded, since the bot isn't online until the boot load returns,
 		// and per guild, so one slow fetch doesn't fail the others.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := b.loadGuild(ctx, guildID); statever.IsNewer(err) {
+		loadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		if err := b.loadGuild(loadCtx, guildID); statever.IsNewer(err) {
 			refused = append(refused, err)
 		}
 		cancel()
@@ -88,10 +88,10 @@ func (b *Bot) loadStickies() error {
 
 // retryFailed retries what failed against S3: loads, saves and file
 // deletions. It fails if any of them is still outstanding.
-func (b *Bot) retryFailed() error {
-	b.loadStickies() // refusals are logged; only startup exits on them
-	b.saveUnsavedStickies()
-	b.retryFileDeletes()
+func (b *Bot) retryFailed(ctx context.Context) error {
+	b.loadStickies(ctx) // refusals are logged; only startup exits on them
+	b.saveUnsavedStickies(ctx)
+	b.retryFileDeletes(ctx)
 	return b.outstanding()
 }
 
@@ -155,7 +155,7 @@ func (b *Bot) loadGuild(ctx context.Context, guildID snowflake.ID) error {
 	if b.readyGuilds[guildID] {
 		// Its GuildReady found nothing loaded to check. In a goroutine, so
 		// a command whose load this is isn't held up by the checks.
-		go b.dropStickiesOfDeletedChannels(guildID)
+		go b.dropStickiesOfDeletedChannels(context.WithoutCancel(ctx), guildID)
 	}
 	return nil
 }
@@ -194,7 +194,7 @@ var saveTimeout = 30 * time.Second
 // saveStickiesForGuild writes guildID's stickies to S3, unless the guild
 // isn't loaded. Saves run one at a time, so the last one taken is the last
 // one stored. A failed save is retried by saveUnsavedStickies.
-func (b *Bot) saveStickiesForGuild(guildID snowflake.ID) {
+func (b *Bot) saveStickiesForGuild(ctx context.Context, guildID snowflake.ID) {
 	b.saveMu.Lock()
 	defer b.saveMu.Unlock()
 
@@ -216,7 +216,7 @@ func (b *Bot) saveStickiesForGuild(guildID snowflake.ID) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+	ctx, cancel := context.WithTimeout(ctx, saveTimeout)
 	defer cancel()
 	if err := b.S3.SaveStickies(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
 		b.Log.Error("Failed to save stickies", "guild_id", guildID, "error", err)
@@ -231,13 +231,13 @@ func (b *Bot) saveStickiesForGuild(guildID snowflake.ID) {
 // guild straight away, so these are the only guilds S3 is behind on. Saving
 // the rest could only overwrite changes made elsewhere, such as by another
 // instance using the same bucket.
-func (b *Bot) saveUnsavedStickies() {
+func (b *Bot) saveUnsavedStickies(ctx context.Context) {
 	b.saveMu.Lock()
 	guildIDs := slices.Collect(maps.Keys(b.unsaved))
 	b.saveMu.Unlock()
 
 	for _, guildID := range guildIDs {
-		b.saveStickiesForGuild(guildID)
+		b.saveStickiesForGuild(ctx, guildID)
 	}
 }
 
@@ -267,7 +267,7 @@ func (b *Bot) startStickyGoroutine(s *stickyMessage) {
 		MsgThreshold:      s.MsgThreshold,
 		TimeThresholdMins: s.TimeThresholdMins,
 		LastPostTime:      lastPostTime,
-	}, func() bool { return b.repostSticky(s) })
+	}, func() bool { return b.repostSticky(context.Background(), s) })
 }
 
 // stopStickyGoroutine stops s's repost loop and waits out any repost in
@@ -285,32 +285,32 @@ func (b *Bot) stopStickyGoroutine(s *stickyMessage) {
 // retireSticky stops s's repost loop, then deletes its last posted message and
 // its saved files. s must already be out of b.stickies (see
 // stopStickyGoroutine).
-func (b *Bot) retireSticky(s *stickyMessage) {
+func (b *Bot) retireSticky(ctx context.Context, s *stickyMessage) {
 	b.stopStickyGoroutine(s)
 	// Read only after the stop: a repost in flight replaces the message.
 	b.mu.Lock()
 	lastMessageID := s.LastMessageID
 	b.mu.Unlock()
 	if lastMessageID != 0 {
-		_ = b.Client.Rest.DeleteMessage(s.ChannelID, lastMessageID)
+		_ = b.Client.Rest.DeleteMessage(s.ChannelID, lastMessageID, rest.WithCtx(ctx))
 	}
-	b.deleteStickyFiles(s)
+	b.deleteStickyFiles(ctx, s)
 }
 
 // deleteStickyFiles deletes s's saved files.
-func (b *Bot) deleteStickyFiles(s *stickyMessage) {
-	b.deleteFiles(s.fileKeys(b.S3.Origin() + "/" + b.S3.Bucket() + "/"))
+func (b *Bot) deleteStickyFiles(ctx context.Context, s *stickyMessage) {
+	b.deleteFiles(ctx, s.fileKeys(b.S3.Origin()+"/"+b.S3.Bucket()+"/"))
 }
 
 // deleteFiles deletes the saved files at keys. Once their sticky is gone they
 // are recorded nowhere else, so if that fails they are logged and kept for
 // retryFileDeletes. No sticky refers to them again: each sticky has its own
 // copies (see createSticky).
-func (b *Bot) deleteFiles(keys []string) {
+func (b *Bot) deleteFiles(ctx context.Context, keys []string) {
 	if len(keys) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	if err := b.S3.DeleteKeys(ctx, keys...); err != nil {
 		b.Log.Error("Failed to delete sticky files; will retry", "keys", keys, "error", err)
@@ -323,12 +323,12 @@ func (b *Bot) deleteFiles(keys []string) {
 }
 
 // retryFileDeletes retries the file deletions that failed.
-func (b *Bot) retryFileDeletes() {
+func (b *Bot) retryFileDeletes(ctx context.Context) {
 	b.mu.Lock()
 	keys := b.undeleted
 	b.undeleted = nil
 	b.mu.Unlock()
-	b.deleteFiles(keys)
+	b.deleteFiles(ctx, keys)
 }
 
 // fileKeys returns the bucket keys of s's saved files. Stickies made before
@@ -370,10 +370,10 @@ func (b *Bot) stopAllStickyGoroutines() {
 	wg.Wait()
 }
 
-func (b *Bot) repostSticky(s *stickyMessage) bool {
+func (b *Bot) repostSticky(ctx context.Context, s *stickyMessage) bool {
 	// Skip repost if the sticky is still within the last N messages (buffer).
 	if s.LastMessageID != 0 && s.Buffer > 0 {
-		msgs, err := b.Client.Rest.GetMessages(s.ChannelID, 0, 0, 0, s.Buffer)
+		msgs, err := b.Client.Rest.GetMessages(s.ChannelID, 0, 0, 0, s.Buffer, rest.WithCtx(ctx))
 		if err == nil {
 			for _, m := range msgs {
 				if m.ID == s.LastMessageID {
@@ -386,22 +386,22 @@ func (b *Bot) repostSticky(s *stickyMessage) bool {
 
 	// Skip repost if only bot messages were posted after the sticky.
 	// This prevents repost loops when multiple bots are active in the same channel.
-	if s.LastMessageID != 0 && botutil.OnlyBotsAfter(b.Client.Rest, s.ChannelID, s.LastMessageID, b.Log) {
+	if s.LastMessageID != 0 && botutil.OnlyBotsAfter(ctx, b.Client.Rest, s.ChannelID, s.LastMessageID, b.Log) {
 		b.Log.Debug("Repost skipped, only bot messages after sticky", "channel_id", s.ChannelID, "guild_id", s.GuildID)
 		return true
 	}
 
 	// Delete old message (best-effort)
 	if s.LastMessageID != 0 {
-		_ = b.Client.Rest.DeleteMessage(s.ChannelID, s.LastMessageID)
+		_ = b.Client.Rest.DeleteMessage(s.ChannelID, s.LastMessageID, rest.WithCtx(ctx))
 	}
 
-	sent, err := botutil.PostWithRetry(b.Client.Rest, s.ChannelID, s.messageCreate(b.S3.FileURL), b.Log)
+	sent, err := botutil.PostWithRetry(ctx, b.Client.Rest, s.ChannelID, s.messageCreate(b.S3.FileURL), b.Log)
 	if rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownChannel) {
 		// Deleted without an event this bot saw: while it was offline, or a
 		// thread whose parent was deleted. In a goroutine, since dropping the
 		// sticky stops this loop, which waits for this repost to return.
-		go b.dropDeletedChannelSticky(s.GuildID, s.ChannelID)
+		go b.dropDeletedChannelSticky(context.WithoutCancel(ctx), s.GuildID, s.ChannelID)
 		return false
 	}
 	if err != nil {
@@ -412,6 +412,6 @@ func (b *Bot) repostSticky(s *stickyMessage) bool {
 	b.mu.Lock()
 	s.LastMessageID = sent.ID
 	b.mu.Unlock()
-	b.saveStickiesForGuild(s.GuildID)
+	b.saveStickiesForGuild(ctx, s.GuildID)
 	return true
 }

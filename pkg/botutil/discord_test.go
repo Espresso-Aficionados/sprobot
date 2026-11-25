@@ -77,7 +77,7 @@ func TestPostWithRetrySendsSameNonceOnEveryAttempt(t *testing.T) {
 	api := &fakeCreateMessageAPI{statuses: []int{http.StatusInternalServerError, http.StatusBadGateway}}
 	r := newFakeRest(t, api)
 
-	msg, err := PostWithRetry(r, 500, discord.MessageCreate{Content: "sticky"}, testutil.DiscardLogger())
+	msg, err := PostWithRetry(t.Context(), r, 500, discord.MessageCreate{Content: "sticky"}, testutil.DiscardLogger())
 	if err != nil {
 		t.Fatalf("PostWithRetry: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestPostWithRetrySendsSameNonceOnEveryAttempt(t *testing.T) {
 	}
 
 	// A new post is a new message, so it gets its own nonce.
-	if _, err := PostWithRetry(r, 500, discord.MessageCreate{Content: "sticky"}, testutil.DiscardLogger()); err != nil {
+	if _, err := PostWithRetry(t.Context(), r, 500, discord.MessageCreate{Content: "sticky"}, testutil.DiscardLogger()); err != nil {
 		t.Fatalf("second PostWithRetry: %v", err)
 	}
 	if reqs := api.sent(); reqs[len(reqs)-1].Nonce == nonce {
@@ -118,7 +118,7 @@ func TestPostWithRetryDoesNotRetryClientErrors(t *testing.T) {
 	api := &fakeCreateMessageAPI{statuses: []int{http.StatusBadRequest}}
 	r := newFakeRest(t, api)
 
-	if _, err := PostWithRetry(r, 500, discord.MessageCreate{Content: "x"}, testutil.DiscardLogger()); err == nil {
+	if _, err := PostWithRetry(t.Context(), r, 500, discord.MessageCreate{Content: "x"}, testutil.DiscardLogger()); err == nil {
 		t.Fatal("PostWithRetry after a 400 = nil error, want the error")
 	}
 	if n := len(api.sent()); n != 1 {
@@ -145,7 +145,7 @@ func TestFollowupEphemeral(t *testing.T) {
 	defer srv.Close()
 	client := &bot.Client{ApplicationID: 42, Rest: rest.New(rest.NewClient("test", rest.WithURL(srv.URL)))}
 
-	FollowupEphemeral(client, "tok", "Saved.")
+	FollowupEphemeral(t.Context(), client, "tok", "Saved.")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -161,7 +161,7 @@ func TestPostWithRetryGivesUpAfterThreeAttempts(t *testing.T) {
 	api := &fakeCreateMessageAPI{statuses: []int{500, 500, 500, 500}}
 	r := newFakeRest(t, api)
 
-	if _, err := PostWithRetry(r, 500, discord.MessageCreate{Content: "x"}, testutil.DiscardLogger()); err == nil {
+	if _, err := PostWithRetry(t.Context(), r, 500, discord.MessageCreate{Content: "x"}, testutil.DiscardLogger()); err == nil {
 		t.Fatal("PostWithRetry after three 500s = nil error, want the error")
 	}
 	if n := len(api.sent()); n != 3 {

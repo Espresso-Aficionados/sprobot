@@ -18,7 +18,7 @@ func TestWarnLinksPostedMessageWithoutRefetching(t *testing.T) {
 	e, _ := commandEvent(t, b.Client, `{"id":"100","name":"warn","type":1,`+
 		`"options":[{"name":"user","type":6,"value":"31"},{"name":"reason","type":3,"value":"spam"}],`+
 		`"resolved":{"users":{"31":{"id":"31","username":"bob"}}}}`)
-	b.handleWarn(e)
+	b.handleWarn(t.Context(), e)
 
 	if got := stub.bodies("POST /interactions/1/tok/callback"); len(got) != 1 || !strings.Contains(got[0], "spam") {
 		t.Fatalf("warning responses = %v, want one carrying the reason", got)

@@ -331,13 +331,13 @@ func TestShortcutRemoveDeletesUnusedFiles(t *testing.T) {
 	b, _, fake := newShortcutBot(t)
 
 	e, _ := commandEvent(t, b.Client, removeShortcutData("a"))
-	b.handleShortcutConfigRemove(e)
+	b.handleShortcutConfigRemove(t.Context(), e)
 	if objectExists(fake, shortcutKeyA) {
 		t.Error("file A outlived the only shortcut using it")
 	}
 
 	e, _ = commandEvent(t, b.Client, removeShortcutData("b"))
-	b.handleShortcutConfigRemove(e)
+	b.handleShortcutConfigRemove(t.Context(), e)
 	if !objectExists(fake, shortcutKeyB) {
 		t.Error("deleted file B although shortcut c still links to it")
 	}
@@ -348,7 +348,7 @@ func TestShortcutReplaceDeletesUnusedFiles(t *testing.T) {
 
 	e, _ := modalEvent(t, b.Client, "sconfig_set_a",
 		`[{"type":1,"components":[{"type":4,"custom_id":"response_0","value":"text now"}]}]`)
-	b.handleShortcutConfigSetModal(e)
+	b.handleShortcutConfigSetModal(t.Context(), e)
 
 	if objectExists(fake, shortcutKeyA) {
 		t.Error("the replaced response's file was kept")
@@ -383,7 +383,7 @@ func putsUnder(fake *testutil.FakeS3, prefix string) []string {
 func TestShortcutSetReusesOwnSavedFile(t *testing.T) {
 	b, _, fake := newShortcutBot(t)
 
-	b.handleShortcutConfigSetModal(setShortcutModal(t, b, "d", sprobot.WebEndpoint+"files/shortcut/10/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"))
+	b.handleShortcutConfigSetModal(t.Context(), setShortcutModal(t, b, "d", sprobot.WebEndpoint+"files/shortcut/10/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"))
 
 	if got := b.shortcuts.get(10).Shortcuts["d"].Responses; !slices.Equal(got, []string{shortcutKeyA}) {
 		t.Errorf("responses = %v, want the bare key of the linked file", got)
@@ -410,7 +410,7 @@ func TestShortcutSetCopiesFilesItDoesNotOwn(t *testing.T) {
 				link = b.S3.FileURL(tt.key)
 			}
 
-			b.handleShortcutConfigSetModal(setShortcutModal(t, b, "d", link))
+			b.handleShortcutConfigSetModal(t.Context(), setShortcutModal(t, b, "d", link))
 
 			got := b.shortcuts.get(10).Shortcuts["d"].Responses
 			if len(got) != 1 || got[0] == tt.key || !strings.HasPrefix(got[0], "shortcut_files/10/") || path.Ext(got[0]) != path.Ext(tt.key) {
@@ -425,7 +425,7 @@ func TestShortcutSetCopiesFilesItDoesNotOwn(t *testing.T) {
 
 			// Removing the shortcut deletes the copy, never the source.
 			e, _ := commandEvent(t, b.Client, removeShortcutData("d"))
-			b.handleShortcutConfigRemove(e)
+			b.handleShortcutConfigRemove(t.Context(), e)
 			if objectExists(fake, got[0]) || !objectExists(fake, tt.key) {
 				t.Errorf("after removal: copy exists %v, source exists %v; want only the source", objectExists(fake, got[0]), objectExists(fake, tt.key))
 			}

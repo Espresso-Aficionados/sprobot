@@ -38,13 +38,13 @@ func TestEnsureAutoRoleBacksOffAfterFailure(t *testing.T) {
 		return restError(http.StatusForbidden, 50013, "Missing Permissions")
 	})
 
-	b.ensureAutoRole(roleTestGuild, messageFrom(20))
-	b.ensureAutoRole(roleTestGuild, messageFrom(20))
+	b.ensureAutoRole(t.Context(), roleTestGuild, messageFrom(20))
+	b.ensureAutoRole(t.Context(), roleTestGuild, messageFrom(20))
 	if n := api.count(roleCall("PUT", 20, roleTestMember)); n != 1 {
 		t.Errorf("%d grant attempts for one user, want 1", n)
 	}
 
-	b.ensureAutoRole(roleTestGuild, messageFrom(21))
+	b.ensureAutoRole(t.Context(), roleTestGuild, messageFrom(21))
 	if n := api.count(roleCall("PUT", 21, roleTestMember)); n != 1 {
 		t.Errorf("another user: %d grant attempts, want 1", n)
 	}
@@ -67,7 +67,7 @@ func TestEnsureAutoRoleRefusesUngrantableRole(t *testing.T) {
 
 	for _, roleID := range []snowflake.ID{modRole, unknownRole} {
 		b.autoRole.set(roleTestGuild, &autoRoleState{RoleID: roleID})
-		b.ensureAutoRole(roleTestGuild, messageFrom(20))
+		b.ensureAutoRole(t.Context(), roleTestGuild, messageFrom(20))
 		b.onMemberJoin(memberJoin(20))
 		if n := api.count(roleCall("PUT", 20, roleID)); n != 0 {
 			t.Errorf("role %d granted %d times", roleID, n)
@@ -78,8 +78,8 @@ func TestEnsureAutoRoleRefusesUngrantableRole(t *testing.T) {
 func TestEnsureAutoRoleSkipsMembersWithTheRole(t *testing.T) {
 	b, api, _ := newRoleTestBot(t)
 	b.autoRole.set(roleTestGuild, &autoRoleState{RoleID: roleTestMember})
-	b.ensureAutoRole(roleTestGuild, messageFrom(20, roleTestMember))
-	b.ensureAutoRole(roleTestGuild, messageFrom(21))
+	b.ensureAutoRole(t.Context(), roleTestGuild, messageFrom(20, roleTestMember))
+	b.ensureAutoRole(t.Context(), roleTestGuild, messageFrom(21))
 	if n := api.count(roleCall("PUT", 20, roleTestMember)); n != 0 {
 		t.Errorf("granted the auto-role to a member who has it")
 	}

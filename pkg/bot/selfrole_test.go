@@ -182,7 +182,7 @@ func TestSelfroleToggleDefersBeforeChangingRole(t *testing.T) {
 	stub.on("PUT /guilds/10/members/30/roles/80", 204, "")
 
 	e, replies := componentEvent(t, b.Client, "selfrole_80", "", "")
-	b.handleSelfroleToggle(e, 80)
+	b.handleSelfroleToggle(t.Context(), e, 80)
 
 	typ, data := replies.only(t)
 	if typ != discord.InteractionResponseTypeDeferredCreateMessage || !isEphemeral(data) {
@@ -202,7 +202,7 @@ func TestSelfroleToggleRemovesHeldRole(t *testing.T) {
 	stub.on("DELETE /guilds/10/members/30/roles/81", 204, "")
 
 	e, _ := componentEvent(t, b.Client, "selfrole_81", `"81"`, "")
-	b.handleSelfroleToggle(e, 81)
+	b.handleSelfroleToggle(t.Context(), e, 81)
 
 	if got := stub.bodies("DELETE /guilds/10/members/30/roles/81"); len(got) != 1 {
 		t.Errorf("removed the role %d times, want 1", len(got))
@@ -216,7 +216,7 @@ func TestSelfroleToggleStaleButton(t *testing.T) {
 	b, stub := newSelfroleBot(t)
 
 	e, replies := componentEvent(t, b.Client, "selfrole_999", "", "")
-	b.handleSelfroleToggle(e, 999)
+	b.handleSelfroleToggle(t.Context(), e, 999)
 
 	_, data := replies.only(t)
 	if !isEphemeral(data) || !strings.Contains(contentOf(data), "no longer available") {

@@ -1,14 +1,16 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 )
 
-func (b *Bot) handleWarn(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleWarn(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok {
 		return
@@ -42,7 +44,7 @@ func (b *Bot) handleWarn(e *events.ApplicationCommandInteractionCreate) {
 				},
 			}},
 		},
-	})
+	}, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.Error("Failed to post warning message", "error", err, "target_user_id", targetUser.ID, "guild_id", *guildID)
 		return
@@ -75,8 +77,8 @@ func (b *Bot) handleWarn(e *events.ApplicationCommandInteractionCreate) {
 		Fields: logFields,
 	}
 
-	b.postEventLog(*guildID, logEmbed)
-	b.crossPostToModLog(*guildID, targetUser, logEmbed)
+	b.postEventLog(ctx, *guildID, logEmbed)
+	b.crossPostToModLog(ctx, *guildID, targetUser, logEmbed)
 
 	b.Log.Info("Warn issued",
 		"target_user_id", strconv.FormatInt(int64(targetUser.ID), 10),

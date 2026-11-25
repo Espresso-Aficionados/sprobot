@@ -90,13 +90,13 @@ func (b *Bot) Run() error {
 	// Before the gateway opens, so no command or event sees a guild whose
 	// stickies aren't in memory yet. Nothing has been saved, and nothing
 	// will be: a newer build's stickies are left as they are.
-	if err := b.loadStickies(); err != nil {
+	if err := b.loadStickies(ctx); err != nil {
 		return err
 	}
 
 	b.ServeHealth()
 	if err := b.OpenGateway(ctx); err != nil {
-		b.shutdown()
+		b.shutdown(ctx)
 		return err
 	}
 	defer b.Client.Close(ctx)
@@ -104,25 +104,25 @@ func (b *Bot) Run() error {
 	b.WaitForGuilds(30 * time.Second)
 
 	if err := b.registerAllCommands(); err != nil {
-		b.shutdown()
+		b.shutdown(ctx)
 		return fmt.Errorf("registering commands: %w", err)
 	}
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.Heartbeat)
-	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, retryFailedJob, func(context.Context) error { return b.retryFailed() })
+	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, retryFailedJob, b.retryFailed)
 
 	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
 	shutdownErr := b.WaitForShutdown("Stickybot")
-	b.shutdown()
+	b.shutdown(ctx)
 	return shutdownErr
 }
 
 // shutdown stops the repost loops, waiting out reposts in flight, and retries
 // any saves and file deletions that failed.
-func (b *Bot) shutdown() {
+func (b *Bot) shutdown(ctx context.Context) {
 	close(b.stop)
 	b.stopAllStickyGoroutines()
-	b.saveUnsavedStickies()
-	b.retryFileDeletes()
+	b.saveUnsavedStickies(ctx)
+	b.retryFileDeletes(ctx)
 }
 
 func (b *Bot) onMessage(e *events.MessageCreate) {
@@ -149,6 +149,7 @@ func (b *Bot) onMessage(e *events.MessageCreate) {
 // whose stickies haven't loaded yet is checked by the load that succeeds (see
 // loadGuildStickies).
 func (b *Bot) onGuildReady(e *events.GuildReady) {
+	ctx := context.Background()
 	if !botutil.GuildAllowed(e.GuildID) {
 		return
 	}
@@ -157,7 +158,7 @@ func (b *Bot) onGuildReady(e *events.GuildReady) {
 	_, loaded := b.stickies[e.GuildID]
 	b.mu.Unlock()
 	if loaded {
-		b.dropStickiesOfDeletedChannels(e.GuildID)
+		b.dropStickiesOfDeletedChannels(ctx, e.GuildID)
 	}
 }
 
@@ -167,34 +168,36 @@ func (b *Bot) onGuildReady(e *events.GuildReady) {
 // was replaced rather than resumed, or the guild's stickies hadn't loaded. A
 // sticky in a thread goes too when the thread's parent was deleted, since
 // that deletes the thread.
-func (b *Bot) dropStickiesOfDeletedChannels(guildID snowflake.ID) {
+func (b *Bot) dropStickiesOfDeletedChannels(ctx context.Context, guildID snowflake.ID) {
 	b.mu.Lock()
 	channelIDs := slices.Collect(maps.Keys(b.stickies[guildID]))
 	b.mu.Unlock()
 	for _, channelID := range channelIDs {
 		// Only Unknown Channel means deleted: a channel the bot can't see is
 		// Missing Access, and any other failure may pass.
-		if _, err := b.Client.Rest.GetChannel(channelID); rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownChannel) {
-			b.dropDeletedChannelSticky(guildID, channelID)
+		if _, err := b.Client.Rest.GetChannel(channelID, rest.WithCtx(ctx)); rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownChannel) {
+			b.dropDeletedChannelSticky(ctx, guildID, channelID)
 		}
 	}
 }
 
 func (b *Bot) onChannelDelete(e *events.GuildChannelDelete) {
-	b.dropDeletedChannelSticky(e.GuildID, e.ChannelID)
+	ctx := context.Background()
+	b.dropDeletedChannelSticky(ctx, e.GuildID, e.ChannelID)
 }
 
 func (b *Bot) onThreadDelete(e *events.ThreadDelete) {
-	b.dropDeletedChannelSticky(e.GuildID, e.ThreadID)
+	ctx := context.Background()
+	b.dropDeletedChannelSticky(ctx, e.GuildID, e.ThreadID)
 }
 
 // dropDeletedChannelSticky removes the sticky of a deleted channel or thread.
 // Left alone, it would keep its repost loop and stay stored as active, to be
 // started again on every boot.
-func (b *Bot) dropDeletedChannelSticky(guildID, channelID snowflake.ID) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+func (b *Bot) dropDeletedChannelSticky(ctx context.Context, guildID, channelID snowflake.ID) {
+	loadCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	if !b.guildLoaded(ctx, guildID) {
+	if !b.guildLoaded(loadCtx, guildID) {
 		return
 	}
 	s := b.takeSticky(guildID, channelID)
@@ -203,7 +206,7 @@ func (b *Bot) dropDeletedChannelSticky(guildID, channelID snowflake.ID) {
 	}
 	b.Log.Info("Removing sticky of deleted channel", "guild_id", guildID, "channel_id", channelID)
 	// Saved before the slow retire, which a shutdown doesn't wait for.
-	b.saveStickiesForGuild(guildID)
+	b.saveStickiesForGuild(ctx, guildID)
 	// The message went with the channel; deleting it again fails harmlessly.
-	b.retireSticky(s)
+	b.retireSticky(ctx, s)
 }

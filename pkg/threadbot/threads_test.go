@@ -51,7 +51,7 @@ func TestThreadsEmbedChannelAndServerLists(t *testing.T) {
 	}
 	b := newThreadListBot(t, api)
 
-	ch, err := b.buildThreadsEmbed(devGuild, 500)
+	ch, err := b.buildThreadsEmbed(t.Context(), devGuild, 500)
 	if err != nil || ch == nil {
 		t.Fatalf("channel list = %v, %v", ch, err)
 	}
@@ -69,7 +69,7 @@ func TestThreadsEmbedChannelAndServerLists(t *testing.T) {
 		t.Errorf("channel list summary wrong: title %q, footer %q\n%s", ch.Title, ch.Footer.Text, ch.Description)
 	}
 
-	all, err := b.buildThreadsEmbed(devGuild, 0)
+	all, err := b.buildThreadsEmbed(t.Context(), devGuild, 0)
 	if err != nil || all == nil {
 		t.Fatalf("server list = %v, %v", all, err)
 	}
@@ -135,7 +135,7 @@ func TestPrivateThreadsNeverListed(t *testing.T) {
 	b := newThreadListBot(t, api)
 
 	for _, channelID := range []snowflake.ID{500, 0} {
-		e, err := b.buildThreadsEmbed(devGuild, channelID)
+		e, err := b.buildThreadsEmbed(t.Context(), devGuild, channelID)
 		if err != nil || e == nil {
 			t.Fatalf("channel %d: embed = %v, %v", channelID, e, err)
 		}
@@ -150,7 +150,7 @@ func TestPrivateThreadsNeverListed(t *testing.T) {
 	// A channel whose only active thread is private has nothing to show.
 	api.setField("101", "type", 12)
 	api.setField("103", "type", 12)
-	if e, err := b.buildThreadsEmbed(devGuild, 500); e != nil || err != nil {
+	if e, err := b.buildThreadsEmbed(t.Context(), devGuild, 500); e != nil || err != nil {
 		t.Errorf("only private threads: embed = %+v, %v; want none", e, err)
 	}
 }
@@ -185,7 +185,7 @@ func TestThreadListReportsFetchFailure(t *testing.T) {
 			b := newThreadListBot(t, api)
 
 			e, _ := commandEvent(t, devGuild, tt.data)
-			b.onCommand(e)
+			b.onCommand(t.Context(), e)
 			sent := api.sentFollowups()
 			if len(sent) != 1 || !strings.Contains(sent[0].Content, tt.want) {
 				t.Errorf("follow-ups = %+v, want one saying %q", sent, tt.want)

@@ -224,7 +224,7 @@ func TestSaveTopPostersPrunesWhatItStores(t *testing.T) {
 		Usernames: map[string]string{"1": "alice", "2": "bob"},
 	})
 
-	b.saveTopPosters()
+	b.saveTopPosters(t.Context())
 
 	fake.Mu.Lock()
 	body, ok := fake.Objects["/test-bucket/topposters/1.json"]
@@ -340,7 +340,7 @@ func TestTopPostersConfigNeedsLoadedState(t *testing.T) {
 	b.topPostersConfig.failed[10] = true
 	b.topPostersConfig.mu.Unlock()
 	e, replies := commandEvent(t, b.Client, filterAdd)
-	b.handleTopPostersConfigCmd(e)
+	b.handleTopPostersConfigCmd(t.Context(), e)
 	if _, resp := replies.only(t); !isEphemeral(resp) || !strings.Contains(contentOf(resp), "can't be changed right now") {
 		t.Errorf("reply while the load has failed = %q, want an ephemeral refusal", contentOf(resp))
 	}
@@ -352,7 +352,7 @@ func TestTopPostersConfigNeedsLoadedState(t *testing.T) {
 	delete(b.topPostersConfig.failed, 10)
 	b.topPostersConfig.mu.Unlock()
 	e, replies = commandEvent(t, b.Client, filterAdd)
-	b.handleTopPostersConfigCmd(e)
+	b.handleTopPostersConfigCmd(t.Context(), e)
 	if _, resp := replies.only(t); !strings.HasPrefix(contentOf(resp), "Added to filter") {
 		t.Errorf("reply on a guild with no state = %q, want the filter added", contentOf(resp))
 	}

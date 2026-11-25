@@ -51,7 +51,7 @@ func TestCommandFromGuildNotAllowedCreatesNoState(t *testing.T) {
 
 	const foreignGuild snowflake.ID = 555
 	e, responses := commandEvent(t, foreignGuild, enableData)
-	b.onCommand(e)
+	b.onCommand(t.Context(), e)
 
 	select {
 	case m := <-responses:
@@ -82,16 +82,16 @@ func TestRefreshCountsClearsStoredCounts(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		fake.Objects[devCountsKey] = []byte(stored)
 		b := newTestBot(t, testutil.NewTestS3Client(t, srv))
-		b.loadMemberCounts()
+		b.loadMemberCounts(t.Context())
 
 		e, responses := commandEvent(t, devGuild, `{"id":"3","name":"threadbot","type":1,"options":[{"name":"refreshcounts","type":1}]}`)
-		b.onCommand(e)
+		b.onCommand(t.Context(), e)
 		if m := <-responses; !strings.Contains(m.Content, "cleared") {
 			t.Errorf("stored %s: response %q", stored, m.Content)
 		}
 
 		restarted := newTestBot(t, testutil.NewTestS3Client(t, srv))
-		restarted.loadMemberCounts()
+		restarted.loadMemberCounts(t.Context())
 		if c := restarted.memberCounts[devGuild]; c == nil || len(c.Counts) != 0 {
 			t.Errorf("stored %s: counts after restart = %+v, want an empty cache", stored, c)
 		}
@@ -109,10 +109,10 @@ func TestListShowsSettingsAndFlagsInvalidOnes(t *testing.T) {
 		"500":{"channel_id":"500","guild_id":"1013566342345019512","enabled":true,"min_idle_mins":0,"max_idle_mins":15,"msg_threshold":0,"time_threshold_mins":60,"buffer":0},
 		"600":{"channel_id":"600","guild_id":"1013566342345019512","enabled":true,"min_idle_mins":30,"max_idle_mins":15,"msg_threshold":30,"time_threshold_mins":60,"buffer":5}}`)
 	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
-	b.loadReminders()
+	b.loadReminders(t.Context())
 
 	e, responses := commandEvent(t, devGuild, `{"id":"3","name":"threadbot","type":1,"options":[{"name":"list","type":1}]}`)
-	b.onCommand(e)
+	b.onCommand(t.Context(), e)
 	lines := strings.Split((<-responses).Content, "\n")
 	slices.Sort(lines)
 	if len(lines) != 2 {

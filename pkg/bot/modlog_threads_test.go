@@ -247,7 +247,7 @@ func TestFindOrCreateModLogThreadScansOnce(t *testing.T) {
 
 	find := func(user discord.User) snowflake.ID {
 		t.Helper()
-		id, err := b.findOrCreateModLogThread(testModLogForum, user)
+		id, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, user)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -286,7 +286,7 @@ func TestFindOrCreateModLogThreadFetchesUncachedForum(t *testing.T) {
 	b, _ := newModLogTestBot(t, api)
 	api.addThread(300, "alice - 1", time.Time{})
 
-	if id, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 1, Username: "alice"}); err != nil || id != 300 {
+	if id, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 1, Username: "alice"}); err != nil || id != 300 {
 		t.Fatalf("got %d, %v; want 300", id, err)
 	}
 	if api.count("channel") != 1 {
@@ -308,7 +308,7 @@ func TestFindOrCreateModLogThreadListingErrors(t *testing.T) {
 			b, _ := newModLogTestBot(t, api)
 			cacheForum(t, b)
 
-			if _, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 1, Username: "alice"}); err == nil {
+			if _, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 1, Username: "alice"}); err == nil {
 				t.Fatal("expected an error when the threads can't be listed")
 			}
 			if api.count("create") != 0 {
@@ -319,7 +319,7 @@ func TestFindOrCreateModLogThreadListingErrors(t *testing.T) {
 			api.mu.Lock()
 			api.failActive, api.failArchived = 0, 0
 			api.mu.Unlock()
-			if _, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 1, Username: "alice"}); err != nil {
+			if _, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 1, Username: "alice"}); err != nil {
 				t.Fatal(err)
 			}
 			if api.count("create") != 1 {
@@ -336,11 +336,11 @@ func TestListModLogThreadsReturnsPartialResults(t *testing.T) {
 	cacheForum(t, b)
 	api.addThread(300, "alice - 1", time.Time{})
 
-	forum, err := b.modLogForumChannel(testModLogForum)
+	forum, err := b.modLogForumChannel(t.Context(), testModLogForum)
 	if err != nil {
 		t.Fatal(err)
 	}
-	threads, err := b.listModLogThreads(forum)
+	threads, err := b.listModLogThreads(t.Context(), forum)
 	if err == nil || len(threads) != 1 || threads[0].ID() != 300 {
 		t.Errorf("got %d threads, err %v; want the active thread and an error", len(threads), err)
 	}
@@ -357,7 +357,7 @@ func TestFindOrCreateModLogThreadSerializesPerUser(t *testing.T) {
 			cacheForum(t, b)
 			api.addThread(300, "bob - 2", time.Time{})
 			if indexed {
-				if _, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 2, Username: "bob"}); err != nil {
+				if _, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 2, Username: "bob"}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -368,7 +368,7 @@ func TestFindOrCreateModLogThreadSerializesPerUser(t *testing.T) {
 			var wg sync.WaitGroup
 			for i := range ids {
 				wg.Go(func() {
-					id, err := b.findOrCreateModLogThread(testModLogForum, user)
+					id, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, user)
 					if err != nil {
 						t.Error(err)
 					}
@@ -403,7 +403,7 @@ func TestListModLogThreadsPagesBySubSecondTimestamps(t *testing.T) {
 	api.addThread(2000, "x - 900", base.Add(900*time.Millisecond))
 	api.addThread(2001, "victim - 777", base.Add(500*time.Millisecond))
 
-	id, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 777, Username: "victim"})
+	id, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 777, Username: "victim"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,10 +425,10 @@ func TestModLogScanKeepsThreadEventsFromDuringIt(t *testing.T) {
 			ThreadID: 400, GuildID: testModLogGuild, Thread: testThread(t, 400, "bob - 456"),
 		}})
 	}
-	if _, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 1, Username: "alice"}); err != nil {
+	if _, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 1, Username: "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	id, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 456, Username: "bob"})
+	id, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 456, Username: "bob"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestModLogScanDiscardedByDeleteDuringIt(t *testing.T) {
 		api.deleteThread(300)
 		b.onModLogThreadDelete(&events.ThreadDelete{GenericThread: &events.GenericThread{ThreadID: 300, ParentID: testModLogForum}})
 	}
-	id, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 1, Username: "alice"})
+	id, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 1, Username: "alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestModLogReadyForgetsIndex(t *testing.T) {
 	b, _ := newModLogTestBot(t, api)
 	cacheForum(t, b)
 	api.addThread(300, "alice - 1", time.Time{})
-	if _, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 1, Username: "alice"}); err != nil {
+	if _, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 1, Username: "alice"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -473,7 +473,7 @@ func TestModLogReadyForgetsIndex(t *testing.T) {
 	// doesn't replay its event.
 	api.addThread(301, "carol - 3", time.Time{})
 	b.onModLogReady(&events.Ready{})
-	id, err := b.findOrCreateModLogThread(testModLogForum, discord.User{ID: 3, Username: "carol"})
+	id, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, discord.User{ID: 3, Username: "carol"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,12 +489,12 @@ func TestPostToModLogThreadRecreatesDeletedThread(t *testing.T) {
 	api.addThread(300, "alice - 1", time.Time{})
 	user := discord.User{ID: 1, Username: "alice"}
 
-	if _, err := b.findOrCreateModLogThread(testModLogForum, user); err != nil {
+	if _, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, user); err != nil {
 		t.Fatal(err)
 	}
 	api.deleteThread(300) // no ThreadDelete event reaches the bot
 
-	threadID, sent, err := b.postToModLogThread(testModLogForum, user, discord.MessageCreate{Content: "x"})
+	threadID, sent, err := b.postToModLogThread(t.Context(), testModLogForum, user, discord.MessageCreate{Content: "x"})
 	if err != nil || sent == nil {
 		t.Fatalf("post failed: %v", err)
 	}
@@ -512,7 +512,7 @@ func TestPostToModLogThreadRecreatesDeletedThread(t *testing.T) {
 	api.mu.Lock()
 	api.postStatus[threadID] = http.StatusForbidden
 	api.mu.Unlock()
-	if _, _, err := b.postToModLogThread(testModLogForum, user, discord.MessageCreate{Content: "x"}); err == nil {
+	if _, _, err := b.postToModLogThread(t.Context(), testModLogForum, user, discord.MessageCreate{Content: "x"}); err == nil {
 		t.Error("expected the 403 to be returned")
 	}
 	if api.count("active") != 2 {
@@ -529,7 +529,7 @@ func TestModLogThreadEventsKeepIndexCurrent(t *testing.T) {
 
 	find := func(user discord.User) snowflake.ID {
 		t.Helper()
-		id, err := b.findOrCreateModLogThread(testModLogForum, user)
+		id, err := b.findOrCreateModLogThread(t.Context(), testModLogForum, user)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -597,7 +597,7 @@ func TestPostModLogEntryDeletesFilesOnlyWhenRejected(t *testing.T) {
 				fakeS3.Objects["/test-bucket/"+k] = []byte("data")
 			}
 
-			_, _, err := b.postModLogEntry(testModLogForum, discord.User{ID: 1, Username: "alice"}, discord.Embed{Title: "x"}, keys)
+			_, _, err := b.postModLogEntry(t.Context(), testModLogForum, discord.User{ID: 1, Username: "alice"}, discord.Embed{Title: "x"}, keys)
 			if err == nil {
 				t.Fatal("expected the post to fail")
 			}
@@ -613,7 +613,7 @@ func TestPostModLogEntryDeletesFilesOnlyWhenRejected(t *testing.T) {
 		api := newFakeModLogAPI()
 		b, fakeS3 := newModLogTestBot(t, api)
 		cacheForum(t, b)
-		if _, _, err := b.postModLogEntry(testModLogForum, discord.User{ID: 1, Username: "alice"}, discord.Embed{Title: "x"}, []string{"mod_files/1/a.png"}); err != nil {
+		if _, _, err := b.postModLogEntry(t.Context(), testModLogForum, discord.User{ID: 1, Username: "alice"}, discord.Embed{Title: "x"}, []string{"mod_files/1/a.png"}); err != nil {
 			t.Fatal(err)
 		}
 		if len(fakeS3.Deleted) != 0 {
@@ -656,12 +656,12 @@ func TestModLogConfigSetRequiresForum(t *testing.T) {
 	b.modLog.set(testModLogGuild, st)
 
 	var response string
-	b.handleModLogConfig(slashInteraction(t, discord.ChannelTypeGuildText, &response))
+	b.handleModLogConfig(t.Context(), slashInteraction(t, discord.ChannelTypeGuildText, &response))
 	if st.ChannelID != 600 || !strings.Contains(response, "isn't a forum") {
 		t.Errorf("text channel: channel = %d, response %q; want it rejected", st.ChannelID, response)
 	}
 
-	b.handleModLogConfig(slashInteraction(t, discord.ChannelTypeGuildForum, &response))
+	b.handleModLogConfig(t.Context(), slashInteraction(t, discord.ChannelTypeGuildForum, &response))
 	if st.ChannelID != 700 || !strings.Contains(response, "set to <#700>") {
 		t.Errorf("forum: channel = %d, response %q; want it set", st.ChannelID, response)
 	}

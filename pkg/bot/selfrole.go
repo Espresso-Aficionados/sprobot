@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -208,7 +209,7 @@ func selfrolePanelNeedsUpdate(msg discord.Message, cfg selfroleConfig) bool {
 	return false
 }
 
-func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID snowflake.ID) {
+func (b *Bot) handleSelfroleToggle(ctx context.Context, e *events.ComponentInteractionCreate, roleID snowflake.ID) {
 	guildID := e.GuildID()
 	if guildID == nil {
 		return
@@ -228,7 +229,7 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 	}
 	if matchedCfg == nil {
 		// A panel posted for a role that has since been removed from the config.
-		botutil.RespondEphemeral(e, "This button is no longer available.")
+		botutil.RespondEphemeral(ctx, e, "This button is no longer available.")
 		return
 	}
 
@@ -247,20 +248,20 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 	link := messageLink(*guildID, e.Channel().ID(), e.Message.ID)
 
 	if hasRole && matchedCfg.GrantOnly {
-		botutil.RespondEphemeral(e, fmt.Sprintf("You already have **%s**.", label))
+		botutil.RespondEphemeral(ctx, e, fmt.Sprintf("You already have **%s**.", label))
 		return
 	}
 
 	// Answer before the role change: a slow REST call would otherwise fail
 	// the interaction, and the user's retry would toggle the role back.
-	if err := e.DeferCreateMessage(true); err != nil {
+	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
 		b.Log.Error("Failed to defer selfrole toggle", "user_id", e.User().ID, "role_id", roleID, "error", err)
 		return
 	}
-	respond := func(content string) { botutil.FollowupEphemeral(b.Client, e.Token(), content) }
+	respond := func(content string) { botutil.FollowupEphemeral(ctx, b.Client, e.Token(), content) }
 
 	if hasRole {
-		if err := b.Client.Rest.RemoveMemberRole(*guildID, e.User().ID, roleID, rest.WithReason(fmt.Sprintf("Self-role removal %s", link))); err != nil {
+		if err := b.Client.Rest.RemoveMemberRole(*guildID, e.User().ID, roleID, rest.WithReason(fmt.Sprintf("Self-role removal %s", link)), rest.WithCtx(ctx)); err != nil {
 			b.Log.Error("Failed to remove selfrole", "user_id", e.User().ID, "role_id", roleID, "error", err)
 			respond("Something went wrong, please try again.")
 			return
@@ -268,7 +269,7 @@ func (b *Bot) handleSelfroleToggle(e *events.ComponentInteractionCreate, roleID 
 		b.Log.Info("Selfrole removed", "user_id", e.User().ID, "guild_id", *guildID, "role_id", roleID, "label", label)
 		respond(fmt.Sprintf("Removed **%s**", label))
 	} else {
-		if err := b.Client.Rest.AddMemberRole(*guildID, e.User().ID, roleID, rest.WithReason(fmt.Sprintf("Self-role assignment %s", link))); err != nil {
+		if err := b.Client.Rest.AddMemberRole(*guildID, e.User().ID, roleID, rest.WithReason(fmt.Sprintf("Self-role assignment %s", link)), rest.WithCtx(ctx)); err != nil {
 			b.Log.Error("Failed to add selfrole", "user_id", e.User().ID, "role_id", roleID, "error", err)
 			respond("Something went wrong, please try again.")
 			return

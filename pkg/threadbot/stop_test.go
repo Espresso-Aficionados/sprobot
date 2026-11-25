@@ -154,7 +154,7 @@ func TestEnableTakesOverReplacedReminderMessage(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.onCommand(e)
+		b.onCommand(t.Context(), e)
 		close(done)
 	}()
 	select {
@@ -199,7 +199,7 @@ func TestEnableDeletesReplacedMessageWhenDisabledMeanwhile(t *testing.T) {
 	enable, enabled := commandEvent(t, old.GuildID, enableData)
 	done := make(chan struct{})
 	go func() {
-		b.onCommand(enable)
+		b.onCommand(t.Context(), enable)
 		close(done)
 	}()
 	select {
@@ -209,7 +209,7 @@ func TestEnableDeletesReplacedMessageWhenDisabledMeanwhile(t *testing.T) {
 	}
 
 	disable, disabled := commandEvent(t, old.GuildID, `{"id":"3","name":"threadbot","type":1,"options":[{"name":"disable","type":1}]}`)
-	b.onCommand(disable)
+	b.onCommand(t.Context(), disable)
 	if m := <-disabled; m.Content != "Thread reminders disabled." {
 		t.Fatalf("disable answered %q", m.Content)
 	}
@@ -277,14 +277,14 @@ func TestChannelDeleteDropsStoredReminder(t *testing.T) {
 	}
 	b.mu.Unlock()
 	defer b.stopAllReminderGoroutines()
-	b.saveRemindersForGuild(guildID)
+	b.saveRemindersForGuild(t.Context(), guildID)
 
 	b.onChannelDelete(channelDelete(guildID, 500))
 	b.onChannelDelete(channelDelete(guildID, 700))            // no reminder there
 	b.onChannelDelete(channelDelete(726985544038612993, 500)) // guild not loaded
 
 	restarted := newTestBot(t, s3c)
-	restarted.loadReminders()
+	restarted.loadReminders(t.Context())
 	defer restarted.stopAllReminderGoroutines()
 	restarted.mu.Lock()
 	defer restarted.mu.Unlock()

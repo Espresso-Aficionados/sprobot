@@ -86,13 +86,13 @@ type linkMigration struct {
 	search func(discord.GuildMessagesSearch) (*discord.GuildMessagesSearchResult, error)
 }
 
-func (b *Bot) handleMigrateLinks(e *events.ApplicationCommandInteractionCreate) {
+func (b *Bot) handleMigrateLinks(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	data, ok := e.Data.(discord.SlashCommandInteractionData)
 	if !ok || data.SubCommandName == nil || e.GuildID() == nil {
 		return
 	}
 	if m := e.Member(); m == nil || !m.Permissions.Has(discord.PermissionManageGuild) {
-		botutil.RespondEphemeral(e, "Migrating links needs the Manage Server permission.")
+		botutil.RespondEphemeral(ctx, e, "Migrating links needs the Manage Server permission.")
 		return
 	}
 	apply := *data.SubCommandName == "run"
@@ -100,7 +100,7 @@ func (b *Bot) handleMigrateLinks(e *events.ApplicationCommandInteractionCreate) 
 	channelID := e.Channel().ID()
 
 	if _, running := b.linkMigrations.LoadOrStore(guildID, struct{}{}); running {
-		botutil.RespondEphemeral(e, "A link migration is already running in this server.")
+		botutil.RespondEphemeral(ctx, e, "A link migration is already running in this server.")
 		return
 	}
 	b.Log.Info("Link migration started", "user_id", e.User().ID, "guild_id", guildID, "apply", apply)
@@ -109,7 +109,7 @@ func (b *Bot) handleMigrateLinks(e *events.ApplicationCommandInteractionCreate) 
 	if apply {
 		mode = "Migrating links"
 	}
-	botutil.RespondEphemeral(e, mode+". This can take a while; the report will be posted in this channel.")
+	botutil.RespondEphemeral(ctx, e, mode+". This can take a while; the report will be posted in this channel.")
 
 	go func() {
 		defer b.linkMigrations.Delete(guildID)
@@ -119,17 +119,19 @@ func (b *Bot) handleMigrateLinks(e *events.ApplicationCommandInteractionCreate) 
 			}
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), migrateLinksTimeout)
+		// Outlives the interaction.
+		ctx := context.WithoutCancel(ctx)
+		migCtx, cancel := context.WithTimeout(ctx, migrateLinksTimeout)
 		defer cancel()
 		go func() {
 			select {
 			case <-b.stop:
 				cancel()
-			case <-ctx.Done():
+			case <-migCtx.Done():
 			}
 		}()
 
-		m := &linkMigration{b: b, ctx: ctx, guildID: guildID, apply: apply, profiles: map[string]string{}}
+		m := &linkMigration{b: b, ctx: migCtx, guildID: guildID, apply: apply, profiles: map[string]string{}}
 		m.scan()
 		if apply {
 			m.applyEdits()
@@ -140,7 +142,7 @@ func (b *Bot) handleMigrateLinks(e *events.ApplicationCommandInteractionCreate) 
 		if _, err := b.Client.Rest.CreateMessage(channelID, discord.MessageCreate{
 			Content:         m.report(),
 			AllowedMentions: &discord.AllowedMentions{},
-		}); err != nil {
+		}, rest.WithCtx(ctx)); err != nil {
 			b.Log.Error("Failed to post link migration report", "error", err)
 		}
 	}()

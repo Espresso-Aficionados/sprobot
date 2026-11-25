@@ -85,7 +85,7 @@ func TestStickyRemoveCommand(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.onCommand(e)
+		b.onCommand(t.Context(), e)
 		close(done)
 	}()
 	select {
@@ -136,7 +136,7 @@ func TestCreateStickySavesAttachments(t *testing.T) {
 	b, fakeS3 := newFakeBot(t, f)
 	s := &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
 
-	reply := b.createSticky(s, discord.Message{Attachments: []discord.Attachment{{Filename: "photo.png", ProxyURL: files.URL + "/photo.png"}}})
+	reply := b.createSticky(t.Context(), s, discord.Message{Attachments: []discord.Attachment{{Filename: "photo.png", ProxyURL: files.URL + "/photo.png"}}})
 
 	if !strings.HasPrefix(reply, "Sticky created") || strings.Contains(reply, "Couldn't save") {
 		t.Errorf("reply = %q, want a plain confirmation", reply)
@@ -166,7 +166,7 @@ func TestCreateStickyReportsUnsavedAttachments(t *testing.T) {
 		b, _ := newFakeBot(t, f)
 		s := &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
 
-		reply := b.createSticky(s, discord.Message{Content: "hello", Attachments: []discord.Attachment{unsaved}})
+		reply := b.createSticky(t.Context(), s, discord.Message{Content: "hello", Attachments: []discord.Attachment{unsaved}})
 
 		if !strings.HasPrefix(reply, "Sticky created") || !strings.Contains(reply, "`my_photo.png`") {
 			t.Errorf("reply = %q, want a confirmation naming `my_photo.png`", reply)
@@ -180,7 +180,7 @@ func TestCreateStickyReportsUnsavedAttachments(t *testing.T) {
 		b, _ := newFakeBot(t, f)
 		s := &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
 
-		reply := b.createSticky(s, discord.Message{Attachments: []discord.Attachment{unsaved}})
+		reply := b.createSticky(t.Context(), s, discord.Message{Attachments: []discord.Attachment{unsaved}})
 
 		if strings.HasPrefix(reply, "Sticky created") {
 			t.Errorf("reply = %q, want a failure", reply)

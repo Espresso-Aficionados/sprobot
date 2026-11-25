@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -71,8 +72,8 @@ func TestStateStoresListsEveryStore(t *testing.T) {
 // gateway, and saveState must then write all of it.
 func TestLoadStateThenSaveStateCoversEveryStoreAndGuild(t *testing.T) {
 	b, h := newStateBot(t)
-	b.loadState()
-	b.saveState()
+	b.loadState(t.Context())
+	b.saveState(t.Context())
 
 	for name, f := range storeFields(b) {
 		key := f.Elem().FieldByName("s3Key").String()
@@ -97,11 +98,11 @@ func TestSaveStateSkipsGuildsBotIsNotIn(t *testing.T) {
 	b.TestGuildIDsOverride = []snowflake.ID{devGuild}
 	prodTickets := fmt.Sprintf("/test-bucket/tickets/%d.json", prodGuild)
 	h.put(prodTickets, `{"counter":5}`)
-	b.loadState()
+	b.loadState(t.Context())
 	// Meanwhile the prod instance opens a ticket.
 	h.put(prodTickets, `{"counter":6}`)
 
-	b.saveState()
+	b.saveState(t.Context())
 
 	for name, f := range storeFields(b) {
 		key := f.Elem().FieldByName("s3Key").String()
@@ -139,14 +140,14 @@ func TestServedGuildsIncludesUnreadyAndUnavailable(t *testing.T) {
 // its change is lost.
 func TestStopLoopsWaitsForRunningLoop(t *testing.T) {
 	b, h := newStateBot(t)
-	b.loadState()
+	b.loadState(t.Context())
 	b.Ready.Store(true)
 	guildID := botutil.AllowedGuildIDs[0]
 
 	started := make(chan struct{})
 	release := make(chan struct{})
 	runs := 0
-	b.startLoop(time.Millisecond, telemetry.NewJob("test_stop_loops"), func() error {
+	b.startLoop(time.Millisecond, telemetry.NewJob("test_stop_loops"), func(context.Context) error {
 		runs++
 		if runs > 1 {
 			return nil
@@ -164,7 +165,7 @@ func TestStopLoopsWaitsForRunningLoop(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		b.stopLoops()
-		b.saveState()
+		b.saveState(t.Context())
 		close(done)
 	}()
 	select {

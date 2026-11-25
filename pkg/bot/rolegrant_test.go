@@ -418,7 +418,7 @@ func TestConfigRoleChecksUseRoleCache(t *testing.T) {
 			st := b.autoRole.get(roleTestGuild)
 			st.RoleID = roleTestMember
 			e, responses := roleCommand(t, tt.user, tt.roles, autoroleSet(tt.target.ID), resolvedRole(tt.target))
-			b.handleAutoRoleConfig(e)
+			b.handleAutoRoleConfig(t.Context(), e)
 			resp := response(t, responses)
 			if got := st.RoleID == tt.target.ID; got != tt.allowed {
 				t.Errorf("auto-role set = %v, want %v (response %q)", got, tt.allowed, resp.Content)
@@ -438,7 +438,7 @@ func TestCheckGrantableRoleWithoutCachedBotMember(t *testing.T) {
 	api.setRespond(func(string) (int, string) { return restError(http.StatusInternalServerError, 0, "oops") })
 	b.autoRole.set(roleTestGuild, &autoRoleState{})
 	e, responses := roleCommand(t, roleTestOwner, nil, autoroleSet(200), resolvedRole(target))
-	b.handleAutoRoleConfig(e)
+	b.handleAutoRoleConfig(t.Context(), e)
 	resp := response(t, responses)
 	if got := b.autoRole.get(roleTestGuild).RoleID; got != 0 {
 		t.Errorf("auto-role set to %d without knowing the bot's roles (response %q)", got, resp.Content)
@@ -451,7 +451,7 @@ func TestCheckGrantableRoleWithoutCachedBotMember(t *testing.T) {
 		return http.StatusNoContent, ""
 	})
 	e, responses = roleCommand(t, roleTestOwner, nil, autoroleSet(200), resolvedRole(target))
-	b.handleAutoRoleConfig(e)
+	b.handleAutoRoleConfig(t.Context(), e)
 	resp = response(t, responses)
 	if got := b.autoRole.get(roleTestGuild).RoleID; got != 200 {
 		t.Errorf("auto-role = %d after fetching the bot's member, want 200 (response %q)", got, resp.Content)

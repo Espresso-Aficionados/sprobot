@@ -69,7 +69,7 @@ func TestLoadStickiesKeepsZeroSettings(t *testing.T) {
 		"min_idle_mins": 0, "max_idle_mins": 10, "msg_threshold": 0, "time_threshold_mins": 5, "buffer": 0}}`)
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, server))
-	b.loadStickies()
+	b.loadStickies(t.Context())
 
 	s := b.stickies[1013566342345019512][111]
 	if s == nil {
@@ -89,7 +89,7 @@ func TestLoadStickiesNotFound(t *testing.T) {
 	b := newTestBot(t, c)
 
 	// Should not panic or error on missing data
-	b.loadStickies()
+	b.loadStickies(t.Context())
 
 	guildID := snowflake.ID(1013566342345019512)
 	if channels, ok := b.stickies[guildID]; ok && len(channels) > 0 {
@@ -122,7 +122,7 @@ func TestLoadStickiesFromS3(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadStickies()
+	b.loadStickies(t.Context())
 
 	guildID := snowflake.ID(1013566342345019512)
 	channels, ok := b.stickies[guildID]
@@ -165,7 +165,7 @@ func TestSaveStickiesForGuild(t *testing.T) {
 		},
 	}
 
-	b.saveStickiesForGuild(guildID)
+	b.saveStickiesForGuild(t.Context(), guildID)
 
 	// Verify written to S3
 	fake.Mu.Lock()
@@ -202,7 +202,7 @@ func TestSaveStickiesForGuildNoData(t *testing.T) {
 	b := newTestBot(t, c)
 
 	// Saving for a guild that isn't in the map should not panic
-	b.saveStickiesForGuild(999)
+	b.saveStickiesForGuild(t.Context(), 999)
 
 	fake.Mu.Lock()
 	_, ok := fake.Objects["/test-bucket/stickies/999.json"]
@@ -239,11 +239,11 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 		},
 	}
 
-	b.saveStickiesForGuild(guildID)
+	b.saveStickiesForGuild(t.Context(), guildID)
 
 	// Load into a fresh bot
 	b2 := newTestBot(t, c)
-	b2.loadStickies()
+	b2.loadStickies(t.Context())
 
 	channels, ok := b2.stickies[guildID]
 	if !ok {
@@ -302,11 +302,11 @@ func TestSaveUnsavedStickiesRetriesOnlyFailedSaves(t *testing.T) {
 	fake.Fail[failedPath] = http.StatusForbidden
 	fake.Mu.Unlock()
 
-	b.saveStickiesForGuild(1013566342345019512)
+	b.saveStickiesForGuild(t.Context(), 1013566342345019512)
 	fake.Mu.Lock()
 	delete(fake.Fail, failedPath)
 	fake.Mu.Unlock()
-	b.saveUnsavedStickies()
+	b.saveUnsavedStickies(t.Context())
 
 	fake.Mu.Lock()
 	defer fake.Mu.Unlock()
@@ -331,14 +331,14 @@ func TestLoadFailureBlocksChangesUntilRetry(t *testing.T) {
 	fake.Fail[path] = http.StatusForbidden
 	fake.Mu.Unlock()
 
-	b.loadStickies()
+	b.loadStickies(t.Context())
 	newSticky := func() *stickyMessage {
 		return &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
 	}
-	if reply := b.createSticky(newSticky(), discord.Message{Content: "new"}); reply != notLoadedReply {
+	if reply := b.createSticky(t.Context(), newSticky(), discord.Message{Content: "new"}); reply != notLoadedReply {
 		t.Errorf("create while not loaded replied %q, want %q", reply, notLoadedReply)
 	}
-	b.saveStickiesForGuild(testGuildID)
+	b.saveStickiesForGuild(t.Context(), testGuildID)
 	fake.Mu.Lock()
 	got := string(fake.Objects[path])
 	delete(fake.Fail, path)
@@ -350,7 +350,7 @@ func TestLoadFailureBlocksChangesUntilRetry(t *testing.T) {
 		t.Errorf("posted %d stickies while not loaded", len(posts))
 	}
 
-	if reply := b.createSticky(newSticky(), discord.Message{Content: "new"}); !strings.HasPrefix(reply, "Sticky created") {
+	if reply := b.createSticky(t.Context(), newSticky(), discord.Message{Content: "new"}); !strings.HasPrefix(reply, "Sticky created") {
 		t.Fatalf("create after S3 recovered replied %q", reply)
 	}
 	fake.Mu.Lock()
@@ -374,18 +374,18 @@ func TestRetryFailedLoadsUnloadedGuild(t *testing.T) {
 	fake.Fail[path] = http.StatusForbidden
 	fake.Mu.Unlock()
 
-	b.loadStickies()
+	b.loadStickies(t.Context())
 	if _, ok := b.stickies[testGuildID]; ok {
 		t.Fatal("guild loaded although its fetch failed")
 	}
 	// Its job fails while the guild is unloaded, and succeeds once loaded.
-	if err := b.retryFailed(); err == nil {
+	if err := b.retryFailed(t.Context()); err == nil {
 		t.Error("retryFailed succeeded while a guild is unloaded")
 	}
 	fake.Mu.Lock()
 	delete(fake.Fail, path)
 	fake.Mu.Unlock()
-	if err := b.retryFailed(); err != nil {
+	if err := b.retryFailed(t.Context()); err != nil {
 		t.Errorf("retryFailed after recovery: %v", err)
 	}
 
@@ -444,7 +444,7 @@ func TestSaveStickiesForGuildTimesOut(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.saveStickiesForGuild(testGuildID)
+		b.saveStickiesForGuild(t.Context(), testGuildID)
 		close(done)
 	}()
 	select {
@@ -580,7 +580,7 @@ func TestLoadStickiesInvalidJSON(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadStickies()
+	b.loadStickies(t.Context())
 
 	// Not loaded, so nothing saves over the stored stickies; another allowed
 	// guild with none stored still loads.
@@ -631,11 +631,11 @@ func TestSaveStickiesMultipleChannels(t *testing.T) {
 		200: {ChannelID: 200, GuildID: guildID, Content: "second", Active: false, MinIdleMins: 10, MaxIdleMins: 20, MsgThreshold: 3},
 	}
 
-	b.saveStickiesForGuild(guildID)
+	b.saveStickiesForGuild(t.Context(), guildID)
 
 	// Load and verify both
 	b2 := newTestBot(t, c)
-	b2.loadStickies()
+	b2.loadStickies(t.Context())
 
 	channels := b2.stickies[guildID]
 	if len(channels) != 2 {

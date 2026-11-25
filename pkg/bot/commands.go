@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -677,8 +678,8 @@ func templateCommands(tmpl sprobot.Template) []discord.ApplicationCommandCreate 
 	}
 }
 
-func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
-	if e.GuildID() == nil || b.RejectGuildNotAllowed(e) {
+func (b *Bot) onCommand(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
+	if e.GuildID() == nil || b.RejectGuildNotAllowed(ctx, e) {
 		return
 	}
 	guildID := *e.GuildID()
@@ -701,27 +702,27 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 	for _, tmpl := range tmpls {
 		switch name {
 		case fmt.Sprintf("Get %s Profile", tmpl.Name):
-			b.handleGetMenu(e, tmpl)
+			b.handleGetMenu(ctx, e, tmpl)
 			return
 		case "edit" + tmpl.ShortName:
-			b.handleEdit(e, tmpl)
+			b.handleEdit(ctx, e, tmpl)
 			return
 		case "get" + tmpl.ShortName:
-			b.handleGet(e, tmpl)
+			b.handleGet(ctx, e, tmpl)
 			return
 		case "delete" + tmpl.ShortName:
-			b.handleDelete(e, tmpl)
+			b.handleDelete(ctx, e, tmpl)
 			return
 		}
 	}
 
 	switch name {
 	case "wiki":
-		b.handleWiki(e)
+		b.handleWiki(ctx, e)
 	case "Save message to mod log":
-		b.handleModLogMenu(e)
+		b.handleModLogMenu(ctx, e)
 	case "topposters":
-		b.handleTopPosters(e)
+		b.handleTopPosters(ctx, e)
 	case "market":
 		data, ok := e.Data.(discord.SlashCommandInteractionData)
 		if !ok || data.SubCommandName == nil {
@@ -729,16 +730,16 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		}
 		switch *data.SubCommandName {
 		case "progress":
-			b.handleMarketProgress(e)
+			b.handleMarketProgress(ctx, e)
 		case "leaderboard":
-			b.handleMarketLeaderboard(e)
+			b.handleMarketLeaderboard(ctx, e)
 		}
 	case "s":
-		b.handleShortcut(e)
+		b.handleShortcut(ctx, e)
 	case "warn":
-		b.handleWarn(e)
+		b.handleWarn(ctx, e)
 	case "temprole":
-		b.handleTempRole(e)
+		b.handleTempRole(ctx, e)
 	case "config":
 		data, ok := e.Data.(discord.SlashCommandInteractionData)
 		if !ok || data.SubCommandGroupName == nil {
@@ -746,57 +747,57 @@ func (b *Bot) onCommand(e *events.ApplicationCommandInteractionCreate) {
 		}
 		switch *data.SubCommandGroupName {
 		case "shortcuts":
-			b.handleShortcutConfig(e)
+			b.handleShortcutConfig(ctx, e)
 		case "welcome":
-			b.handleWelcome(e)
+			b.handleWelcome(ctx, e)
 		case "starboard":
-			b.handleStarboardConfig(e)
+			b.handleStarboardConfig(ctx, e)
 		case "renamelog":
-			b.handleRenameLog(e)
+			b.handleRenameLog(ctx, e)
 		case "market":
-			b.handleMarketConfig(e)
+			b.handleMarketConfig(ctx, e)
 		case "autorole":
-			b.handleAutoRoleConfig(e)
+			b.handleAutoRoleConfig(ctx, e)
 		case "eventlog":
-			b.handleEventLogConfig(e)
+			b.handleEventLogConfig(ctx, e)
 		case "modlog":
-			b.handleModLogConfig(e)
+			b.handleModLogConfig(ctx, e)
 		case "migrate-links":
-			b.handleMigrateLinks(e)
+			b.handleMigrateLinks(ctx, e)
 		case "temprole":
-			b.handleTempRoleConfig(e)
+			b.handleTempRoleConfig(ctx, e)
 		case "topposters":
-			b.handleTopPostersConfigCmd(e)
+			b.handleTopPostersConfigCmd(ctx, e)
 		}
 	}
 }
 
-func (b *Bot) onModal(e *events.ModalSubmitInteractionCreate) {
-	if e.GuildID() == nil || b.RejectGuildNotAllowed(e) {
+func (b *Bot) onModal(ctx context.Context, e *events.ModalSubmitInteractionCreate) {
+	if e.GuildID() == nil || b.RejectGuildNotAllowed(ctx, e) {
 		return
 	}
-	b.handleModalSubmit(e)
+	b.handleModalSubmit(ctx, e)
 }
 
 // handleModalSubmit routes a guild modal submit by its custom ID.
-func (b *Bot) handleModalSubmit(e *events.ModalSubmitInteractionCreate) {
+func (b *Bot) handleModalSubmit(ctx context.Context, e *events.ModalSubmitInteractionCreate) {
 	customID := e.Data.CustomID
 	tmpls := b.templates[*e.GuildID()]
 
 	for _, tmpl := range tmpls {
 		if customID == fmt.Sprintf("edit_%s", tmpl.ShortName) {
-			b.handleEditModalSubmit(e, tmpl)
+			b.handleEditModalSubmit(ctx, e, tmpl)
 			return
 		}
 	}
 
 	if strings.HasPrefix(customID, "sconfig_set_") {
-		b.handleShortcutConfigSetModal(e)
+		b.handleShortcutConfigSetModal(ctx, e)
 		return
 	}
 
 	if customID == "welcome_set" {
-		b.handleWelcomeSetModal(e)
+		b.handleWelcomeSetModal(ctx, e)
 		return
 	}
 
@@ -806,7 +807,7 @@ func (b *Bot) handleModalSubmit(e *events.ModalSubmitInteractionCreate) {
 			channelID, chErr := snowflake.Parse(parts[0])
 			messageID, msgErr := snowflake.Parse(parts[1])
 			if chErr == nil && msgErr == nil {
-				b.handleModLogModalSubmit(e, channelID, messageID)
+				b.handleModLogModalSubmit(ctx, e, channelID, messageID)
 				return
 			}
 		}
@@ -814,25 +815,25 @@ func (b *Bot) handleModalSubmit(e *events.ModalSubmitInteractionCreate) {
 	}
 
 	// A modal from an older build, or for something since removed.
-	botutil.RespondEphemeral(e, noLongerAvailable)
+	botutil.RespondEphemeral(ctx, e, noLongerAvailable)
 }
 
 // noLongerAvailable answers an interaction nothing handles any more, so the
 // user sees why instead of "interaction failed".
 const noLongerAvailable = "This is no longer available."
 
-func (b *Bot) onComponent(e *events.ComponentInteractionCreate) {
-	if b.RejectGuildNotAllowed(e) {
+func (b *Bot) onComponent(ctx context.Context, e *events.ComponentInteractionCreate) {
+	if b.RejectGuildNotAllowed(ctx, e) {
 		return
 	}
-	b.handleComponentInteraction(e)
+	b.handleComponentInteraction(ctx, e)
 }
 
-func (b *Bot) onAutocomplete(e *events.AutocompleteInteractionCreate) {
+func (b *Bot) onAutocomplete(ctx context.Context, e *events.AutocompleteInteractionCreate) {
 	if id := e.GuildID(); id != nil && !botutil.GuildAllowed(*id) {
 		return
 	}
-	b.handleAutocomplete(e)
+	b.handleAutocomplete(ctx, e)
 }
 
 func guildIDStr(e interface{ GuildID() *snowflake.ID }) string {
