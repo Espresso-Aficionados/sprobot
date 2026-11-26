@@ -77,7 +77,7 @@ func (b *Bot) resolveChannelParents(ctx context.Context, channelID snowflake.ID,
 	ids := []snowflake.ID{channelID}
 	ch, err := b.lookupChannel(ctx, channelID)
 	if err != nil {
-		b.Log.Warn("Failed to look up channel parents", "channel_id", channelID, "error", err)
+		b.Log.WarnContext(ctx, "Failed to look up channel parents", "channel_id", channelID, "error", err)
 		return ids
 	}
 	parentID := ch.ParentID()
@@ -90,7 +90,7 @@ func (b *Bot) resolveChannelParents(ctx context.Context, channelID snowflake.ID,
 	}
 	parent, err := b.lookupChannel(ctx, *parentID)
 	if err != nil {
-		b.Log.Warn("Failed to look up thread parent", "channel_id", *parentID, "error", err)
+		b.Log.WarnContext(ctx, "Failed to look up thread parent", "channel_id", *parentID, "error", err)
 		return ids
 	}
 	if categoryID := parent.ParentID(); categoryID != nil {
@@ -159,7 +159,7 @@ func (b *Bot) checkStarboardChannel(ctx context.Context, guildID, channelID, out
 	}
 	ok, err := starboardEligible(source, parent, output)
 	if err != nil {
-		b.Log.Warn("Starboard skipped a reaction: channel unknown",
+		b.Log.WarnContext(ctx, "Starboard skipped a reaction: channel unknown",
 			"guild_id", guildID, "channel_id", channelID, "error", err)
 	}
 	return ok
@@ -525,7 +525,7 @@ func (b *Bot) markSourcesDeleted(ctx context.Context, guildID snowflake.ID, st *
 	}
 	if len(idle) > 0 {
 		if err := b.starboard.persist(ctx, guildID); err != nil {
-			b.Log.Error("Failed to persist starboard after delete", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to persist starboard after delete", "guild_id", guildID, "error", err)
 		}
 	}
 }
@@ -575,7 +575,7 @@ func (b *Bot) retryStarboardDeletes(ctx context.Context) error {
 			return
 		}
 		if err := b.starboard.persist(ctx, guildID); err != nil {
-			b.Log.Error("Failed to persist starboard after delete", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to persist starboard after delete", "guild_id", guildID, "error", err)
 			errs = append(errs, err)
 		}
 	})
@@ -589,7 +589,7 @@ func (b *Bot) deleteStarboardPost(ctx context.Context, guildID, sourceID, channe
 	if err == nil || rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownMessage, rest.JSONErrorCodeUnknownChannel) {
 		return true
 	}
-	b.Log.Error("Failed to delete starboard post of a deleted message", "guild_id", guildID,
+	b.Log.ErrorContext(ctx, "Failed to delete starboard post of a deleted message", "guild_id", guildID,
 		"message_id", sourceID, "channel_id", channelID, "post_id", postID, "error", err)
 	return false
 }
@@ -711,7 +711,7 @@ func (b *Bot) postStarboardEntry(ctx context.Context, guildID, msgID snowflake.I
 func (b *Bot) finishSourceDelete(ctx context.Context, guildID, msgID snowflake.ID, st *starboardState) {
 	b.removeDeletedEntry(ctx, guildID, msgID, st)
 	if err := b.starboard.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist starboard after delete", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist starboard after delete", "guild_id", guildID, "error", err)
 	}
 }
 
@@ -726,7 +726,7 @@ func (b *Bot) createStarboardPost(ctx context.Context, guildID, msgID snowflake.
 
 	msg, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to fetch message for starboard", "guild_id", guildID, "message_id", msgID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to fetch message for starboard", "guild_id", guildID, "message_id", msgID, "error", err)
 		return postFailed
 	}
 
@@ -754,7 +754,7 @@ func (b *Bot) createStarboardPost(ctx context.Context, guildID, msgID snowflake.
 		WithNonce(starboardNonce(msgID)).WithEnforceNonce(true)
 	sent, err := b.Client.Rest.CreateMessage(settings.OutputChannelID, create, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to post starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to post starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
 		return postFailed
 	}
 
@@ -779,7 +779,7 @@ func (b *Bot) createStarboardPost(ctx context.Context, guildID, msgID snowflake.
 		return postFailed
 	}
 	if err := b.starboard.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist starboard after post", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist starboard after post", "guild_id", guildID, "error", err)
 	}
 	return postDone
 }
@@ -829,7 +829,7 @@ func (b *Bot) updateStarboardPost(ctx context.Context, guildID, msgID snowflake.
 
 	existing, err := b.Client.Rest.GetMessage(postChannel, entry.StarboardMsgID, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to fetch starboard message for update", "guild_id", guildID, "message_id", msgID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to fetch starboard message for update", "guild_id", guildID, "message_id", msgID, "error", err)
 		return
 	}
 	if len(existing.Embeds) == 0 {
@@ -844,7 +844,7 @@ func (b *Bot) updateStarboardPost(ctx context.Context, guildID, msgID snowflake.
 
 	source, err := b.Client.Rest.GetMessage(entry.ChannelID, msgID, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to fetch message for starboard update", "guild_id", guildID, "message_id", msgID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to fetch message for starboard update", "guild_id", guildID, "message_id", msgID, "error", err)
 		return
 	}
 	count := reactionCount(source.Reactions, settings.Emoji)
@@ -874,7 +874,7 @@ func (b *Bot) updateStarboardPost(ctx context.Context, guildID, msgID snowflake.
 		Embeds:  &embeds,
 	}, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to update starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to update starboard entry", "guild_id", guildID, "message_id", msgID, "error", err)
 	}
 }
 
@@ -924,7 +924,7 @@ func (b *Bot) handleStarboardConfig(ctx context.Context, e *events.ApplicationCo
 func (b *Bot) handleSBConfigSet(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
-	b.Log.Info("Starboard config set", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Starboard config set", "user_id", e.User().ID, "guild_id", guildID)
 
 	ch, hasChannel := data.OptChannel("channel")
 	if hasChannel && !starboardOutputType(ch.Type) {
@@ -954,7 +954,7 @@ func (b *Bot) handleSBConfigSet(ctx context.Context, e *events.ApplicationComman
 	st.mu.Unlock()
 
 	if err := b.starboard.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist starboard config", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist starboard config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
@@ -963,7 +963,7 @@ func (b *Bot) handleSBConfigSet(ctx context.Context, e *events.ApplicationComman
 }
 
 func (b *Bot) handleSBConfigShow(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *starboardState) {
-	b.Log.Info("Starboard config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
+	b.Log.InfoContext(ctx, "Starboard config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
 	s := st.Settings
@@ -995,14 +995,14 @@ func (b *Bot) handleSBConfigShow(ctx context.Context, e *events.ApplicationComma
 }
 
 func (b *Bot) handleSBConfigDisable(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *starboardState) {
-	b.Log.Info("Starboard config disable", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Starboard config disable", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
 	st.Settings.OutputChannelID = 0
 	st.mu.Unlock()
 
 	if err := b.starboard.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist starboard config", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist starboard config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}

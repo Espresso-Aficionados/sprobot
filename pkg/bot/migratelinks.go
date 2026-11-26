@@ -103,7 +103,7 @@ func (b *Bot) handleMigrateLinks(ctx context.Context, e *events.ApplicationComma
 		botutil.RespondEphemeral(ctx, e, "A link migration is already running in this server.")
 		return
 	}
-	b.Log.Info("Link migration started", "user_id", e.User().ID, "guild_id", guildID, "apply", apply)
+	b.Log.InfoContext(ctx, "Link migration started", "user_id", e.User().ID, "guild_id", guildID, "apply", apply)
 
 	mode := "Scanning (dry run, nothing will be edited)"
 	if apply {
@@ -115,7 +115,7 @@ func (b *Bot) handleMigrateLinks(ctx context.Context, e *events.ApplicationComma
 		defer b.linkMigrations.Delete(guildID)
 		defer func() {
 			if r := recover(); r != nil {
-				b.Log.Error("Link migration panicked", "panic", r)
+				b.Log.ErrorContext(ctx, "Link migration panicked", "panic", r)
 			}
 		}()
 
@@ -136,14 +136,14 @@ func (b *Bot) handleMigrateLinks(ctx context.Context, e *events.ApplicationComma
 		if apply {
 			m.applyEdits()
 		}
-		b.Log.Info("Link migration finished", "guild_id", guildID, "apply", apply,
+		b.Log.InfoContext(migCtx, "Link migration finished", "guild_id", guildID, "apply", apply,
 			"scanned", m.scanned, "to_edit", len(m.pending), "edited", m.edited, "failed", len(m.failed))
 
 		if _, err := b.Client.Rest.CreateMessage(channelID, discord.MessageCreate{
 			Content:         m.report(),
 			AllowedMentions: &discord.AllowedMentions{},
 		}, rest.WithCtx(ctx)); err != nil {
-			b.Log.Error("Failed to post link migration report", "error", err)
+			b.Log.ErrorContext(migCtx, "Failed to post link migration report", "error", err)
 		}
 	}()
 }
@@ -373,10 +373,10 @@ func (m *linkMigration) scanSearch(consider func(discord.Message), active map[sn
 		m.scanError("searching the server", errors.New("no channels to search"))
 		return
 	}
-	m.b.Log.Info("Link migration searching", "guild_id", m.guildID, "channels", len(channels))
+	m.b.Log.InfoContext(m.ctx, "Link migration searching", "guild_id", m.guildID, "channels", len(channels))
 	for start := 0; start < len(channels); start += searchBatch {
 		batch := channels[start:min(start+searchBatch, len(channels))]
-		m.b.Log.Info("Link migration search batch", "guild_id", m.guildID, "from", start, "count", len(batch), "of", len(channels))
+		m.b.Log.InfoContext(m.ctx, "Link migration search batch", "guild_id", m.guildID, "from", start, "count", len(batch), "of", len(channels))
 		if !m.searchIn(consider, batch) {
 			return
 		}
@@ -423,7 +423,7 @@ func (m *linkMigration) searchIn(consider func(discord.Message), channels []snow
 			return m.ctx.Err() == nil
 		}
 		if page%searchProgressPages == 0 {
-			m.b.Log.Info("Link migration search progress", "guild_id", m.guildID, "pages", page, "scanned", m.scanned, "before", query.MaxID.Time())
+			m.b.Log.InfoContext(m.ctx, "Link migration search progress", "guild_id", m.guildID, "pages", page, "scanned", m.scanned, "before", query.MaxID.Time())
 		}
 		// Page by moving the upper bound below the oldest result. Pages can
 		// come up short, so stop only when the bound stops moving.
@@ -496,7 +496,7 @@ func (m *linkMigration) call(what string, fn func() error) error {
 		if !isRateLimited(err) {
 			return err
 		}
-		m.b.Log.Warn("Link migration rate limited; backing off", "step", what, "wait", wait)
+		m.b.Log.WarnContext(m.ctx, "Link migration rate limited; backing off", "step", what, "wait", wait)
 		if !m.sleep(wait) {
 			return m.ctx.Err()
 		}
@@ -523,7 +523,7 @@ func isRateLimited(err error) bool {
 }
 
 func (m *linkMigration) scanError(what string, err error) {
-	m.b.Log.Error("Link migration scan failed", "step", what, "error", err)
+	m.b.Log.ErrorContext(m.ctx, "Link migration scan failed", "step", what, "error", err)
 	m.scanErrors = append(m.scanErrors, fmt.Sprintf("%s: %s", what, reportError(err)))
 }
 
@@ -680,7 +680,7 @@ func (m *linkMigration) profileImageURL(link s3client.LegacyLink) string {
 			profile, err := m.b.S3.FetchProfileSimple(m.ctx, link.GuildID, link.TemplateName, link.UserID)
 			if err != nil {
 				if !errors.Is(err, s3client.ErrNotFound) {
-					m.b.Log.Error("Link migration: fetching profile failed", "profile", k, "error", err)
+					m.b.Log.ErrorContext(m.ctx, "Link migration: fetching profile failed", "profile", k, "error", err)
 				}
 				break
 			}
@@ -726,7 +726,7 @@ func (m *linkMigration) applyEdits() {
 				}
 			}
 			if err != nil {
-				m.b.Log.Error("Link migration edit failed", "channel_id", channelID, "message_id", p.messageID, "error", err)
+				m.b.Log.ErrorContext(m.ctx, "Link migration edit failed", "channel_id", channelID, "message_id", p.messageID, "error", err)
 				m.failed = append(m.failed, fmt.Sprintf("<%s> (%s)", messageLink(m.guildID, channelID, p.messageID), reportError(err)))
 				continue
 			}
@@ -734,7 +734,7 @@ func (m *linkMigration) applyEdits() {
 		}
 		if unarchived {
 			if err := m.setArchived(channelID, true); err != nil {
-				m.b.Log.Error("Link migration: re-archiving thread failed", "channel_id", channelID, "error", err)
+				m.b.Log.ErrorContext(m.ctx, "Link migration: re-archiving thread failed", "channel_id", channelID, "error", err)
 				m.leftUnarchived = append(m.leftUnarchived, channelID)
 			}
 		}

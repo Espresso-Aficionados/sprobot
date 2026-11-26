@@ -132,7 +132,7 @@ func (b *Bot) handleStickyMenu(ctx context.Context, e *events.ApplicationCommand
 	msg := data.TargetMessage()
 	b.pending.Put(msg)
 
-	b.Log.Info("Sticky menu opened", "user_id", e.User().ID, "guild_id", *e.GuildID(), "channel_id", msg.ChannelID, "message_id", msg.ID)
+	b.Log.InfoContext(ctx, "Sticky menu opened", "user_id", e.User().ID, "guild_id", *e.GuildID(), "channel_id", msg.ChannelID, "message_id", msg.ID)
 
 	// Encode channel+message IDs into the modal custom ID
 	err := e.Modal(discord.ModalCreate{
@@ -187,7 +187,7 @@ func (b *Bot) handleStickyMenu(ctx context.Context, e *events.ApplicationCommand
 		},
 	}, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to show sticky config modal", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to show sticky config modal", "error", err)
 	}
 }
 
@@ -201,13 +201,13 @@ func (b *Bot) handleStickyConfigModal(ctx context.Context, e *events.ModalSubmit
 	}
 	channelID, err := snowflake.Parse(parts[0])
 	if err != nil {
-		b.Log.Error("Invalid channel ID in sticky config modal", "value", parts[0], "error", err)
+		b.Log.ErrorContext(ctx, "Invalid channel ID in sticky config modal", "value", parts[0], "error", err)
 		botutil.RespondEphemeral(ctx, e, "Something went wrong.")
 		return
 	}
 	messageID, err := snowflake.Parse(parts[1])
 	if err != nil {
-		b.Log.Error("Invalid message ID in sticky config modal", "value", parts[1], "error", err)
+		b.Log.ErrorContext(ctx, "Invalid message ID in sticky config modal", "value", parts[1], "error", err)
 		botutil.RespondEphemeral(ctx, e, "Something went wrong.")
 		return
 	}
@@ -249,7 +249,7 @@ func (b *Bot) handleStickyConfigModal(ctx context.Context, e *events.ModalSubmit
 	}
 	// Defer since fetching + re-hosting may take a moment
 	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer sticky config response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer sticky config response", "error", err)
 		return
 	}
 
@@ -261,7 +261,7 @@ func (b *Bot) handleStickyConfigModal(ctx context.Context, e *events.ModalSubmit
 	if !ok {
 		fetched, err := b.Client.Rest.GetMessage(channelID, messageID, rest.WithCtx(ctx))
 		if err != nil {
-			b.Log.Error("Failed to fetch target message", "error", err)
+			b.Log.ErrorContext(ctx, "Failed to fetch target message", "error", err)
 			botutil.FollowupEphemeral(ctx, b.Client, e.Token(), "Failed to fetch the target message.")
 			return
 		}
@@ -312,7 +312,7 @@ func (b *Bot) createSticky(ctx context.Context, s *stickyMessage, msg discord.Me
 		if key, ok := b.stickyFileKey(s.GuildID, embed.Image); ok {
 			copied, err := b.S3.CopyStickyFile(workCtx, s.GuildID.String(), key)
 			if err != nil {
-				b.Log.Error("Failed to copy sticky file", "error", err, "key", key)
+				b.Log.ErrorContext(workCtx, "Failed to copy sticky file", "error", err, "key", key)
 				failed = append(failed, path.Base(key))
 				continue
 			}
@@ -324,7 +324,7 @@ func (b *Bot) createSticky(ctx context.Context, s *stickyMessage, msg discord.Me
 	for _, att := range msg.Attachments {
 		key, err := b.S3.SaveStickyFile(workCtx, s.GuildID.String(), att.ProxyURL)
 		if err != nil {
-			b.Log.Error("Failed to re-host attachment", "error", err, "url", att.ProxyURL)
+			b.Log.ErrorContext(workCtx, "Failed to re-host attachment", "error", err, "url", att.ProxyURL)
 			failed = append(failed, att.Filename)
 			continue
 		}
@@ -336,10 +336,10 @@ func (b *Bot) createSticky(ctx context.Context, s *stickyMessage, msg discord.Me
 	}
 
 	if err := b.installSticky(ctx, s); err != nil {
-		b.Log.Error("Failed to post initial sticky", "error", err)
+		b.Log.ErrorContext(workCtx, "Failed to post initial sticky", "error", err)
 		return "Failed to post the sticky message."
 	}
-	b.Log.Info("Sticky created", "user_id", s.CreatedBy, "guild_id", s.GuildID, "channel_id", s.ChannelID, "min_idle", s.MinIdleMins, "max_idle", s.MaxIdleMins, "msg_threshold", s.MsgThreshold, "time_threshold", s.TimeThresholdMins, "buffer", s.Buffer)
+	b.Log.InfoContext(workCtx, "Sticky created", "user_id", s.CreatedBy, "guild_id", s.GuildID, "channel_id", s.ChannelID, "min_idle", s.MinIdleMins, "max_idle", s.MaxIdleMins, "msg_threshold", s.MsgThreshold, "time_threshold", s.TimeThresholdMins, "buffer", s.Buffer)
 	return createdReply(s, failed)
 }
 
@@ -397,7 +397,7 @@ func (b *Bot) handleStickyStop(ctx context.Context, e *events.ApplicationCommand
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
 
-	b.Log.Info("Sticky stop", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
+	b.Log.InfoContext(ctx, "Sticky stop", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 
 	b.mu.Lock()
 	s := b.getSticky(guildID, channelID)
@@ -422,7 +422,7 @@ func (b *Bot) handleStickyStart(ctx context.Context, e *events.ApplicationComman
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
 
-	b.Log.Info("Sticky start", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
+	b.Log.InfoContext(ctx, "Sticky start", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 
 	b.mu.Lock()
 	s := b.getSticky(guildID, channelID)
@@ -433,7 +433,7 @@ func (b *Bot) handleStickyStart(ctx context.Context, e *events.ApplicationComman
 	}
 	if s.Active {
 		b.mu.Unlock()
-		b.Log.Info("Sticky already active", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
+		b.Log.InfoContext(ctx, "Sticky already active", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 		botutil.RespondEphemeral(ctx, e, "Sticky is already active.")
 		return
 	}
@@ -449,7 +449,7 @@ func (b *Bot) handleStickyRemove(ctx context.Context, e *events.ApplicationComma
 	guildID := *e.GuildID()
 	channelID := e.Channel().ID()
 
-	b.Log.Info("Sticky remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
+	b.Log.InfoContext(ctx, "Sticky remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 
 	s := b.takeSticky(guildID, channelID)
 	if s == nil {
@@ -467,7 +467,7 @@ func (b *Bot) handleStickyRemove(ctx context.Context, e *events.ApplicationComma
 func (b *Bot) handleStickyList(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 
-	b.Log.Info("Sticky list", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Sticky list", "user_id", e.User().ID, "guild_id", guildID)
 
 	b.mu.Lock()
 	channels, ok := b.stickies[guildID]

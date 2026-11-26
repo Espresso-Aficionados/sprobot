@@ -551,7 +551,7 @@ func (c *Client) PresignExisting(ctx context.Context, urlOrKey string, ttl time.
 	}
 	presigned, err := c.PresignedURL(ctx, key, ttl)
 	if err != nil {
-		c.log.Error("PresignExisting: presign failed", "key", key, "error", err)
+		c.log.ErrorContext(ctx, "PresignExisting: presign failed", "key", key, "error", err)
 		return urlOrKey
 	}
 	return presigned
@@ -798,18 +798,18 @@ func cacheKey(templateName, guildID, userID string) string {
 }
 
 func (c *Client) FetchProfile(ctx context.Context, tmpl sprobot.Template, guildID, userID string) (map[string]string, error) {
-	c.log.Info("Fetching profile", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
+	c.log.InfoContext(ctx, "Fetching profile", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 
 	key := cacheKey(tmpl.Name, guildID, userID)
 	if profile, ok := c.cache.Get(key); ok {
-		c.log.Info("Cache hit", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
+		c.log.InfoContext(ctx, "Cache hit", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 		cp := make(map[string]string, len(profile))
 		for k, v := range profile {
 			cp[k] = v
 		}
 		return cp, nil
 	}
-	c.log.Info("Cache miss", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
+	c.log.InfoContext(ctx, "Cache miss", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 
 	s3Path := sprobot.ProfileS3Path(guildID, tmpl.Name, userID)
 	start := time.Now()
@@ -825,7 +825,7 @@ func (c *Client) FetchProfile(ctx context.Context, tmpl sprobot.Template, guildI
 	}
 	defer out.Body.Close()
 
-	c.log.Info(fmt.Sprintf("s3 fetch time: %dms", time.Since(start).Milliseconds()),
+	c.log.InfoContext(ctx, fmt.Sprintf("s3 fetch time: %dms", time.Since(start).Milliseconds()),
 		"user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 
 	var profile map[string]string
@@ -864,7 +864,7 @@ func (c *Client) FetchProfileSimple(ctx context.Context, guildID, templateName, 
 }
 
 func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID, userID string, profile map[string]string) (webURL string, userErr string, err error) {
-	c.log.Info("Saving profile", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
+	c.log.InfoContext(ctx, "Saving profile", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 
 	// Step 1: re-host the image if needed
 	submitted := profile[tmpl.Image.Name]
@@ -911,12 +911,12 @@ func (c *Client) SaveProfile(ctx context.Context, tmpl sprobot.Template, guildID
 	// leaves an orphan for cmd/s3-orphans rather than a broken profile.
 	if replaced != "" {
 		if err := c.DeleteKeys(ctx, replaced); err != nil {
-			c.log.Error("Failed to delete replaced profile image", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "error", err)
+			c.log.ErrorContext(ctx, "Failed to delete replaced profile image", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "error", err)
 		}
 	}
 
 	webURL = c.ProfileURL(tmpl, guildID, userID)
-	c.log.Info("Profile saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "profile_url", webURL)
+	c.log.InfoContext(ctx, "Profile saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "profile_url", webURL)
 
 	return webURL, userErr, nil
 }
@@ -956,7 +956,7 @@ func (c *Client) putProfile(ctx context.Context, tmpl sprobot.Template, guildID,
 	if err != nil {
 		return fmt.Errorf("saving profile to s3: %w", err)
 	}
-	c.log.Info(fmt.Sprintf("s3 write time: %dms", time.Since(start).Milliseconds()),
+	c.log.InfoContext(ctx, fmt.Sprintf("s3 write time: %dms", time.Since(start).Milliseconds()),
 		"user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 
 	c.cache.Add(cacheKey(tmpl.Name, guildID, userID), profile)
@@ -989,7 +989,7 @@ func (c *Client) ProfileImageKey(tmpl sprobot.Template, guildID, userID string, 
 func (c *Client) DeleteProfileImage(ctx context.Context, tmpl sprobot.Template, guildID, userID string, profile map[string]string) error {
 	keys, err := c.storedImageKeys(ctx, guildID, tmpl.Name, userID)
 	if err != nil {
-		c.log.Error("Failed to list profile images; deleting the current upload extensions only", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "error", err)
+		c.log.ErrorContext(ctx, "Failed to list profile images; deleting the current upload extensions only", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "error", err)
 		keys = uploadedImageKeys(guildID, tmpl.Name, userID)
 	}
 	if key, ok := c.ProfileImageKey(tmpl, guildID, userID, profile); ok && !slices.Contains(keys, key) {
@@ -1003,7 +1003,7 @@ func (c *Client) DeleteProfileImage(ctx context.Context, tmpl sprobot.Template, 
 
 // DeleteProfile deletes a user's profile and its image.
 func (c *Client) DeleteProfile(ctx context.Context, tmpl sprobot.Template, guildID, userID string) error {
-	c.log.Info("Deleting profile", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
+	c.log.InfoContext(ctx, "Deleting profile", "user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 
 	key := cacheKey(tmpl.Name, guildID, userID)
 	c.cache.Remove(key)
@@ -1012,7 +1012,7 @@ func (c *Client) DeleteProfile(ctx context.Context, tmpl sprobot.Template, guild
 	// that can't be read must not block its own deletion.
 	profile, err := c.FetchProfileSimple(ctx, guildID, tmpl.Name, userID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
-		c.log.Error("Failed to read profile before deleting it", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "error", err)
+		c.log.ErrorContext(ctx, "Failed to read profile before deleting it", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "error", err)
 	}
 	// The image goes first, so if that fails the profile is still there to
 	// delete again.
@@ -1030,7 +1030,7 @@ func (c *Client) DeleteProfile(ctx context.Context, tmpl sprobot.Template, guild
 		return fmt.Errorf("deleting profile from s3: %w", err)
 	}
 
-	c.log.Info(fmt.Sprintf("s3 delete time: %dms", time.Since(start).Milliseconds()),
+	c.log.InfoContext(ctx, fmt.Sprintf("s3 delete time: %dms", time.Since(start).Milliseconds()),
 		"user_id", userID, "template", tmpl.Name, "guild_id", guildID)
 
 	return nil
@@ -1149,17 +1149,17 @@ func (c *Client) saveRemoteFile(ctx context.Context, guildID, fileURL, kind stri
 }
 
 func (c *Client) SaveModFile(ctx context.Context, guildID string, fileURL string) (string, error) {
-	c.log.Info("Saving file to mod log", "guild_id", guildID)
+	c.log.InfoContext(ctx, "Saving file to mod log", "guild_id", guildID)
 	s3Path, err := c.saveRemoteFile(ctx, guildID, fileURL, sprobot.FileKindMod)
 	if err != nil {
 		return "", err
 	}
-	c.log.Info("Mod file saved", "guild_id", guildID, "s3_key", s3Path)
+	c.log.InfoContext(ctx, "Mod file saved", "guild_id", guildID, "s3_key", s3Path)
 	return s3Path, nil
 }
 
 func (c *Client) SaveShortcutImage(ctx context.Context, guildID string, fileURL string) (string, error) {
-	c.log.Info("Saving shortcut image", "guild_id", guildID)
+	c.log.InfoContext(ctx, "Saving shortcut image", "guild_id", guildID)
 	if strings.HasPrefix(fileURL, c.endpoint) || !strings.HasPrefix(fileURL, "http") {
 		return fileURL, nil
 	}
@@ -1167,7 +1167,7 @@ func (c *Client) SaveShortcutImage(ctx context.Context, guildID string, fileURL 
 	if err != nil {
 		return "", err
 	}
-	c.log.Info("Shortcut image saved", "guild_id", guildID, "s3_key", s3Path)
+	c.log.InfoContext(ctx, "Shortcut image saved", "guild_id", guildID, "s3_key", s3Path)
 	return s3Path, nil
 }
 
@@ -1192,7 +1192,7 @@ func (c *Client) CopyShortcutFile(ctx context.Context, guildID, srcKey string) (
 	}); err != nil {
 		return "", fmt.Errorf("copying %s: %w", srcKey, err)
 	}
-	c.log.Info("Shortcut file copied", "guild_id", guildID, "source", srcKey, "s3_key", s3Path)
+	c.log.InfoContext(ctx, "Shortcut file copied", "guild_id", guildID, "source", srcKey, "s3_key", s3Path)
 	return s3Path, nil
 }
 
@@ -1284,7 +1284,7 @@ func (c *Client) getImageS3URL(ctx context.Context, tmpl sprobot.Template, guild
 		return "Unable to save image. The rest of your profile has been saved.", ""
 	}
 
-	c.log.Info("Profile image saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "s3_key", s3Path)
+	c.log.InfoContext(ctx, "Profile image saved", "user_id", userID, "template", tmpl.Name, "guild_id", guildID, "s3_key", s3Path)
 	return "", s3Path
 }
 

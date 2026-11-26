@@ -88,7 +88,7 @@ func (b *Bot) ensureHiddenLoaded(ctx context.Context, guildID snowflake.ID) erro
 	b.hidden[guildID] = set
 	b.hiddenLoaded[guildID] = true
 	b.mu.Unlock()
-	b.Log.Info("Loaded hidden threads", "guild_id", guildID, "count", len(set))
+	b.Log.InfoContext(ctx, "Loaded hidden threads", "guild_id", guildID, "count", len(set))
 	return nil
 }
 
@@ -167,9 +167,9 @@ func (b *Bot) loadHiddenThreads(ctx context.Context) error {
 		switch {
 		case statever.IsNewer(err):
 			refused = append(refused, err)
-			b.Log.Error("Refusing hidden threads a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Refusing hidden threads a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
 		case err != nil:
-			b.Log.Error("Failed to load hidden threads; will retry on next use", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to load hidden threads; will retry on next use", "guild_id", guildID, "error", err)
 		}
 	}
 	return errors.Join(refused...)
@@ -181,9 +181,9 @@ func (b *Bot) onThreadDelete(ctx context.Context, e *events.ThreadDelete) {
 	case errors.Is(err, errHiddenNotLoaded):
 		// A deleted thread left in an unloaded list is harmless: it is never shown.
 	case err != nil:
-		b.Log.Error("Failed to save hidden threads after thread delete", "guild_id", e.GuildID, "thread_id", e.ThreadID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save hidden threads after thread delete", "guild_id", e.GuildID, "thread_id", e.ThreadID, "error", err)
 	case changed:
-		b.Log.Info("Dropped deleted thread from hidden list", "guild_id", e.GuildID, "thread_id", e.ThreadID)
+		b.Log.InfoContext(ctx, "Dropped deleted thread from hidden list", "guild_id", e.GuildID, "thread_id", e.ThreadID)
 	}
 }
 
@@ -199,23 +199,23 @@ func (b *Bot) handleHide(ctx context.Context, e *events.ApplicationCommandIntera
 	// Defer: loading and saving the list in S3 can outlast the interaction's
 	// 3-second deadline.
 	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer hide response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer hide response", "error", err)
 		return
 	}
 	reply := func(content string) { botutil.FollowupEphemeral(ctx, b.Client, e.Token(), content) }
 
 	changed, err := b.setHidden(ctx, guildID, thread.ID, hide)
 	if errors.Is(err, errHiddenNotLoaded) {
-		b.Log.Error("Hidden thread list not loaded", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Hidden thread list not loaded", "guild_id", guildID, "error", err)
 		reply("Couldn't load the hidden thread list, so it can't be changed right now. Please try again in a minute.")
 		return
 	}
 	if err != nil {
-		b.Log.Error("Failed to save hidden threads", "guild_id", guildID, "thread_id", thread.ID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save hidden threads", "guild_id", guildID, "thread_id", thread.ID, "error", err)
 		reply("Something went wrong saving that, please try again.")
 		return
 	}
-	b.Log.Info("Set thread hidden", "user_id", e.User().ID, "guild_id", guildID, "thread_id", thread.ID, "hidden", hide, "changed", changed)
+	b.Log.InfoContext(ctx, "Set thread hidden", "user_id", e.User().ID, "guild_id", guildID, "thread_id", thread.ID, "hidden", hide, "changed", changed)
 
 	switch {
 	case hide && changed:
@@ -234,14 +234,14 @@ func (b *Bot) handleHiddenList(ctx context.Context, e *events.ApplicationCommand
 	// Defer: loading the list from S3 can outlast the interaction's 3-second
 	// deadline.
 	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer hidden list response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer hidden list response", "error", err)
 		return
 	}
 	reply := func(content string) { botutil.FollowupEphemeral(ctx, b.Client, e.Token(), content) }
 
 	set, err := b.hiddenSet(ctx, guildID)
 	if err != nil {
-		b.Log.Error("Hidden thread list not loaded", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Hidden thread list not loaded", "guild_id", guildID, "error", err)
 		reply("Couldn't load the hidden thread list. Please try again in a minute.")
 		return
 	}

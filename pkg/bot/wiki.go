@@ -25,7 +25,7 @@ func (b *Bot) handleWiki(ctx context.Context, e *events.ApplicationCommandIntera
 		return
 	}
 
-	b.Log.Info("Wiki lookup", "user_id", e.User().ID, "guild_id", *e.GuildID(), "page", page)
+	b.Log.InfoContext(ctx, "Wiki lookup", "user_id", e.User().ID, "guild_id", *e.GuildID(), "page", page)
 
 	for _, link := range sprobot.WikiLinks {
 		if link.Shortcut == page {

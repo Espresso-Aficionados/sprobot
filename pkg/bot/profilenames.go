@@ -115,7 +115,7 @@ func (b *Bot) loadProfileOwners(ctx context.Context, guildIDs []snowflake.ID) {
 		objects, err := b.S3.ListObjects(ctx, "profiles/"+guildStr+"/")
 		cancel()
 		if err != nil {
-			b.Log.Error("Failed to list profiles; checking authors one by one", "guild_id", guildStr, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to list profiles; checking authors one by one", "guild_id", guildStr, "error", err)
 			continue
 		}
 		keys := make([]string, len(objects))
@@ -141,7 +141,7 @@ func (b *Bot) loadProfileOwners(ctx context.Context, guildIDs []snowflake.ID) {
 		}
 		p.listed[guildID] = true
 		p.mu.Unlock()
-		b.Log.Info("Listed profile owners", "guild_id", guildStr, "owners", len(owners))
+		b.Log.InfoContext(ctx, "Listed profile owners", "guild_id", guildStr, "owners", len(owners))
 	}
 }
 
@@ -214,7 +214,7 @@ func (b *Bot) writeProfileName(ctx context.Context, guildID snowflake.ID, guildS
 		case errors.Is(err, s3client.ErrNotFound):
 		default:
 			failed = true
-			b.Log.Error("Failed to update profile name", "error", err, "guild_id", guildStr, "user_id", userStr, "template", tmpl.Name)
+			b.Log.ErrorContext(ctx, "Failed to update profile name", "error", err, "guild_id", guildStr, "user_id", userStr, "template", tmpl.Name)
 		}
 	}
 

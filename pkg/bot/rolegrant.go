@@ -124,7 +124,7 @@ func (b *Bot) checkGrantableRole(ctx context.Context, e *events.ApplicationComma
 		}
 		m, err := b.Client.Rest.GetMember(guildID, selfUser.ID, rest.WithCtx(ctx))
 		if err != nil {
-			b.Log.Error("Failed to fetch the bot's own member", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to fetch the bot's own member", "guild_id", guildID, "error", err)
 			return "Couldn't look up the bot's roles. Try again in a minute."
 		}
 		self = *m

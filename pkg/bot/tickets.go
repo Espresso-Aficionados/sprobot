@@ -198,7 +198,7 @@ func (b *Bot) panelNeedsUpdate(msg discord.Message, cfg ticketConfig) bool {
 func (b *Bot) ensureTicketPanel(ctx context.Context, guildID snowflake.ID, cfg ticketConfig) {
 	messages, err := b.Client.Rest.GetMessages(cfg.ChannelID, 0, 0, 0, 25, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to fetch messages for ticket panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to fetch messages for ticket panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
 		return
 	}
 
@@ -223,10 +223,10 @@ func (b *Bot) ensureTicketPanel(ctx context.Context, guildID snowflake.ID, cfg t
 				}
 				if btn.CustomID == "ticket_open" {
 					if !b.panelNeedsUpdate(msg, cfg) {
-						b.Log.Info("Ticket panel already exists", "guild_id", guildID, "channel_id", cfg.ChannelID)
+						b.Log.InfoContext(ctx, "Ticket panel already exists", "guild_id", guildID, "channel_id", cfg.ChannelID)
 						return
 					}
-					b.Log.Info("Ticket panel outdated, updating", "guild_id", guildID, "channel_id", cfg.ChannelID)
+					b.Log.InfoContext(ctx, "Ticket panel outdated, updating", "guild_id", guildID, "channel_id", cfg.ChannelID)
 					content := ""
 					embeds := []discord.Embed{embed}
 					_, err := b.Client.Rest.UpdateMessage(cfg.ChannelID, msg.ID, discord.MessageUpdate{
@@ -235,7 +235,7 @@ func (b *Bot) ensureTicketPanel(ctx context.Context, guildID snowflake.ID, cfg t
 						Components: &components,
 					}, rest.WithCtx(ctx))
 					if err != nil {
-						b.Log.Error("Failed to update ticket panel", "guild_id", guildID, "error", err)
+						b.Log.ErrorContext(ctx, "Failed to update ticket panel", "guild_id", guildID, "error", err)
 					}
 					return
 				}
@@ -248,15 +248,15 @@ func (b *Bot) ensureTicketPanel(ctx context.Context, guildID snowflake.ID, cfg t
 		Components: components,
 	}, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to post ticket panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to post ticket panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
 	} else {
-		b.Log.Info("Posted ticket panel", "guild_id", guildID, "channel_id", cfg.ChannelID)
+		b.Log.InfoContext(ctx, "Posted ticket panel", "guild_id", guildID, "channel_id", cfg.ChannelID)
 	}
 }
 
 func (b *Bot) handleTicketOpen(ctx context.Context, e *events.ComponentInteractionCreate) {
 	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer ticket open", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer ticket open", "error", err)
 		return
 	}
 
@@ -304,7 +304,7 @@ func (b *Bot) handleTicketOpen(ctx context.Context, e *events.ComponentInteracti
 	}()
 
 	if err := b.tickets.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save ticket data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save ticket data", "guild_id", *guildID, "error", err)
 	}
 
 	threadName := fmt.Sprintf("ticket-%d", ticketNum)
@@ -314,7 +314,7 @@ func (b *Bot) handleTicketOpen(ctx context.Context, e *events.ComponentInteracti
 		Invitable: &invitable,
 	}, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to create ticket thread", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to create ticket thread", "guild_id", *guildID, "error", err)
 		respond("Something went wrong creating your ticket. Please try again.")
 		return
 	}
@@ -322,9 +322,9 @@ func (b *Bot) handleTicketOpen(ctx context.Context, e *events.ComponentInteracti
 	// A private thread the user isn't in is useless to them, so remove it
 	// rather than pointing them at it.
 	if err := b.Client.Rest.AddThreadMember(thread.ID(), userID, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to add user to ticket thread", "user_id", userID, "thread_id", thread.ID(), "error", err)
+		b.Log.ErrorContext(ctx, "Failed to add user to ticket thread", "user_id", userID, "thread_id", thread.ID(), "error", err)
 		if err := b.Client.Rest.DeleteChannel(thread.ID(), rest.WithCtx(ctx)); err != nil {
-			b.Log.Error("Failed to delete unusable ticket thread", "thread_id", thread.ID(), "error", err)
+			b.Log.ErrorContext(ctx, "Failed to delete unusable ticket thread", "thread_id", thread.ID(), "error", err)
 		}
 		respond("Something went wrong creating your ticket. Please try again.")
 		return
@@ -339,13 +339,13 @@ func (b *Bot) handleTicketOpen(ctx context.Context, e *events.ComponentInteracti
 		},
 	}, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to post intro in ticket thread", "thread_id", thread.ID(), "error", err)
+		b.Log.ErrorContext(ctx, "Failed to post intro in ticket thread", "thread_id", thread.ID(), "error", err)
 	}
 
 	created = thread.ID()
 	respond(fmt.Sprintf("Your ticket has been created: <#%d>", thread.ID()))
 
-	b.Log.Info("Opened ticket", "guild_id", *guildID, "thread_id", thread.ID(), "user_id", userID, "ticket_num", ticketNum)
+	b.Log.InfoContext(ctx, "Opened ticket", "guild_id", *guildID, "thread_id", thread.ID(), "user_id", userID, "ticket_num", ticketNum)
 
 	// Log non-staff ticket opens to the user's mod log thread.
 	isStaff := false
@@ -465,7 +465,7 @@ func formatTicketDuration(d time.Duration) string {
 
 func (b *Bot) handleTicketCloseConfirm(ctx context.Context, e *events.ComponentInteractionCreate) {
 	opener := ticketOpenerFromMessage(e.Message)
-	b.Log.Info("Ticket close confirm", "user_id", e.User().ID, "channel_id", e.Channel().ID(), "opener_id", opener)
+	b.Log.InfoContext(ctx, "Ticket close confirm", "user_id", e.User().ID, "channel_id", e.Channel().ID(), "opener_id", opener)
 
 	e.UpdateMessage(discord.MessageUpdate{
 		Embeds: &[]discord.Embed{{Description: "Are you sure you want to close this ticket?"}},
@@ -479,7 +479,7 @@ func (b *Bot) handleTicketCloseConfirm(ctx context.Context, e *events.ComponentI
 }
 
 func (b *Bot) handleTicketCloseCancel(ctx context.Context, e *events.ComponentInteractionCreate, opener snowflake.ID) {
-	b.Log.Info("Ticket close cancelled", "user_id", e.User().ID, "channel_id", e.Channel().ID())
+	b.Log.InfoContext(ctx, "Ticket close cancelled", "user_id", e.User().ID, "channel_id", e.Channel().ID())
 
 	cfg := ticketConfig{CloseButtonLabel: "Close Ticket"}
 	if guildID := e.GuildID(); guildID != nil {
@@ -510,7 +510,7 @@ func (b *Bot) handleTicketClose(ctx context.Context, e *events.ComponentInteract
 	closedAt := time.Now()
 
 	if err := e.DeferUpdateMessage(rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to acknowledge ticket close", "channel_id", channelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to acknowledge ticket close", "channel_id", channelID, "error", err)
 		return
 	}
 
@@ -518,7 +518,7 @@ func (b *Bot) handleTicketClose(ctx context.Context, e *events.ComponentInteract
 	// comes last because an archived thread's messages can't be edited.
 	locked := true
 	if _, err := b.Client.Rest.UpdateChannel(channelID, discord.GuildThreadUpdate{Locked: &locked}, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to lock ticket thread", "channel_id", channelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to lock ticket thread", "channel_id", channelID, "error", err)
 		botutil.FollowupEphemeral(ctx, b.Client, e.Token(), "Couldn't close this ticket. Please try again.")
 		return
 	}
@@ -527,14 +527,14 @@ func (b *Bot) handleTicketClose(ctx context.Context, e *events.ComponentInteract
 		Embeds:     &[]discord.Embed{{Description: ticketClosedDescription(opener, closer, openedAt, closedAt)}},
 		Components: &[]discord.LayoutComponent{},
 	}, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to mark ticket closed", "channel_id", channelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to mark ticket closed", "channel_id", channelID, "error", err)
 	}
 
 	archived := true
 	if _, err := b.Client.Rest.UpdateChannel(channelID, discord.GuildThreadUpdate{Archived: &archived}, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to archive ticket thread", "channel_id", channelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to archive ticket thread", "channel_id", channelID, "error", err)
 		botutil.FollowupEphemeral(ctx, b.Client, e.Token(), "The ticket is locked, but archiving it failed.")
 		return
 	}
-	b.Log.Info("Closed ticket", "channel_id", channelID, "user_id", closer, "opener_id", opener, "open_for", closedAt.Sub(openedAt))
+	b.Log.InfoContext(ctx, "Closed ticket", "channel_id", channelID, "user_id", closer, "opener_id", opener, "open_for", closedAt.Sub(openedAt))
 }

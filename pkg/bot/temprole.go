@@ -252,7 +252,7 @@ func (b *Bot) processTempRoleExpiries(ctx context.Context) error {
 				_, configured := cfgSt.find(entry.RoleID)
 				cfgSt.mu.Unlock()
 				if !configured {
-					b.Log.Info("Skipping orphaned temp role timer", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID)
+					b.Log.InfoContext(ctx, "Skipping orphaned temp role timer", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID)
 					st.finish(entry, time.Now())
 					changed = true
 					continue
@@ -264,7 +264,7 @@ func (b *Bot) processTempRoleExpiries(ctx context.Context) error {
 			}
 			err := b.Client.Rest.RemoveMemberRole(guildID, entry.UserID, entry.RoleID, rest.WithReason("Temp role expired"), rest.WithCtx(ctx))
 			if err != nil && !isUnknownMemberOrRole(err) {
-				b.Log.Error("Failed to remove expired temp role, will retry", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "error", err)
+				b.Log.ErrorContext(ctx, "Failed to remove expired temp role, will retry", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "error", err)
 				errs = append(errs, err)
 				continue
 			}
@@ -272,11 +272,11 @@ func (b *Bot) processTempRoleExpiries(ctx context.Context) error {
 			extended, wasExtended := st.finish(entry, time.Now())
 			switch {
 			case err != nil:
-				b.Log.Info("Expired temp role already gone", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "error", err)
+				b.Log.InfoContext(ctx, "Expired temp role already gone", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "error", err)
 			case wasExtended:
 				b.regrantTempRole(ctx, guildID, extended)
 			default:
-				b.Log.Info("Removed expired temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID)
+				b.Log.InfoContext(ctx, "Removed expired temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID)
 				if member, ok := b.Client.Caches.Member(guildID, entry.UserID); ok {
 					b.crossPostToModLog(ctx, guildID, member.User, discord.Embed{
 						Title:       "Temp Role Expired",
@@ -289,7 +289,7 @@ func (b *Bot) processTempRoleExpiries(ctx context.Context) error {
 			return
 		}
 		if err := b.tempRoles.persist(ctx, guildID); err != nil {
-			b.Log.Error("Failed to persist temp roles after expiry", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to persist temp roles after expiry", "guild_id", guildID, "error", err)
 			errs = append(errs, err)
 		}
 	})
@@ -301,14 +301,14 @@ func (b *Bot) processTempRoleExpiries(ctx context.Context) error {
 // Discord before the removal did. Granting a role the user holds is a no-op.
 func (b *Bot) regrantTempRole(ctx context.Context, guildID snowflake.ID, entry tempRoleEntry) {
 	if reason := b.grantBlocked(guildID, entry.RoleID); reason != "" {
-		b.Log.Warn("Not re-granting extended temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "reason", reason)
+		b.Log.WarnContext(ctx, "Not re-granting extended temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "reason", reason)
 		return
 	}
 	if err := b.Client.Rest.AddMemberRole(guildID, entry.UserID, entry.RoleID, rest.WithReason("Temp role extended"), rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to re-grant extended temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to re-grant extended temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID, "error", err)
 		return
 	}
-	b.Log.Info("Re-granted extended temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID)
+	b.Log.InfoContext(ctx, "Re-granted extended temp role", "guild_id", guildID, "user_id", entry.UserID, "role_id", entry.RoleID)
 }
 
 // --- Automatic tracking ---
@@ -340,7 +340,7 @@ func (b *Bot) ensureTempRoleTimer(ctx context.Context, guildID snowflake.ID, use
 
 	st := b.tempRoleStateFor(guildID)
 	if st == nil {
-		b.Log.Error("Temp role timers not loaded; not tracking role", "guild_id", guildID, "user_id", userID, "role_id", roleID)
+		b.Log.ErrorContext(ctx, "Temp role timers not loaded; not tracking role", "guild_id", guildID, "user_id", userID, "role_id", roleID)
 		return time.Time{}, false
 	}
 	expiry := time.Now().Add(cfgEntry.Duration)
@@ -348,10 +348,10 @@ func (b *Bot) ensureTempRoleTimer(ctx context.Context, guildID snowflake.ID, use
 		return time.Time{}, false
 	}
 
-	b.Log.Info("Temp role timer set", "guild_id", guildID, "user_id", userID, "role_id", roleID, "expires", expiry.Format(time.RFC3339))
+	b.Log.InfoContext(ctx, "Temp role timer set", "guild_id", guildID, "user_id", userID, "role_id", roleID, "expires", expiry.Format(time.RFC3339))
 
 	if err := b.tempRoles.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist temp role timer", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist temp role timer", "guild_id", guildID, "error", err)
 	}
 	return expiry, true
 }
@@ -465,7 +465,7 @@ func (b *Bot) handleTempRole(ctx context.Context, e *events.ApplicationCommandIn
 		return
 	}
 
-	b.Log.Info("Temp role", "user_id", e.User().ID, "guild_id", *guildID, "target_user_id", targetUser.ID, "role_id", roleID)
+	b.Log.InfoContext(ctx, "Temp role", "user_id", e.User().ID, "guild_id", *guildID, "target_user_id", targetUser.ID, "role_id", roleID)
 
 	// Record the expiry BEFORE adding the role so the GuildMemberUpdate
 	// event handler sees the existing timer and skips its mod-log post.
@@ -479,19 +479,19 @@ func (b *Bot) handleTempRole(ctx context.Context, e *events.ApplicationCommandIn
 	entry := tempRoleEntry{GuildID: *guildID, UserID: targetUser.ID, RoleID: roleID, ExpiryAt: time.Now().Add(cfgEntry.Duration)}
 	replaced := st.set(entry)
 	expiry := entry.ExpiryAt
-	b.Log.Info("Temp role timer set", "guild_id", *guildID, "user_id", targetUser.ID, "role_id", roleID, "reset", true, "expires", expiry.Format(time.RFC3339))
+	b.Log.InfoContext(ctx, "Temp role timer set", "guild_id", *guildID, "user_id", targetUser.ID, "role_id", roleID, "reset", true, "expires", expiry.Format(time.RFC3339))
 	if err := b.tempRoles.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to persist temp role timer", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist temp role timer", "guild_id", *guildID, "error", err)
 	}
 
 	// Add the role
 	if err := b.Client.Rest.AddMemberRole(*guildID, targetUser.ID, roleID, rest.WithReason(fmt.Sprintf("Temp role for %s by %s", formatDuration(cfgEntry.Duration), e.User().Username)), rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to add temp role", "guild_id", *guildID, "user_id", targetUser.ID, "role_id", roleID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to add temp role", "guild_id", *guildID, "user_id", targetUser.ID, "role_id", roleID, "error", err)
 		// Put back the timer this one replaced: the user may still hold the
 		// role from before, and without it nothing would remove the role.
 		st.undo(entry, replaced)
 		if err := b.tempRoles.persist(ctx, *guildID); err != nil {
-			b.Log.Error("Failed to persist temp role rollback", "guild_id", *guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to persist temp role rollback", "guild_id", *guildID, "error", err)
 		}
 		botutil.RespondEphemeral(ctx, e, "Failed to add role.")
 		return
@@ -612,7 +612,7 @@ func (b *Bot) handleTempRoleConfigAdd(ctx context.Context, e *events.Application
 		return
 	}
 
-	b.Log.Info("Temp role config add", "user_id", e.User().ID, "guild_id", guildID, "role_id", role.ID, "duration", durationStr)
+	b.Log.InfoContext(ctx, "Temp role config add", "user_id", e.User().ID, "guild_id", guildID, "role_id", role.ID, "duration", durationStr)
 
 	if reason := b.checkGrantableRole(ctx, e, guildID, role); reason != "" {
 		botutil.RespondEphemeral(ctx, e, reason)
@@ -635,7 +635,7 @@ func (b *Bot) handleTempRoleConfigAdd(ctx context.Context, e *events.Application
 	st.mu.Unlock()
 
 	if err := b.tempRoleConfig.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist temp role config", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist temp role config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
@@ -652,7 +652,7 @@ func (b *Bot) handleTempRoleConfigRemove(ctx context.Context, e *events.Applicat
 		return
 	}
 
-	b.Log.Info("Temp role config remove", "user_id", e.User().ID, "guild_id", guildID, "role_id", role.ID)
+	b.Log.InfoContext(ctx, "Temp role config remove", "user_id", e.User().ID, "guild_id", guildID, "role_id", role.ID)
 
 	st.mu.Lock()
 	filtered := st.Roles[:0]
@@ -673,7 +673,7 @@ func (b *Bot) handleTempRoleConfigRemove(ctx context.Context, e *events.Applicat
 	}
 
 	if err := b.tempRoleConfig.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist temp role config", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist temp role config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
@@ -684,7 +684,7 @@ func (b *Bot) handleTempRoleConfigRemove(ctx context.Context, e *events.Applicat
 		cleared = roleSt.clearRole(role.ID)
 		if cleared > 0 {
 			if err := b.tempRoles.persist(ctx, guildID); err != nil {
-				b.Log.Error("Failed to persist temp roles after config remove", "guild_id", guildID, "error", err)
+				b.Log.ErrorContext(ctx, "Failed to persist temp roles after config remove", "guild_id", guildID, "error", err)
 			}
 		}
 	}
@@ -697,7 +697,7 @@ func (b *Bot) handleTempRoleConfigRemove(ctx context.Context, e *events.Applicat
 }
 
 func (b *Bot) handleTempRoleConfigList(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *tempRoleConfigState) {
-	b.Log.Info("Temp role config list", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Temp role config list", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
 	roles := make([]tempRoleConfigEntry, len(st.Roles))

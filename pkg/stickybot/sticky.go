@@ -135,11 +135,11 @@ func (b *Bot) loadGuildStickies(ctx context.Context, guildID snowflake.ID) bool 
 func (b *Bot) loadGuild(ctx context.Context, guildID snowflake.ID) error {
 	channels, err := b.fetchStickies(ctx, guildID)
 	if statever.IsNewer(err) {
-		b.Log.Error("Refusing stickies a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Refusing stickies a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
 		return err
 	}
 	if err != nil {
-		b.Log.Error("Failed to load stickies; they can't be changed until a retry succeeds", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to load stickies; they can't be changed until a retry succeeds", "guild_id", guildID, "error", err)
 		return err
 	}
 	b.mu.Lock()
@@ -151,7 +151,7 @@ func (b *Bot) loadGuild(ctx context.Context, guildID snowflake.ID) error {
 	for _, s := range channels {
 		b.startStickyGoroutine(s)
 	}
-	b.Log.Info("Loaded stickies", "guild_id", guildID, "count", len(channels))
+	b.Log.InfoContext(ctx, "Loaded stickies", "guild_id", guildID, "count", len(channels))
 	if b.readyGuilds[guildID] {
 		// Its GuildReady found nothing loaded to check. In a goroutine, so
 		// a command whose load this is isn't held up by the checks.
@@ -212,19 +212,19 @@ func (b *Bot) saveStickiesForGuild(ctx context.Context, guildID snowflake.ID) {
 	b.mu.Unlock()
 
 	if err != nil {
-		b.Log.Error("Failed to marshal stickies", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to marshal stickies", "guild_id", guildID, "error", err)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, saveTimeout)
 	defer cancel()
 	if err := b.S3.SaveStickies(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
-		b.Log.Error("Failed to save stickies", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save stickies", "guild_id", guildID, "error", err)
 		b.unsaved[guildID] = true
 		return
 	}
 	delete(b.unsaved, guildID)
-	b.Log.Info("Saved stickies", "guild_id", guildID, "count", len(toSave))
+	b.Log.InfoContext(ctx, "Saved stickies", "guild_id", guildID, "count", len(toSave))
 }
 
 // saveUnsavedStickies retries the saves that failed. Every change saves its
@@ -315,13 +315,13 @@ func (b *Bot) deleteFiles(ctx context.Context, keys []string) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	if err := b.S3.DeleteKeys(ctx, keys...); err != nil {
-		b.Log.Error("Failed to delete sticky files; will retry", "keys", keys, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to delete sticky files; will retry", "keys", keys, "error", err)
 		b.mu.Lock()
 		b.undeleted = append(b.undeleted, keys...)
 		b.mu.Unlock()
 		return
 	}
-	b.Log.Info("Deleted sticky files", "count", len(keys))
+	b.Log.InfoContext(ctx, "Deleted sticky files", "count", len(keys))
 }
 
 // retryFileDeletes retries the file deletions that failed.
@@ -379,7 +379,7 @@ func (b *Bot) repostSticky(ctx context.Context, s *stickyMessage) bool {
 		if err == nil {
 			for _, m := range msgs {
 				if m.ID == s.LastMessageID {
-					b.Log.Info("Repost skipped, sticky within buffer", "channel_id", s.ChannelID, "guild_id", s.GuildID, "buffer", s.Buffer)
+					b.Log.InfoContext(ctx, "Repost skipped, sticky within buffer", "channel_id", s.ChannelID, "guild_id", s.GuildID, "buffer", s.Buffer)
 					return true
 				}
 			}
@@ -389,7 +389,7 @@ func (b *Bot) repostSticky(ctx context.Context, s *stickyMessage) bool {
 	// Skip repost if only bot messages were posted after the sticky.
 	// This prevents repost loops when multiple bots are active in the same channel.
 	if s.LastMessageID != 0 && botutil.OnlyBotsAfter(ctx, b.Client.Rest, s.ChannelID, s.LastMessageID, b.Log) {
-		b.Log.Debug("Repost skipped, only bot messages after sticky", "channel_id", s.ChannelID, "guild_id", s.GuildID)
+		b.Log.DebugContext(ctx, "Repost skipped, only bot messages after sticky", "channel_id", s.ChannelID, "guild_id", s.GuildID)
 		return true
 	}
 
@@ -407,7 +407,7 @@ func (b *Bot) repostSticky(ctx context.Context, s *stickyMessage) bool {
 		return false
 	}
 	if err != nil {
-		b.Log.Error("Failed to repost sticky after retries", "channel_id", s.ChannelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to repost sticky after retries", "channel_id", s.ChannelID, "error", err)
 		return false
 	}
 

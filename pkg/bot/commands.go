@@ -643,7 +643,7 @@ func (b *Bot) registerAllCommands(ctx context.Context) error {
 		if _, err := b.Client.Rest.SetGuildCommands(b.Client.ApplicationID, guildID, commands, rest.WithCtx(ctx)); err != nil {
 			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
 		}
-		b.Log.Info("Registered guild commands", "guild_id", guildID, "count", len(commands))
+		b.Log.InfoContext(ctx, "Registered guild commands", "guild_id", guildID, "count", len(commands))
 	}
 	return nil
 }
@@ -812,7 +812,7 @@ func (b *Bot) handleModalSubmit(ctx context.Context, e *events.ModalSubmitIntera
 				return
 			}
 		}
-		b.Log.Error("Invalid mod log modal ID", "custom_id", customID)
+		b.Log.ErrorContext(ctx, "Invalid mod log modal ID", "custom_id", customID)
 	}
 
 	// A modal from an older build, or for something since removed.

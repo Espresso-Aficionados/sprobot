@@ -29,7 +29,7 @@ func RespondEphemeral(ctx context.Context, e MessageResponder, content string) {
 		Content: content,
 		Flags:   discord.MessageFlagEphemeral,
 	}, rest.WithCtx(ctx)); err != nil {
-		slog.Error("Failed to send ephemeral response", "error", err)
+		slog.ErrorContext(ctx, "Failed to send ephemeral response", "error", err)
 	}
 }
 
@@ -40,7 +40,7 @@ func FollowupEphemeral(ctx context.Context, client *bot.Client, token, content s
 		Content: content,
 		Flags:   discord.MessageFlagEphemeral,
 	}, rest.WithCtx(ctx)); err != nil {
-		slog.Error("Failed to send follow-up", "error", err)
+		slog.ErrorContext(ctx, "Failed to send follow-up", "error", err)
 	}
 }
 
@@ -66,7 +66,7 @@ func PostWithRetry(ctx context.Context, restClient rest.Rest, channelID snowflak
 		if err == nil {
 			return sent, nil
 		}
-		log.Warn("Repost attempt failed", "channel_id", channelID, "attempt", attempt+1, "error", err)
+		log.WarnContext(ctx, "Repost attempt failed", "channel_id", channelID, "attempt", attempt+1, "error", err)
 		if isClientError(err) {
 			break
 		}
@@ -101,7 +101,7 @@ func OnlyBotsAfter(ctx context.Context, restClient rest.Rest, channelID, lastMsg
 	// Fetch the 25 most recent messages (no after/before filter).
 	msgs, err := restClient.GetMessages(channelID, 0, 0, 0, 25, rest.WithCtx(ctx))
 	if err != nil {
-		log.Error("Failed to fetch messages for bot-loop check", "channel_id", channelID, "error", err)
+		log.ErrorContext(ctx, "Failed to fetch messages for bot-loop check", "channel_id", channelID, "error", err)
 		return false
 	}
 	// msgs are returned newest-first. Walk from newest until we find our
@@ -126,7 +126,7 @@ func RegisterGuildCommands(ctx context.Context, client *bot.Client, guildIDs []s
 		if _, err := client.Rest.SetGuildCommands(client.ApplicationID, guildID, commands, rest.WithCtx(ctx)); err != nil {
 			return fmt.Errorf("registering guild commands for %d: %w", guildID, err)
 		}
-		log.Info("Registered guild commands", "guild_id", guildID, "count", len(commands))
+		log.InfoContext(ctx, "Registered guild commands", "guild_id", guildID, "count", len(commands))
 	}
 	return nil
 }

@@ -38,7 +38,7 @@ func (b *BaseBot) RejectGuildNotAllowed(ctx context.Context, e GuildInteraction)
 	if guildID == nil || GuildAllowed(*guildID) {
 		return false
 	}
-	b.Log.Info("Rejecting interaction from guild that is not in botutil.AllowedGuildIDs", "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Rejecting interaction from guild that is not in botutil.AllowedGuildIDs", "guild_id", *guildID)
 	RespondEphemeral(ctx, e, "This bot isn't set up for this server.")
 	return true
 }

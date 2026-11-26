@@ -42,7 +42,7 @@ func (b *BaseBot) WaitForShutdown(name string) error {
 func (b *BaseBot) OpenGateway(ctx context.Context) error {
 	err := b.Client.OpenGateway(ctx)
 	if err != nil && gatewayCloseFatal(err, false) {
-		b.Log.Error("Gateway refused the connection", "error", err)
+		b.Log.ErrorContext(ctx, "Gateway refused the connection", "error", err)
 		b.holdBeforeExit(shutdownSignals())
 	}
 	return err

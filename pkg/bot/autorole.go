@@ -45,11 +45,11 @@ func (b *Bot) onMemberJoin(ctx context.Context, e *events.GuildMemberJoin) {
 		return
 	}
 	if reason := b.grantBlocked(e.GuildID, roleID); reason != "" {
-		b.Log.Error("Refusing to assign auto-role on join", "user_id", e.Member.User.ID, "guild_id", e.GuildID, "role_id", roleID, "reason", reason)
+		b.Log.ErrorContext(ctx, "Refusing to assign auto-role on join", "user_id", e.Member.User.ID, "guild_id", e.GuildID, "role_id", roleID, "reason", reason)
 		return
 	}
 	if err := b.Client.Rest.AddMemberRole(e.GuildID, e.Member.User.ID, roleID, rest.WithReason("Auto-role on member join"), rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to assign auto-role on join", "user_id", e.Member.User.ID, "guild_id", e.GuildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to assign auto-role on join", "user_id", e.Member.User.ID, "guild_id", e.GuildID, "error", err)
 	}
 }
 
@@ -85,7 +85,7 @@ func (b *Bot) ensureAutoRole(ctx context.Context, guildID snowflake.ID, msg disc
 	}
 	st.mu.Unlock()
 	if err != nil {
-		b.Log.Error("Failed to assign auto-role on message", "user_id", userID, "guild_id", guildID, "role_id", roleID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to assign auto-role on message", "user_id", userID, "guild_id", guildID, "role_id", roleID, "error", err)
 	}
 }
 
@@ -132,7 +132,7 @@ func (b *Bot) handleAutoRoleConfigSet(ctx context.Context, e *events.Application
 		return
 	}
 
-	b.Log.Info("Autorole config set", "user_id", e.User().ID, "guild_id", guildID, "role_id", role.ID)
+	b.Log.InfoContext(ctx, "Autorole config set", "user_id", e.User().ID, "guild_id", guildID, "role_id", role.ID)
 
 	if reason := b.checkGrantableRole(ctx, e, guildID, role); reason != "" {
 		botutil.RespondEphemeral(ctx, e, reason)
@@ -145,7 +145,7 @@ func (b *Bot) handleAutoRoleConfigSet(ctx context.Context, e *events.Application
 	st.mu.Unlock()
 
 	if err := b.autoRole.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist autorole config", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist autorole config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
@@ -154,7 +154,7 @@ func (b *Bot) handleAutoRoleConfigSet(ctx context.Context, e *events.Application
 }
 
 func (b *Bot) handleAutoRoleConfigShow(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *autoRoleState) {
-	b.Log.Info("Autorole config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
+	b.Log.InfoContext(ctx, "Autorole config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
 	roleID := st.RoleID
@@ -168,14 +168,14 @@ func (b *Bot) handleAutoRoleConfigShow(ctx context.Context, e *events.Applicatio
 }
 
 func (b *Bot) handleAutoRoleConfigClear(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *autoRoleState) {
-	b.Log.Info("Autorole config clear", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Autorole config clear", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
 	st.RoleID = 0
 	st.mu.Unlock()
 
 	if err := b.autoRole.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist autorole config", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist autorole config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}

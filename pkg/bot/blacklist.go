@@ -52,7 +52,7 @@ func (b *Bot) handleBlacklistAdd(ctx context.Context, e *events.ApplicationComma
 		return
 	}
 
-	b.Log.Info(prefix+" blacklist add", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
+	b.Log.InfoContext(ctx, prefix+" blacklist add", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
 
 	bl.lock()
 	if containsAny(bl.getBlacklist(), ch.ID) {
@@ -64,7 +64,7 @@ func (b *Bot) handleBlacklistAdd(ctx context.Context, e *events.ApplicationComma
 	bl.unlock()
 
 	if err := persist(); err != nil {
-		b.Log.Error("Failed to persist "+prefix+" blacklist", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist "+prefix+" blacklist", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save blacklist.")
 		return
 	}
@@ -80,7 +80,7 @@ func (b *Bot) handleBlacklistRemove(ctx context.Context, e *events.ApplicationCo
 		return
 	}
 
-	b.Log.Info(prefix+" blacklist remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
+	b.Log.InfoContext(ctx, prefix+" blacklist remove", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
 
 	bl.lock()
 	list, found := withoutID(bl.getBlacklist(), ch.ID)
@@ -95,7 +95,7 @@ func (b *Bot) handleBlacklistRemove(ctx context.Context, e *events.ApplicationCo
 	}
 
 	if err := persist(); err != nil {
-		b.Log.Error("Failed to persist "+prefix+" blacklist", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist "+prefix+" blacklist", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save blacklist.")
 		return
 	}
@@ -104,7 +104,7 @@ func (b *Bot) handleBlacklistRemove(ctx context.Context, e *events.ApplicationCo
 }
 
 func (b *Bot) handleBlacklistList(ctx context.Context, e *events.ApplicationCommandInteractionCreate, bl blacklistable, prefix string) {
-	b.Log.Info(prefix+" blacklist list", "user_id", e.User().ID, "guild_id", *e.GuildID())
+	b.Log.InfoContext(ctx, prefix+" blacklist list", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	bl.lock()
 	list := make([]snowflake.ID, len(bl.getBlacklist()))
@@ -124,7 +124,7 @@ func (b *Bot) handleBlacklistList(ctx context.Context, e *events.ApplicationComm
 }
 
 func (b *Bot) handleBlacklistClear(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, bl blacklistable, persist func() error, prefix string) {
-	b.Log.Info(prefix+" blacklist clear", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, prefix+" blacklist clear", "user_id", e.User().ID, "guild_id", guildID)
 
 	bl.lock()
 	count := len(bl.getBlacklist())
@@ -137,7 +137,7 @@ func (b *Bot) handleBlacklistClear(ctx context.Context, e *events.ApplicationCom
 	}
 
 	if err := persist(); err != nil {
-		b.Log.Error("Failed to persist "+prefix+" blacklist", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist "+prefix+" blacklist", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save blacklist.")
 		return
 	}

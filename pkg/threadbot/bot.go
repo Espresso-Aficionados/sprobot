@@ -100,7 +100,7 @@ func (b *Bot) Run() error {
 	start, startSpan := botutil.StartSpan("startup")
 	defer startSpan.End() // on a failed start; a second End does nothing
 
-	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
+	b.Log.InfoContext(start, fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
 
 	// State loads before the gateway opens, so no event or command runs
 	// against a guild whose stored state isn't in place yet. Nothing has

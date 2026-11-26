@@ -247,7 +247,7 @@ func (b *Bot) handleEnable(ctx context.Context, e *events.ApplicationCommandInte
 	}
 
 	if errMsg := validateReminderParams(minIdle, maxIdle, msgThreshold, timeThreshold, buffer); errMsg != "" {
-		b.Log.Info("Enable rejected", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "reason", errMsg)
+		b.Log.InfoContext(ctx, "Enable rejected", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "reason", errMsg)
 		botutil.RespondEphemeral(ctx, e, errMsg)
 		return
 	}
@@ -294,7 +294,7 @@ func (b *Bot) handleEnable(ctx context.Context, e *events.ApplicationCommandInte
 	}
 	b.saveRemindersForGuild(ctx, guildID)
 
-	b.Log.Info("Reminder enabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", msgThreshold, "time_threshold", timeThreshold, "buffer", buffer)
+	b.Log.InfoContext(ctx, "Reminder enabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", msgThreshold, "time_threshold", timeThreshold, "buffer", buffer)
 }
 
 // remindersLoaded makes sure the guild's stored reminders have loaded before
@@ -312,12 +312,12 @@ func (b *Bot) remindersLoaded(ctx context.Context, e *events.ApplicationCommandI
 	}
 
 	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer reminder command", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer reminder command", "error", err)
 		return nil, false
 	}
 	reply := func(content string) { botutil.FollowupEphemeral(ctx, b.Client, e.Token(), content) }
 	if err := b.ensureRemindersLoaded(ctx, guildID); err != nil {
-		b.Log.Error("Failed to load thread reminders", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to load thread reminders", "guild_id", guildID, "error", err)
 		reply("Couldn't load this server's thread reminders, so they can't be shown or changed right now. Please try again in a minute.")
 		return nil, false
 	}
@@ -337,7 +337,7 @@ func (b *Bot) handleDisable(ctx context.Context, e *events.ApplicationCommandInt
 	delete(b.reminders[guildID], channelID)
 	b.mu.Unlock()
 	if !ok {
-		b.Log.Info("Disable: no reminder found", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
+		b.Log.InfoContext(ctx, "Disable: no reminder found", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 		reply("No thread reminder in this channel.")
 		return
 	}
@@ -351,17 +351,17 @@ func (b *Bot) handleDisable(ctx context.Context, e *events.ApplicationCommandInt
 		_ = b.Client.Rest.DeleteMessage(channelID, r.LastMessageID, rest.WithCtx(ctx))
 	}
 	b.saveRemindersForGuild(ctx, guildID)
-	b.Log.Info("Reminder disabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
+	b.Log.InfoContext(ctx, "Reminder disabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 }
 
 func (b *Bot) handleThreads(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
-	b.Log.Info("Listing threads", "user_id", e.User().ID, "guild_id", *e.GuildID(), "channel_id", e.Channel().ID())
+	b.Log.InfoContext(ctx, "Listing threads", "user_id", e.User().ID, "guild_id", *e.GuildID(), "channel_id", e.Channel().ID())
 	b.respondThreads(ctx, e, e.Channel().ID(), true)
 }
 
 func (b *Bot) handleFetchAll(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	public, _ := e.Data.(discord.SlashCommandInteractionData).OptBool(optPublic)
-	b.Log.Info("Fetching all threads", "user_id", e.User().ID, "guild_id", *e.GuildID(), "public", public)
+	b.Log.InfoContext(ctx, "Fetching all threads", "user_id", e.User().ID, "guild_id", *e.GuildID(), "public", public)
 	b.respondThreads(ctx, e, 0, !public)
 }
 
@@ -370,7 +370,7 @@ func (b *Bot) handleFetchAll(ctx context.Context, e *events.ApplicationCommandIn
 func (b *Bot) respondThreads(ctx context.Context, e *events.ApplicationCommandInteractionCreate, channelID snowflake.ID, ephemeral bool) {
 	// Defer since fetching threads + member counts may exceed the 3s deadline.
 	if err := e.DeferCreateMessage(ephemeral, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer thread list response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer thread list response", "error", err)
 		return
 	}
 
@@ -378,7 +378,7 @@ func (b *Bot) respondThreads(ctx context.Context, e *events.ApplicationCommandIn
 	embed, err := b.buildThreadsEmbed(ctx, *e.GuildID(), channelID)
 	switch {
 	case err != nil:
-		b.Log.Error("Failed to build thread list", "guild_id", *e.GuildID(), "channel_id", channelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to build thread list", "guild_id", *e.GuildID(), "channel_id", channelID, "error", err)
 		msg.Content = "Couldn't fetch the active threads. Please try again in a minute."
 	case embed != nil:
 		msg.Embeds = []discord.Embed{*embed}
@@ -391,7 +391,7 @@ func (b *Bot) respondThreads(ctx context.Context, e *events.ApplicationCommandIn
 		msg.Flags = discord.MessageFlagEphemeral
 	}
 	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to send thread list", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to send thread list", "error", err)
 	}
 }
 
@@ -406,7 +406,7 @@ func (b *Bot) handleList(ctx context.Context, e *events.ApplicationCommandIntera
 	channels := b.reminders[guildID]
 	if len(channels) == 0 {
 		b.mu.Unlock()
-		b.Log.Info("List reminders: none found", "user_id", e.User().ID, "guild_id", guildID)
+		b.Log.InfoContext(ctx, "List reminders: none found", "user_id", e.User().ID, "guild_id", guildID)
 		reply("No thread reminders in this server.")
 		return
 	}
@@ -425,17 +425,17 @@ func (b *Bot) handleList(ctx context.Context, e *events.ApplicationCommandIntera
 	}
 	b.mu.Unlock()
 
-	b.Log.Info("List reminders", "user_id", e.User().ID, "guild_id", guildID, "count", len(lines))
+	b.Log.InfoContext(ctx, "List reminders", "user_id", e.User().ID, "guild_id", guildID, "count", len(lines))
 	reply(strings.Join(lines, "\n"))
 }
 
 func (b *Bot) handleRefreshCounts(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {
 	guildID := *e.GuildID()
 	if err := b.resetMemberCounts(ctx, guildID, func() {
-		b.Log.Info("Member count cache cleared", "user_id", e.User().ID, "guild_id", guildID)
+		b.Log.InfoContext(ctx, "Member count cache cleared", "user_id", e.User().ID, "guild_id", guildID)
 		botutil.RespondEphemeral(ctx, e, "Thread member count cache cleared. Counts will refresh on the next reminder post or `/threads` command.")
 	}); err != nil {
-		b.Log.Error("Refusing to clear thread member counts a newer build wrote", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Refusing to clear thread member counts a newer build wrote", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "These member counts were saved by a newer version of the bot, so this one leaves them alone.")
 	}
 }

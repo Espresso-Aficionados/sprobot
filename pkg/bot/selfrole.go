@@ -117,7 +117,7 @@ func (b *Bot) ensureSelfrolePanels(ctx context.Context) {
 				var err error
 				messages, err = b.Client.Rest.GetMessages(cfg.ChannelID, 0, 0, 0, 25, rest.WithCtx(ctx))
 				if err != nil {
-					b.Log.Error("Failed to fetch messages for selfrole panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
+					b.Log.ErrorContext(ctx, "Failed to fetch messages for selfrole panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
 					unreadable[cfg.ChannelID] = true
 					continue
 				}
@@ -140,10 +140,10 @@ func (b *Bot) ensureSelfrolePanel(ctx context.Context, guildID snowflake.ID, cfg
 		}
 		if len(msg.Embeds) == 1 && msg.Embeds[0].Description == embed.Description {
 			if !selfrolePanelNeedsUpdate(msg, cfg) {
-				b.Log.Info("Selfrole panel already exists", "guild_id", guildID, "channel_id", cfg.ChannelID)
+				b.Log.InfoContext(ctx, "Selfrole panel already exists", "guild_id", guildID, "channel_id", cfg.ChannelID)
 				return
 			}
-			b.Log.Info("Selfrole panel outdated, updating", "guild_id", guildID, "channel_id", cfg.ChannelID)
+			b.Log.InfoContext(ctx, "Selfrole panel outdated, updating", "guild_id", guildID, "channel_id", cfg.ChannelID)
 			content := ""
 			embeds := []discord.Embed{embed}
 			_, err := b.Client.Rest.UpdateMessage(cfg.ChannelID, msg.ID, discord.MessageUpdate{
@@ -152,7 +152,7 @@ func (b *Bot) ensureSelfrolePanel(ctx context.Context, guildID snowflake.ID, cfg
 				Components: &components,
 			}, rest.WithCtx(ctx))
 			if err != nil {
-				b.Log.Error("Failed to update selfrole panel", "guild_id", guildID, "error", err)
+				b.Log.ErrorContext(ctx, "Failed to update selfrole panel", "guild_id", guildID, "error", err)
 			}
 			return
 		}
@@ -163,9 +163,9 @@ func (b *Bot) ensureSelfrolePanel(ctx context.Context, guildID snowflake.ID, cfg
 		Components: components,
 	}, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to post selfrole panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to post selfrole panel", "guild_id", guildID, "channel_id", cfg.ChannelID, "error", err)
 	} else {
-		b.Log.Info("Posted selfrole panel", "guild_id", guildID, "channel_id", cfg.ChannelID)
+		b.Log.InfoContext(ctx, "Posted selfrole panel", "guild_id", guildID, "channel_id", cfg.ChannelID)
 	}
 }
 
@@ -255,26 +255,26 @@ func (b *Bot) handleSelfroleToggle(ctx context.Context, e *events.ComponentInter
 	// Answer before the role change: a slow REST call would otherwise fail
 	// the interaction, and the user's retry would toggle the role back.
 	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer selfrole toggle", "user_id", e.User().ID, "role_id", roleID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer selfrole toggle", "user_id", e.User().ID, "role_id", roleID, "error", err)
 		return
 	}
 	respond := func(content string) { botutil.FollowupEphemeral(ctx, b.Client, e.Token(), content) }
 
 	if hasRole {
 		if err := b.Client.Rest.RemoveMemberRole(*guildID, e.User().ID, roleID, rest.WithReason(fmt.Sprintf("Self-role removal %s", link)), rest.WithCtx(ctx)); err != nil {
-			b.Log.Error("Failed to remove selfrole", "user_id", e.User().ID, "role_id", roleID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to remove selfrole", "user_id", e.User().ID, "role_id", roleID, "error", err)
 			respond("Something went wrong, please try again.")
 			return
 		}
-		b.Log.Info("Selfrole removed", "user_id", e.User().ID, "guild_id", *guildID, "role_id", roleID, "label", label)
+		b.Log.InfoContext(ctx, "Selfrole removed", "user_id", e.User().ID, "guild_id", *guildID, "role_id", roleID, "label", label)
 		respond(fmt.Sprintf("Removed **%s**", label))
 	} else {
 		if err := b.Client.Rest.AddMemberRole(*guildID, e.User().ID, roleID, rest.WithReason(fmt.Sprintf("Self-role assignment %s", link)), rest.WithCtx(ctx)); err != nil {
-			b.Log.Error("Failed to add selfrole", "user_id", e.User().ID, "role_id", roleID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to add selfrole", "user_id", e.User().ID, "role_id", roleID, "error", err)
 			respond("Something went wrong, please try again.")
 			return
 		}
-		b.Log.Info("Selfrole added", "user_id", e.User().ID, "guild_id", *guildID, "role_id", roleID, "label", label)
+		b.Log.InfoContext(ctx, "Selfrole added", "user_id", e.User().ID, "guild_id", *guildID, "role_id", roleID, "label", label)
 		respond(fmt.Sprintf("Added **%s**", label))
 	}
 }

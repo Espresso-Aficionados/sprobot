@@ -55,7 +55,7 @@ func (b *Bot) postEventLog(ctx context.Context, guildID snowflake.ID, embed disc
 	if _, err := b.Client.Rest.CreateMessage(channelID, discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to post event log", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to post event log", "guild_id", guildID, "error", err)
 	}
 }
 
@@ -439,7 +439,7 @@ func (b *Bot) handleMemberRoleUpdateEntry(ctx context.Context, guildID snowflake
 			continue
 		}
 		if err := decodeAuditValue(change.NewValue, dst); err != nil {
-			b.Log.Error("Failed to decode audit log role change", "guild_id", guildID, "key", change.Key, "target_id", *entry.TargetID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to decode audit log role change", "guild_id", guildID, "key", change.Key, "target_id", *entry.TargetID, "error", err)
 			unreadable = true
 		}
 	}
@@ -864,7 +864,7 @@ func (b *Bot) handleChannelOverwriteEntry(ctx context.Context, guildID snowflake
 	decode := func(change discord.AuditLogChange, oldDst, newDst *discord.Permissions) {
 		for _, err := range []error{decodeAuditValue(change.OldValue, oldDst), decodeAuditValue(change.NewValue, newDst)} {
 			if err != nil {
-				b.Log.Error("Failed to decode audit log permission change", "guild_id", guildID, "channel_id", channelID, "key", change.Key, "error", err)
+				b.Log.ErrorContext(ctx, "Failed to decode audit log permission change", "guild_id", guildID, "channel_id", channelID, "key", change.Key, "error", err)
 				unreadable = true
 			}
 		}
@@ -997,7 +997,7 @@ func (b *Bot) crossPostToModLog(ctx context.Context, guildID snowflake.ID, user 
 		if _, _, err := b.postToModLogThread(ctx, channelID, user, discord.MessageCreate{
 			Embeds: []discord.Embed{embed},
 		}); err != nil {
-			b.Log.Error("Failed to cross-post to mod log thread", "guild_id", guildID, "user_id", user.ID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to cross-post to mod log thread", "guild_id", guildID, "user_id", user.ID, "error", err)
 		}
 	}(context.WithoutCancel(ctx))
 }
@@ -1684,14 +1684,14 @@ func (b *Bot) handleEventLogConfigSet(ctx context.Context, e *events.Application
 		return
 	}
 
-	b.Log.Info("Eventlog config set", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
+	b.Log.InfoContext(ctx, "Eventlog config set", "user_id", e.User().ID, "guild_id", guildID, "channel_id", ch.ID)
 
 	st.mu.Lock()
 	st.ChannelID = ch.ID
 	st.mu.Unlock()
 
 	if err := b.eventLog.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist eventlog config", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist eventlog config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
@@ -1700,7 +1700,7 @@ func (b *Bot) handleEventLogConfigSet(ctx context.Context, e *events.Application
 }
 
 func (b *Bot) handleEventLogConfigShow(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *eventLogState) {
-	b.Log.Info("Eventlog config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
+	b.Log.InfoContext(ctx, "Eventlog config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
 	channelID := st.ChannelID
@@ -1714,14 +1714,14 @@ func (b *Bot) handleEventLogConfigShow(ctx context.Context, e *events.Applicatio
 }
 
 func (b *Bot) handleEventLogConfigClear(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *eventLogState) {
-	b.Log.Info("Eventlog config clear", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Eventlog config clear", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
 	st.ChannelID = 0
 	st.mu.Unlock()
 
 	if err := b.eventLog.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist eventlog config", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist eventlog config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
