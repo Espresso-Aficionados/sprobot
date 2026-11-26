@@ -1,0 +1,5 @@
+# The binary files this repository means to keep: sadbox/ci's lint
+# (binaries) fails on any other, and on one of these over 5 MiB. Declare a
+# new one here, by the narrowest pattern, in the PR that adds it.
+cmd/sprobot-web/static/*.png binary
+docs/intent-evidence/*.png binary
