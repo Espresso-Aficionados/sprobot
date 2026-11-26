@@ -268,7 +268,7 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
     `componentNames`/`modalNames` in `pkg/bot/telemetry.go`; a new route's
     prefix goes there, else it is `other`). Gateway events are counted by
     disgo type (`botutil.CountEvents`).
-  - **Feature counts** (profiles, starboard, tickets, stickies, reminders)
+  - **Feature counts** (profiles, members, starboard, tickets, stickies, reminders)
     are listed in each bot's `telemetry.go`: counters are a
     `botutil.Counter` (observable, its fixed series seeded so they read 0
     from the first export), gauges are read from state at export

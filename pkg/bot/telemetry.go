@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/sadbox/svc/telemetry"
 	"go.opentelemetry.io/otel"
@@ -30,6 +31,9 @@ import (
 //	    configured shortcut, the first 50 names a process sees, the rest
 //	    "other"; a removed shortcut's series lasts until restart
 //	sprobot_temp_roles   temp-role timers running
+//	sprobot_members   server members: the cached guilds' member_count, which
+//	    disgo keeps current from member add and remove events (Server
+//	    Members; docs/privileged-intents/sprobot.md)
 //
 // outcome is success or failure. The gauges are read from state at export,
 // summed over the guilds this instance serves, and left out while one of
@@ -180,6 +184,12 @@ func (b *Bot) registerStats() (metric.Registration, error) {
 	if err != nil {
 		return nil, err
 	}
+	members, err := m.Int64ObservableGauge("sprobot.members",
+		metric.WithUnit("{member}"),
+		metric.WithDescription("Server members, over the served guilds."))
+	if err != nil {
+		return nil, err
+	}
 	return m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		served := b.servedGuilds()
 		if counts, ok := b.profileNames.counts(served, b.templates); ok {
@@ -207,8 +217,27 @@ func (b *Bot) registerStats() (metric.Registration, error) {
 			}
 			o.ObserveInt64(tempRoles, int64(n))
 		}
+		if n, ok := memberCount(b.guildCache, served); ok {
+			o.ObserveInt64(members, int64(n))
+		}
 		return nil
-	}, profiles, starboard, tempRoles)
+	}, profiles, starboard, tempRoles, members)
+}
+
+// memberCount sums the member counts of guildIDs from the guild cache. ok
+// is false without a guild, or while one isn't cached.
+func memberCount(guilds *cappedCache[discord.CacheGuild], guildIDs []snowflake.ID) (n int, ok bool) {
+	if len(guildIDs) == 0 {
+		return 0, false
+	}
+	for _, id := range guildIDs {
+		g, cached := guilds.Get(id)
+		if !cached {
+			return 0, false
+		}
+		n += g.MemberCount
+	}
+	return n, true
 }
 
 // componentNames and modalNames are the custom-ID prefixes interactions are

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
@@ -100,6 +101,7 @@ func TestStatsGauges(t *testing.T) {
 	rec := telemetrytest.Install(t)
 	b, fake := newProfileNamesBot(t)
 	b.initStateStores()
+	b.guildCache = newCappedCache[discord.CacheGuild](10)
 	b.TestGuildIDsOverride = []snowflake.ID{1}
 	reg, err := b.registerStats()
 	if err != nil {
@@ -140,6 +142,31 @@ func TestStatsGauges(t *testing.T) {
 	if got := statPoints(t, rec, "sprobot.temp_roles", ""); got[""] != 2 {
 		t.Errorf("temp roles = %v, want 2", got)
 	}
+
+	if got := statPoints(t, rec, "sprobot.members", ""); len(got) != 0 {
+		t.Errorf("members before the guild is cached = %v, want none", got)
+	}
+	b.guildCache.Put(1, discord.CacheGuild{Guild: discord.Guild{ID: 1}, MemberCount: 1234})
+	b.guildCache.Put(2, discord.CacheGuild{Guild: discord.Guild{ID: 2}, MemberCount: 5}) // not served
+	if got := statPoints(t, rec, "sprobot.members", ""); got[""] != 1234 {
+		t.Errorf("members = %v, want 1234", got)
+	}
+}
+
+// The member count needs every guild cached, and a guild at all.
+func TestMemberCount(t *testing.T) {
+	guilds := newCappedCache[discord.CacheGuild](10)
+	guilds.Put(1, discord.CacheGuild{MemberCount: 100})
+	guilds.Put(2, discord.CacheGuild{MemberCount: 20})
+	if n, ok := memberCount(guilds, []snowflake.ID{1, 2}); !ok || n != 120 {
+		t.Errorf("memberCount = %d, %v; want 120, true", n, ok)
+	}
+	if _, ok := memberCount(guilds, []snowflake.ID{1, 3}); ok {
+		t.Error("counted with a guild missing from the cache")
+	}
+	if _, ok := memberCount(guilds, nil); ok {
+		t.Error("counted without a guild")
+	}
 }
 
 // A gauge over a store is left out while a served guild's state failed to
@@ -148,6 +175,7 @@ func TestStatsGaugesSkipUnloaded(t *testing.T) {
 	rec := telemetrytest.Install(t)
 	b, _ := newProfileNamesBot(t)
 	b.initStateStores()
+	b.guildCache = newCappedCache[discord.CacheGuild](10)
 	b.TestGuildIDsOverride = []snowflake.ID{1}
 	b.tempRoles.failed[1] = true
 	reg, err := b.registerStats()
