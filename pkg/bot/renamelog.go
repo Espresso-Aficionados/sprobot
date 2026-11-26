@@ -37,7 +37,7 @@ func (b *Bot) postRenameLog(ctx context.Context, guildID snowflake.ID, embed dis
 	if _, err := b.Client.Rest.CreateMessage(dest, discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to post rename log", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to post rename log", "guild_id", guildID, "error", err)
 	}
 }
 
@@ -158,7 +158,7 @@ func (b *Bot) handleRenameLogSet(ctx context.Context, e *events.ApplicationComma
 		return
 	}
 
-	b.Log.Info("Rename log set destination", "user_id", e.User().ID, "guild_id", *guildID, "channel_id", ch.ID)
+	b.Log.InfoContext(ctx, "Rename log set destination", "user_id", e.User().ID, "guild_id", *guildID, "channel_id", ch.ID)
 
 	st := b.renameLogs.get(*guildID)
 	if st == nil {
@@ -171,7 +171,7 @@ func (b *Bot) handleRenameLogSet(ctx context.Context, e *events.ApplicationComma
 	st.mu.Unlock()
 
 	if err := b.renameLogs.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save rename log data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save rename log data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save rename log config.")
 		return
 	}
@@ -192,7 +192,7 @@ func (b *Bot) handleRenameLogAdd(ctx context.Context, e *events.ApplicationComma
 		return
 	}
 
-	b.Log.Info("Rename log add channel", "user_id", e.User().ID, "guild_id", *guildID, "channel_id", ch.ID)
+	b.Log.InfoContext(ctx, "Rename log add channel", "user_id", e.User().ID, "guild_id", *guildID, "channel_id", ch.ID)
 
 	st := b.renameLogs.get(*guildID)
 	if st == nil {
@@ -212,7 +212,7 @@ func (b *Bot) handleRenameLogAdd(ctx context.Context, e *events.ApplicationComma
 	st.mu.Unlock()
 
 	if err := b.renameLogs.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save rename log data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save rename log data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save rename log config.")
 		return
 	}
@@ -233,7 +233,7 @@ func (b *Bot) handleRenameLogRemove(ctx context.Context, e *events.ApplicationCo
 		return
 	}
 
-	b.Log.Info("Rename log remove channel", "user_id", e.User().ID, "guild_id", *guildID, "channel_id", ch.ID)
+	b.Log.InfoContext(ctx, "Rename log remove channel", "user_id", e.User().ID, "guild_id", *guildID, "channel_id", ch.ID)
 
 	st := b.renameLogs.get(*guildID)
 	if st == nil {
@@ -258,7 +258,7 @@ func (b *Bot) handleRenameLogRemove(ctx context.Context, e *events.ApplicationCo
 	}
 
 	if err := b.renameLogs.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save rename log data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save rename log data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save rename log config.")
 		return
 	}
@@ -272,7 +272,7 @@ func (b *Bot) handleRenameLogList(ctx context.Context, e *events.ApplicationComm
 		return
 	}
 
-	b.Log.Info("Rename log list", "user_id", e.User().ID, "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Rename log list", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.renameLogs.get(*guildID)
 	if st == nil {
@@ -311,7 +311,7 @@ func (b *Bot) handleRenameLogClear(ctx context.Context, e *events.ApplicationCom
 		return
 	}
 
-	b.Log.Info("Rename log clear", "user_id", e.User().ID, "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Rename log clear", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.renameLogs.get(*guildID)
 	if st == nil {
@@ -325,7 +325,7 @@ func (b *Bot) handleRenameLogClear(ctx context.Context, e *events.ApplicationCom
 	st.mu.Unlock()
 
 	if err := b.renameLogs.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save rename log data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save rename log data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to clear rename log config.")
 		return
 	}

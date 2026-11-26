@@ -122,7 +122,7 @@ func (b *Bot) handleShortcut(ctx context.Context, e *events.ApplicationCommandIn
 		return
 	}
 
-	b.Log.Info("Shortcut used", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
+	b.Log.InfoContext(ctx, "Shortcut used", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
 
 	response = expandShortcutVars(response, e.User().ID)
 
@@ -273,7 +273,7 @@ func (b *Bot) handleShortcutConfigSet(ctx context.Context, e *events.Application
 		return
 	}
 
-	b.Log.Info("Shortcut config set", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
+	b.Log.InfoContext(ctx, "Shortcut config set", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
 
 	// Pre-fill with existing responses if the shortcut already exists
 	var prefills [shortcutResponseSlots]string
@@ -311,7 +311,7 @@ func (b *Bot) handleShortcutConfigSet(ctx context.Context, e *events.Application
 		Components: components,
 	}, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to respond with shortcut config modal", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to respond with shortcut config modal", "error", err)
 	}
 }
 
@@ -337,7 +337,7 @@ func (b *Bot) handleShortcutConfigSetModal(ctx context.Context, e *events.ModalS
 
 	// Defer: re-hosting images below can outlast the 3-second response window.
 	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer shortcut config response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer shortcut config response", "error", err)
 		return
 	}
 	respond := func(content string) { b.ephemeralFollowup(ctx, e.Token(), content) }
@@ -372,7 +372,7 @@ func (b *Bot) handleShortcutConfigSetModal(ctx context.Context, e *events.ModalS
 			}
 			copied, err := b.S3.CopyShortcutFile(workCtx, guildStr, key)
 			if err != nil {
-				b.Log.Error("Failed to copy saved file for shortcut", "error", err)
+				b.Log.ErrorContext(workCtx, "Failed to copy saved file for shortcut", "error", err)
 				continue // keep original URL
 			}
 			responses[i] = copied
@@ -384,11 +384,11 @@ func (b *Bot) handleShortcutConfigSetModal(ctx context.Context, e *events.ModalS
 			if u, perr := url.Parse(strings.TrimSpace(resp)); perr == nil {
 				host = u.Hostname()
 			}
-			b.Log.Warn("Shortcut response isn't an image, kept as a link", "guild_id", guildStr, "host", host, "error", err)
+			b.Log.WarnContext(workCtx, "Shortcut response isn't an image, kept as a link", "guild_id", guildStr, "host", host, "error", err)
 			continue
 		}
 		if err != nil {
-			b.Log.Error("Failed to re-host shortcut image", "error", err)
+			b.Log.ErrorContext(workCtx, "Failed to re-host shortcut image", "error", err)
 			continue // keep original URL
 		}
 		responses[i] = s3URL
@@ -410,13 +410,13 @@ func (b *Bot) handleShortcutConfigSetModal(ctx context.Context, e *events.ModalS
 	}
 
 	if err := b.shortcuts.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save shortcut data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(workCtx, "Failed to save shortcut data", "guild_id", *guildID, "error", err)
 		respond("Failed to save shortcut.")
 		return
 	}
 	b.deleteUnusedShortcutFiles(workCtx, guildStr, replaced, remaining)
 
-	b.Log.Info("Shortcut saved", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name, "responses", len(responses))
+	b.Log.InfoContext(workCtx, "Shortcut saved", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name, "responses", len(responses))
 
 	respond(fmt.Sprintf("Shortcut %q saved with %d response(s).", name, len(responses)))
 }
@@ -477,10 +477,10 @@ func (b *Bot) deleteUnusedShortcutFiles(ctx context.Context, guildID string, old
 		return
 	}
 	if err := b.S3.DeleteKeys(ctx, keys...); err != nil {
-		b.Log.Error("Failed to delete unused shortcut files", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to delete unused shortcut files", "guild_id", guildID, "error", err)
 		return
 	}
-	b.Log.Info("Deleted unused shortcut files", "guild_id", guildID, "count", len(keys))
+	b.Log.InfoContext(ctx, "Deleted unused shortcut files", "guild_id", guildID, "count", len(keys))
 }
 
 // ephemeralFollowup answers a deferred interaction.
@@ -505,7 +505,7 @@ func (b *Bot) handleShortcutConfigRemove(ctx context.Context, e *events.Applicat
 		return
 	}
 
-	b.Log.Info("Shortcut config remove", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
+	b.Log.InfoContext(ctx, "Shortcut config remove", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
 
 	st := b.shortcuts.get(*guildID)
 	if st == nil {
@@ -523,7 +523,7 @@ func (b *Bot) handleShortcutConfigRemove(ctx context.Context, e *events.Applicat
 	}
 
 	if err := b.shortcuts.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save shortcut data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save shortcut data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save shortcut.")
 		return
 	}
@@ -541,7 +541,7 @@ func (b *Bot) handleShortcutConfigList(ctx context.Context, e *events.Applicatio
 		return
 	}
 
-	b.Log.Info("Shortcut config list", "user_id", e.User().ID, "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Shortcut config list", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.shortcuts.get(*guildID)
 	if st == nil {

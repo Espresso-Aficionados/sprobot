@@ -17,7 +17,7 @@ import (
 )
 
 func (b *Bot) handleGet(ctx context.Context, e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
-	b.Log.Info("Processing getprofile",
+	b.Log.InfoContext(ctx, "Processing getprofile",
 		"user_id", userIDStr(e),
 		"template", tmpl.Name,
 		"guild_id", guildIDStr(e),
@@ -25,7 +25,7 @@ func (b *Bot) handleGet(ctx context.Context, e *events.ApplicationCommandInterac
 
 	// Defer since FetchProfile may exceed the 3s deadline.
 	if err := e.DeferCreateMessage(false, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer getprofile response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer getprofile response", "error", err)
 		return
 	}
 
@@ -46,7 +46,7 @@ func (b *Bot) handleGet(ctx context.Context, e *events.ApplicationCommandInterac
 }
 
 func (b *Bot) handleGetMenu(ctx context.Context, e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
-	b.Log.Info("Processing getprofile menu",
+	b.Log.InfoContext(ctx, "Processing getprofile menu",
 		"user_id", userIDStr(e),
 		"template", tmpl.Name,
 		"guild_id", guildIDStr(e),
@@ -76,7 +76,7 @@ func (b *Bot) handleGetMenu(ctx context.Context, e *events.ApplicationCommandInt
 
 	// Defer since GetMember + FetchProfile may exceed the 3s deadline.
 	if err := e.DeferCreateMessage(false, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer getmenu response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer getmenu response", "error", err)
 		return
 	}
 
@@ -103,7 +103,7 @@ func (b *Bot) sendProfile(ctx context.Context, e *events.ApplicationCommandInter
 		var msg string
 		switch {
 		case !errors.Is(err, s3client.ErrNotFound):
-			b.Log.Error("Failed to fetch profile", "error", err)
+			b.Log.ErrorContext(fetchCtx, "Failed to fetch profile", "error", err)
 			msg = "Oops! Something went wrong."
 		case targetID == e.User().ID:
 			msg = fmt.Sprintf("Whoops! Unable to find a profile for you. To set one up run /edit%s", tmpl.ShortName)
@@ -118,7 +118,7 @@ func (b *Bot) sendProfile(ctx context.Context, e *events.ApplicationCommandInter
 	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
 	}, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to send profile embed", "error", err)
+		b.Log.ErrorContext(fetchCtx, "Failed to send profile embed", "error", err)
 	}
 }
 
@@ -128,7 +128,7 @@ func (b *Bot) sendProfile(ctx context.Context, e *events.ApplicationCommandInter
 // is deleted first.
 func (b *Bot) followupPrivately(ctx context.Context, token, content string) {
 	if err := b.Client.Rest.DeleteInteractionResponse(b.Client.ApplicationID, token, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to delete deferred response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to delete deferred response", "error", err)
 	}
 	botutil.FollowupEphemeral(ctx, b.Client, token, content)
 }

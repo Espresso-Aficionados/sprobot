@@ -17,7 +17,7 @@ import (
 )
 
 func (b *Bot) handleDelete(ctx context.Context, e *events.ApplicationCommandInteractionCreate, tmpl sprobot.Template) {
-	b.Log.Info("Processing delete",
+	b.Log.InfoContext(ctx, "Processing delete",
 		"user_id", userIDStr(e),
 		"template", tmpl.Name,
 		"guild_id", guildIDStr(e),
@@ -154,12 +154,12 @@ func (b *Bot) confirmDeleteProfile(ctx context.Context, e *events.ComponentInter
 
 	err := b.S3.DeleteProfile(ctx, tmpl, guildStr, userStr)
 	if err != nil {
-		b.Log.Error("Failed to delete profile", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to delete profile", "error", err)
 		respond("Oops! Something went wrong.")
 		return
 	}
 
-	b.Log.Info("Profile deleted", "user_id", userStr, "guild_id", guildStr, "template", tmpl.Name)
+	b.Log.InfoContext(ctx, "Profile deleted", "user_id", userStr, "guild_id", guildStr, "template", tmpl.Name)
 	respond("Deleted!")
 }
 
@@ -172,14 +172,14 @@ func (b *Bot) deferDelete(ctx context.Context, e *events.ComponentInteractionCre
 		Content:    &content,
 		Components: &[]discord.LayoutComponent{},
 	}, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to acknowledge delete", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to acknowledge delete", "error", err)
 		return nil, false
 	}
 	return func(content string) {
 		if _, err := b.Client.Rest.UpdateInteractionResponse(b.Client.ApplicationID, e.Token(), discord.MessageUpdate{
 			Content: &content,
 		}, rest.WithCtx(ctx)); err != nil {
-			b.Log.Error("Failed to update delete response", "error", err)
+			b.Log.ErrorContext(ctx, "Failed to update delete response", "error", err)
 		}
 	}, true
 }
@@ -209,7 +209,7 @@ func (b *Bot) confirmDeleteImage(ctx context.Context, e *events.ComponentInterac
 func (b *Bot) deleteProfileImage(ctx context.Context, tmpl sprobot.Template, guildStr, userStr string) string {
 	profile, err := b.S3.FetchProfile(ctx, tmpl, guildStr, userStr)
 	if err != nil && !errors.Is(err, s3client.ErrNotFound) {
-		b.Log.Error("Failed to fetch profile for image delete", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to fetch profile for image delete", "error", err)
 		return "Something went wrong, please try again."
 	}
 
@@ -225,13 +225,13 @@ func (b *Bot) deleteProfileImage(ctx context.Context, tmpl sprobot.Template, gui
 		// The image goes first, so if that fails the profile still points at
 		// it and deleting again finishes the job.
 		if err := b.S3.DeleteProfileImage(ctx, tmpl, guildStr, userStr, profile); err != nil {
-			b.Log.Error("Failed to delete profile image", "error", err)
+			b.Log.ErrorContext(ctx, "Failed to delete profile image", "error", err)
 			return "Something went wrong, please try again."
 		}
 		delete(profile, tmpl.Image.Name)
 		_, userErr, err := b.S3.SaveProfile(ctx, tmpl, guildStr, userStr, profile)
 		if err != nil {
-			b.Log.Error("Failed to save profile after image delete", "error", err)
+			b.Log.ErrorContext(ctx, "Failed to save profile after image delete", "error", err)
 			return "Something went wrong, please try again."
 		}
 		if userErr != "" {
@@ -241,11 +241,11 @@ func (b *Bot) deleteProfileImage(ctx context.Context, tmpl sprobot.Template, gui
 		// Nothing but the image is left (or no profile at all, but possibly an
 		// old upload): DeleteProfile removes the profile and its image.
 		if err := b.S3.DeleteProfile(ctx, tmpl, guildStr, userStr); err != nil {
-			b.Log.Error("Failed to delete empty profile", "error", err)
+			b.Log.ErrorContext(ctx, "Failed to delete empty profile", "error", err)
 			return "Something went wrong, please try again."
 		}
 	}
 
-	b.Log.Info("Profile image deleted", "user_id", userStr, "guild_id", guildStr, "template", tmpl.Name)
+	b.Log.InfoContext(ctx, "Profile image deleted", "user_id", userStr, "guild_id", guildStr, "template", tmpl.Name)
 	return "Deleted!"
 }

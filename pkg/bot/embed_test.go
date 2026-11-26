@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"io"
 	"log/slog"
 	"net/http/httptest"
 	"strings"
@@ -28,7 +27,7 @@ func newTestS3(t *testing.T) *s3client.Client {
 		Credentials:  credentials.NewStaticCredentialsProvider("key", "secret", ""),
 		UsePathStyle: true,
 	})
-	return s3client.NewDirect(client, "test-bucket", endpoint, cache, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return s3client.NewDirect(client, "test-bucket", endpoint, cache, slog.New(slog.DiscardHandler))
 }
 
 func TestBuildProfileEmbedBasic(t *testing.T) {

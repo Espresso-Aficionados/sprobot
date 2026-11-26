@@ -56,12 +56,12 @@ func (b *Bot) sendWelcomeDM(ctx context.Context, guildID, userID snowflake.ID) {
 
 	ch, err := b.Client.Rest.CreateDMChannel(userID, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to create DM channel for welcome", "user_id", userID, "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to create DM channel for welcome", "user_id", userID, "guild_id", guildID, "error", err)
 		return
 	}
 
 	if _, err := b.Client.Rest.CreateMessage(ch.ID(), discord.MessageCreate{Content: msg}, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to send welcome DM", "user_id", userID, "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to send welcome DM", "user_id", userID, "guild_id", guildID, "error", err)
 	}
 }
 
@@ -98,7 +98,7 @@ func (b *Bot) handleWelcomeSet(ctx context.Context, e *events.ApplicationCommand
 		return
 	}
 
-	b.Log.Info("Welcome set", "user_id", e.User().ID, "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Welcome set", "user_id", e.User().ID, "guild_id", *guildID)
 
 	// Pre-fill with existing message
 	var prefill string
@@ -125,7 +125,7 @@ func (b *Bot) handleWelcomeSet(ctx context.Context, e *events.ApplicationCommand
 		},
 	}, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to respond with welcome modal", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to respond with welcome modal", "error", err)
 	}
 }
 
@@ -135,7 +135,7 @@ func (b *Bot) handleWelcomeSetModal(ctx context.Context, e *events.ModalSubmitIn
 		return
 	}
 
-	b.Log.Info("Welcome set modal submitted", "user_id", e.User().ID, "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Welcome set modal submitted", "user_id", e.User().ID, "guild_id", *guildID)
 
 	msg := e.Data.Text("message")
 	if strings.TrimSpace(msg) == "" {
@@ -155,7 +155,7 @@ func (b *Bot) handleWelcomeSetModal(ctx context.Context, e *events.ModalSubmitIn
 	st.mu.Unlock()
 
 	if err := b.welcome.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save welcome data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save welcome data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save welcome message.")
 		return
 	}
@@ -173,7 +173,7 @@ func (b *Bot) handleWelcomeClear(ctx context.Context, e *events.ApplicationComma
 		return
 	}
 
-	b.Log.Info("Welcome clear", "user_id", e.User().ID, "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Welcome clear", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.welcome.get(*guildID)
 	if st == nil {
@@ -186,7 +186,7 @@ func (b *Bot) handleWelcomeClear(ctx context.Context, e *events.ApplicationComma
 	st.mu.Unlock()
 
 	if err := b.welcome.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save welcome data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save welcome data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to clear welcome message.")
 		return
 	}
@@ -200,7 +200,7 @@ func (b *Bot) handleWelcomeShow(ctx context.Context, e *events.ApplicationComman
 		return
 	}
 
-	b.Log.Info("Welcome show", "user_id", e.User().ID, "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Welcome show", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.welcome.get(*guildID)
 	if st == nil {
@@ -231,7 +231,7 @@ func (b *Bot) handleWelcomeTest(ctx context.Context, e *events.ApplicationComman
 		return
 	}
 
-	b.Log.Info("Welcome test", "user_id", e.User().ID, "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Welcome test", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.welcome.get(*guildID)
 	if st == nil {
@@ -251,14 +251,14 @@ func (b *Bot) handleWelcomeTest(ctx context.Context, e *events.ApplicationComman
 
 	// Defer since CreateDMChannel + CreateMessage are two sequential REST calls.
 	if err := e.DeferCreateMessage(true, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer welcome test response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer welcome test response", "error", err)
 		return
 	}
 
 	// Send the test DM regardless of enabled state
 	ch, err := b.Client.Rest.CreateDMChannel(e.User().ID, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to create DM channel for welcome test", "user_id", e.User().ID, "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to create DM channel for welcome test", "user_id", e.User().ID, "guild_id", *guildID, "error", err)
 		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 			Content: "Failed to send test DM.",
 			Flags:   discord.MessageFlagEphemeral,
@@ -266,7 +266,7 @@ func (b *Bot) handleWelcomeTest(ctx context.Context, e *events.ApplicationComman
 		return
 	}
 	if _, err := b.Client.Rest.CreateMessage(ch.ID(), discord.MessageCreate{Content: msg}, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to send welcome test DM", "user_id", e.User().ID, "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to send welcome test DM", "user_id", e.User().ID, "guild_id", *guildID, "error", err)
 		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
 			Content: "Failed to send test DM.",
 			Flags:   discord.MessageFlagEphemeral,
@@ -290,7 +290,7 @@ func (b *Bot) handleWelcomeEnable(ctx context.Context, e *events.ApplicationComm
 		return
 	}
 
-	b.Log.Info("Welcome enable", "user_id", e.User().ID, "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Welcome enable", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.welcome.get(*guildID)
 	if st == nil {
@@ -309,7 +309,7 @@ func (b *Bot) handleWelcomeEnable(ctx context.Context, e *events.ApplicationComm
 	}
 
 	if err := b.welcome.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save welcome data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save welcome data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to enable welcome DM.")
 		return
 	}
@@ -323,7 +323,7 @@ func (b *Bot) handleWelcomeDisable(ctx context.Context, e *events.ApplicationCom
 		return
 	}
 
-	b.Log.Info("Welcome disable", "user_id", e.User().ID, "guild_id", *guildID)
+	b.Log.InfoContext(ctx, "Welcome disable", "user_id", e.User().ID, "guild_id", *guildID)
 
 	st := b.welcome.get(*guildID)
 	if st == nil {
@@ -336,7 +336,7 @@ func (b *Bot) handleWelcomeDisable(ctx context.Context, e *events.ApplicationCom
 	st.mu.Unlock()
 
 	if err := b.welcome.persist(ctx, *guildID); err != nil {
-		b.Log.Error("Failed to save welcome data", "guild_id", *guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save welcome data", "guild_id", *guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to disable welcome DM.")
 		return
 	}

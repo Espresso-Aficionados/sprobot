@@ -200,7 +200,7 @@ func (b *Bot) grantPosterRoleIfDue(ctx context.Context, guildID snowflake.ID, st
 		st.mu.Lock()
 		st.grantRetry.fail(userID, now, roleGrantRetry)
 		st.mu.Unlock()
-		b.Log.Error("Failed to grant poster role", "user_id", userID, "guild_id", guildID, "role_id", roleID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to grant poster role", "user_id", userID, "guild_id", guildID, "role_id", roleID, "error", err)
 		return
 	}
 
@@ -208,13 +208,13 @@ func (b *Bot) grantPosterRoleIfDue(ctx context.Context, guildID snowflake.ID, st
 	banned := st.Settings.isUserBlacklisted(userID)
 	st.mu.Unlock()
 	if banned {
-		b.Log.Info("Market ban landed while granting poster role, revoking it", "user_id", userID, "guild_id", guildID)
+		b.Log.InfoContext(ctx, "Market ban landed while granting poster role, revoking it", "user_id", userID, "guild_id", guildID)
 		if err := b.Client.Rest.RemoveMemberRole(guildID, userID, roleID, rest.WithReason("Banned from the marketplace"), rest.WithCtx(ctx)); err != nil {
-			b.Log.Error("Failed to revoke poster role from banned user", "user_id", userID, "guild_id", guildID, "role_id", roleID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to revoke poster role from banned user", "user_id", userID, "guild_id", guildID, "role_id", roleID, "error", err)
 		}
 		return
 	}
-	b.Log.Info("Granted poster role", "user_id", userID, "guild_id", guildID, "total", count)
+	b.Log.InfoContext(ctx, "Granted poster role", "user_id", userID, "guild_id", guildID, "total", count)
 	b.clearPosterRoleTracking(guildID, userID)
 }
 
@@ -328,9 +328,9 @@ func (b *Bot) fetchPosterRoleHistory(ctx context.Context, guildID snowflake.ID, 
 		st.failSearch(userID, search, time.Now())
 		st.mu.Unlock()
 		if errors.Is(err, errSearchIndexing) {
-			b.Log.Info("Search index not ready, will retry later", "user_id", userID, "retry_in", posterSearchRetry)
+			b.Log.InfoContext(ctx, "Search index not ready, will retry later", "user_id", userID, "retry_in", posterSearchRetry)
 		} else {
-			b.Log.Error("Failed to fetch poster role history", "user_id", userID, "retry_in", posterSearchRetry, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to fetch poster role history", "user_id", userID, "retry_in", posterSearchRetry, "error", err)
 		}
 		return
 	}
@@ -349,9 +349,9 @@ func (b *Bot) fetchPosterRoleHistory(ctx context.Context, guildID snowflake.ID, 
 	st.mu.Unlock()
 
 	if recorded {
-		b.Log.Info("Cached historical post count", "user_id", userID, "guild_id", guildID, "count", count)
+		b.Log.InfoContext(ctx, "Cached historical post count", "user_id", userID, "guild_id", guildID, "count", count)
 	} else {
-		b.Log.Info("Dropped post history search: tracking was cleared or the user was banned", "user_id", userID, "guild_id", guildID)
+		b.Log.InfoContext(ctx, "Dropped post history search: tracking was cleared or the user was banned", "user_id", userID, "guild_id", guildID)
 	}
 }
 
@@ -412,10 +412,10 @@ func (b *Bot) handleMarketProgress(ctx context.Context, e *events.ApplicationCom
 	public, _ := data.OptBool("public")
 	ephemeral := !public
 
-	b.Log.Info("Market progress", "user_id", e.User().ID, "guild_id", guildID, "target_user", user.ID, "public", public)
+	b.Log.InfoContext(ctx, "Market progress", "user_id", e.User().ID, "guild_id", guildID, "target_user", user.ID, "public", public)
 
 	if err := e.DeferCreateMessage(ephemeral, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer marketprogress response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer marketprogress response", "error", err)
 		return
 	}
 
@@ -445,7 +445,7 @@ func (b *Bot) handleMarketProgress(ctx context.Context, e *events.ApplicationCom
 		return
 	}
 	if searchErr != nil {
-		b.Log.Error("Failed to search post history for market progress", "guild_id", guildID, "target_user", user.ID, "error", searchErr)
+		b.Log.ErrorContext(ctx, "Failed to search post history for market progress", "guild_id", guildID, "target_user", user.ID, "error", searchErr)
 	} else {
 		skip := func(chID snowflake.ID) bool {
 			return cfg.isSkipped(b.resolveChannelParents(ctx, chID, &st.parentCache)...)
@@ -587,10 +587,10 @@ func (b *Bot) handleMarketLeaderboard(ctx context.Context, e *events.Application
 	public, _ := data.OptBool("public")
 	ephemeral := !public
 
-	b.Log.Info("Market leaderboard", "user_id", e.User().ID, "guild_id", guildID, "public", public)
+	b.Log.InfoContext(ctx, "Market leaderboard", "user_id", e.User().ID, "guild_id", guildID, "public", public)
 
 	if err := e.DeferCreateMessage(ephemeral, rest.WithCtx(ctx)); err != nil {
-		b.Log.Error("Failed to defer marketleaderboard response", "error", err)
+		b.Log.ErrorContext(ctx, "Failed to defer marketleaderboard response", "error", err)
 		return
 	}
 
@@ -692,7 +692,7 @@ func (b *Bot) handleMarketConfig(ctx context.Context, e *events.ApplicationComma
 func (b *Bot) handleMarketConfigSet(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *posterRoleState) {
 	data := e.Data.(discord.SlashCommandInteractionData)
 
-	b.Log.Info("Market config set", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Market config set", "user_id", e.User().ID, "guild_id", guildID)
 
 	role, setRole := data.OptRole("role")
 	if setRole {
@@ -712,7 +712,7 @@ func (b *Bot) handleMarketConfigSet(ctx context.Context, e *events.ApplicationCo
 	st.mu.Unlock()
 
 	if err := b.posterRole.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist market config", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist market config", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save configuration.")
 		return
 	}
@@ -721,7 +721,7 @@ func (b *Bot) handleMarketConfigSet(ctx context.Context, e *events.ApplicationCo
 }
 
 func (b *Bot) handleMarketConfigShow(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *posterRoleState) {
-	b.Log.Info("Market config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
+	b.Log.InfoContext(ctx, "Market config show", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
 	s := st.Settings
@@ -760,7 +760,7 @@ func (b *Bot) handleMarketBanAdd(ctx context.Context, e *events.ApplicationComma
 	}
 	reason := data.String("reason")
 
-	b.Log.Info("Market ban add", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID, "reason", reason)
+	b.Log.InfoContext(ctx, "Market ban add", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID, "reason", reason)
 
 	st.mu.Lock()
 	alreadyBanned := st.Settings.isUserBlacklisted(user.ID)
@@ -772,7 +772,7 @@ func (b *Bot) handleMarketBanAdd(ctx context.Context, e *events.ApplicationComma
 
 	if !alreadyBanned {
 		if err := b.posterRole.persist(ctx, guildID); err != nil {
-			b.Log.Error("Failed to persist market ban", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to persist market ban", "guild_id", guildID, "error", err)
 			// Undo the ban so that a retry runs all of it, not "already banned".
 			st.mu.Lock()
 			st.Settings.BlacklistedUsers, _ = withoutID(st.Settings.BlacklistedUsers, user.ID)
@@ -787,7 +787,7 @@ func (b *Bot) handleMarketBanAdd(ctx context.Context, e *events.ApplicationComma
 	b.clearPosterRoleTracking(guildID, user.ID)
 	if roleID != 0 {
 		if err := b.Client.Rest.RemoveMemberRole(guildID, user.ID, roleID, rest.WithReason(fmt.Sprintf("Marketplace ban by %s: %s", e.User().Username, reason)), rest.WithCtx(ctx)); err != nil {
-			b.Log.Error("Failed to remove poster role during market ban", "guild_id", guildID, "user_id", user.ID, "role_id", roleID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to remove poster role during market ban", "guild_id", guildID, "user_id", user.ID, "role_id", roleID, "error", err)
 		}
 	}
 
@@ -812,7 +812,7 @@ func (b *Bot) handleMarketBanRemove(ctx context.Context, e *events.ApplicationCo
 		return
 	}
 
-	b.Log.Info("Market ban remove", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID)
+	b.Log.InfoContext(ctx, "Market ban remove", "user_id", e.User().ID, "guild_id", guildID, "target_user_id", user.ID)
 
 	st.mu.Lock()
 	list, found := withoutID(st.Settings.BlacklistedUsers, user.ID)
@@ -825,7 +825,7 @@ func (b *Bot) handleMarketBanRemove(ctx context.Context, e *events.ApplicationCo
 	}
 
 	if err := b.posterRole.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist market ban removal", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist market ban removal", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save changes.")
 		return
 	}
@@ -839,7 +839,7 @@ func (b *Bot) handleMarketBanRemove(ctx context.Context, e *events.ApplicationCo
 }
 
 func (b *Bot) handleMarketBanList(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *posterRoleState) {
-	b.Log.Info("Market ban list", "user_id", e.User().ID, "guild_id", *e.GuildID())
+	b.Log.InfoContext(ctx, "Market ban list", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
 	list := make([]snowflake.ID, len(st.Settings.BlacklistedUsers))

@@ -257,5 +257,5 @@ func newTestS3Client(t *testing.T, endpoint string, httpClient *http.Client) *s3
 }
 
 func DiscardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }

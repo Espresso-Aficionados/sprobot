@@ -46,7 +46,7 @@ func (b *Bot) handleWarn(ctx context.Context, e *events.ApplicationCommandIntera
 		},
 	}, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to post warning message", "error", err, "target_user_id", targetUser.ID, "guild_id", *guildID)
+		b.Log.ErrorContext(ctx, "Failed to post warning message", "error", err, "target_user_id", targetUser.ID, "guild_id", *guildID)
 		return
 	}
 
@@ -80,7 +80,7 @@ func (b *Bot) handleWarn(ctx context.Context, e *events.ApplicationCommandIntera
 	b.postEventLog(ctx, *guildID, logEmbed)
 	b.crossPostToModLog(ctx, *guildID, targetUser, logEmbed)
 
-	b.Log.Info("Warn issued",
+	b.Log.InfoContext(ctx, "Warn issued",
 		"target_user_id", strconv.FormatInt(int64(targetUser.ID), 10),
 		"moderator_user_id", userIDStr(e),
 		"guild_id", guildIDStr(e),

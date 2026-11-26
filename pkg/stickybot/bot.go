@@ -114,7 +114,7 @@ func (b *Bot) Run() error {
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.Heartbeat)
 	go botutil.RunJobLoop(&b.Ready, 5*time.Minute, b.stop, retryFailedJob, b.retryFailed)
 
-	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
+	b.Log.InfoContext(ctx, fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=68608", b.Client.ApplicationID))
 	shutdownErr := b.WaitForShutdown("Stickybot")
 	stop, stopSpan := botutil.StartSpan("shutdown")
 	defer stopSpan.End()
@@ -207,7 +207,7 @@ func (b *Bot) dropDeletedChannelSticky(ctx context.Context, guildID, channelID s
 	if s == nil {
 		return
 	}
-	b.Log.Info("Removing sticky of deleted channel", "guild_id", guildID, "channel_id", channelID)
+	b.Log.InfoContext(loadCtx, "Removing sticky of deleted channel", "guild_id", guildID, "channel_id", channelID)
 	// Saved before the slow retire, which a shutdown doesn't wait for.
 	b.saveStickiesForGuild(ctx, guildID)
 	// The message went with the channel; deleting it again fails harmlessly.

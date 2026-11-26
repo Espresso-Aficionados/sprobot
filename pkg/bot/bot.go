@@ -395,7 +395,7 @@ func (b *Bot) Run() error {
 	start, startSpan := botutil.StartSpan("startup")
 	defer startSpan.End() // on a failed start; a second End does nothing
 
-	b.Log.Info(fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045773440", b.Client.ApplicationID))
+	b.Log.InfoContext(start, fmt.Sprintf("Invite: https://discord.com/oauth2/authorize?client_id=%d&scope=bot%%20applications.commands&permissions=361045773440", b.Client.ApplicationID))
 
 	// Nothing has been saved yet, and nothing will be: a newer build's state
 	// is left as it is.

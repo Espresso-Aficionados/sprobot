@@ -201,7 +201,7 @@ func (b *Bot) sendForumReminders(ctx context.Context) error {
 func (b *Bot) syncForumThreads(ctx context.Context, forumID, guildID snowflake.ID) error {
 	active, err := b.Client.Rest.GetActiveGuildThreads(guildID, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to get active threads", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to get active threads", "guild_id", guildID, "error", err)
 		return err
 	}
 	listed := make(map[snowflake.ID]bool)
@@ -219,7 +219,7 @@ func (b *Bot) syncForumThreads(ctx context.Context, forumID, guildID snowflake.I
 		}
 		ch, err := b.Client.Rest.GetChannel(t.ID(), rest.WithCtx(ctx))
 		if err != nil {
-			b.Log.Error("Failed to refresh cached thread", "error", err, "thread_id", t.ID())
+			b.Log.ErrorContext(ctx, "Failed to refresh cached thread", "error", err, "thread_id", t.ID())
 			if isPermanentRESTError(err) {
 				b.dropForumThread(t.ID())
 			}
@@ -308,7 +308,7 @@ func (b *Bot) checkThread(ctx context.Context, thread discord.GuildThread, info 
 	// posting in an archived thread would unarchive it.
 	ch, err := b.Client.Rest.GetChannel(threadID, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to re-check thread before reminder", "error", err, "thread_id", threadID)
+		b.Log.ErrorContext(ctx, "Failed to re-check thread before reminder", "error", err, "thread_id", threadID)
 		if isPermanentRESTError(err) {
 			b.dropForumThread(threadID)
 		}
@@ -319,7 +319,7 @@ func (b *Bot) checkThread(ctx context.Context, thread discord.GuildThread, info 
 		return
 	}
 	if fresh.ThreadMetadata.Archived || fresh.ThreadMetadata.Locked {
-		b.Log.Info("Thread is locked/archived, skipping", "thread_id", threadID, "thread_name", fresh.Name())
+		b.Log.InfoContext(ctx, "Thread is locked/archived, skipping", "thread_id", threadID, "thread_name", fresh.Name())
 		// Keep the cache from offering it again, and read its history afresh
 		// should it be reopened.
 		b.Client.Caches.AddChannel(fresh)
@@ -330,7 +330,7 @@ func (b *Bot) checkThread(ctx context.Context, thread discord.GuildThread, info 
 		return
 	}
 
-	b.Log.Info("Sending help prompt", "thread_id", threadID, "thread_name", fresh.Name())
+	b.Log.InfoContext(ctx, "Sending help prompt", "thread_id", threadID, "thread_name", fresh.Name())
 
 	helpMessage := fmt.Sprintf(
 		"It looks like nobody has responded even though this thread has been open for a while. "+
@@ -351,7 +351,7 @@ func (b *Bot) checkThread(ctx context.Context, thread discord.GuildThread, info 
 		Embeds:  []discord.Embed{embed},
 	}, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to send forum reminder", "error", err, "thread_id", threadID)
+		b.Log.ErrorContext(ctx, "Failed to send forum reminder", "error", err, "thread_id", threadID)
 		// Try again next round unless Discord won't ever accept it.
 		if !isPermanentRESTError(err) {
 			return
@@ -365,7 +365,7 @@ func (b *Bot) checkThread(ctx context.Context, thread discord.GuildThread, info 
 func (b *Bot) readThreadHistory(ctx context.Context, thread discord.GuildThread, info threadHelpInfo) bool {
 	messages, err := b.Client.Rest.GetMessages(thread.ID(), 0, 0, 0, info.HistoryLimit, rest.WithCtx(ctx))
 	if err != nil {
-		b.Log.Error("Failed to get thread messages", "error", err, "thread_id", thread.ID())
+		b.Log.ErrorContext(ctx, "Failed to get thread messages", "error", err, "thread_id", thread.ID())
 		if isPermanentRESTError(err) {
 			b.dropForumThread(thread.ID())
 		}
@@ -373,7 +373,7 @@ func (b *Bot) readThreadHistory(ctx context.Context, thread discord.GuildThread,
 	}
 	status, reason := threadHistoryStatus(messages, thread.OwnerID, info.HistoryLimit)
 	if reason != "" {
-		b.Log.Info(reason, "thread_id", thread.ID(), "thread_name", thread.Name())
+		b.Log.InfoContext(ctx, reason, "thread_id", thread.ID(), "thread_name", thread.Name())
 	}
 	b.forumReminders.record(thread.ID(), status)
 	return status == forumThreadWaiting

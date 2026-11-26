@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,8 +15,10 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
+	"github.com/Espresso-Aficionados/sprobot/pkg/logsetup"
 	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
@@ -79,6 +82,22 @@ func TestEditShowsFormForNewProfile(t *testing.T) {
 
 	if r := <-responses; r.kind != discord.InteractionResponseTypeModal {
 		t.Errorf("response = %v %+v, want the edit form", r.kind, r.data)
+	}
+}
+
+// A handler's log lines carry the trace of the context it was given.
+func TestEditLogsCarryTrace(t *testing.T) {
+	b, _ := newEditBot(t)
+	var buf bytes.Buffer
+	b.Log = logsetup.New(&buf)
+	sc := trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{1, 2, 3}, SpanID: trace.SpanID{4, 5, 6}, TraceFlags: trace.FlagsSampled})
+	responses := make(chan editResponse, 2)
+	b.handleEdit(trace.ContextWithSpanContext(t.Context(), sc), editCommand(t, responses), sprobot.ProfileTemplate)
+	<-responses
+
+	line, _, _ := strings.Cut(buf.String(), "\n")
+	if !strings.Contains(line, `msg="Processing edit"`) || !strings.Contains(line, "trace_id="+sc.TraceID().String()) {
+		t.Errorf("first log line = %q, want \"Processing edit\" with trace_id=%s", line, sc.TraceID())
 	}
 }
 

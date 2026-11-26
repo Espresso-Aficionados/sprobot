@@ -170,7 +170,7 @@ func (s *guildStateStore[T]) save(ctx context.Context) error {
 	var errs []error
 	for guildID := range s.served() {
 		if err := s.persist(ctx, guildID); err != nil {
-			s.log.Error("Failed to save "+s.s3Key, "guild_id", guildID, "error", err)
+			s.log.ErrorContext(ctx, "Failed to save "+s.s3Key, "guild_id", guildID, "error", err)
 			errs = append(errs, fmt.Errorf("saving %s: %w", s.s3Key, err))
 		}
 	}
@@ -198,11 +198,11 @@ func (s *guildStateStore[T]) load(ctx context.Context, guildIDs []snowflake.ID) 
 		switch {
 		case statever.IsNewer(err):
 			refused = append(refused, err)
-			s.log.Error("Refusing "+s.s3Key+" state a newer build wrote; leaving it untouched", "guild_id", guildID, "error", err)
+			s.log.ErrorContext(ctx, "Refusing "+s.s3Key+" state a newer build wrote; leaving it untouched", "guild_id", guildID, "error", err)
 		case err != nil:
-			s.log.Error("Failed to load "+s.s3Key+", will retry", "guild_id", guildID, "error", err)
+			s.log.ErrorContext(ctx, "Failed to load "+s.s3Key+", will retry", "guild_id", guildID, "error", err)
 		case retried:
-			s.log.Info("Loaded "+s.s3Key+" after an earlier failure", "guild_id", guildID)
+			s.log.InfoContext(ctx, "Loaded "+s.s3Key+" after an earlier failure", "guild_id", guildID)
 		}
 	}
 	return errors.Join(refused...)
@@ -234,7 +234,7 @@ func (s *guildStateStore[T]) fetch(ctx context.Context, guildID snowflake.ID) (*
 	data, err := s.s3.FetchGuildJSON(fetchCtx, s.s3Key, guildID.String())
 	cancel()
 	if errors.Is(err, s3client.ErrNotFound) {
-		s.log.Info("No existing "+s.s3Key+" data, starting fresh", "guild_id", guildID)
+		s.log.InfoContext(fetchCtx, "No existing "+s.s3Key+" data, starting fresh", "guild_id", guildID)
 		return s.fresh(guildID), nil
 	}
 	if err != nil {
@@ -253,7 +253,7 @@ func (s *guildStateStore[T]) fetch(ctx context.Context, guildID snowflake.ID) (*
 		if err := s.s3.SaveGuildJSON(backupCtx, backupPrefix, backupID, data); err != nil {
 			return nil, fmt.Errorf("decoding: %w; backing up: %w", decodeErr, err)
 		}
-		s.log.Error("Failed to decode "+s.s3Key+", backed it up and starting fresh",
+		s.log.ErrorContext(backupCtx, "Failed to decode "+s.s3Key+", backed it up and starting fresh",
 			"guild_id", guildID, "backup", backupPrefix+"/"+backupID+".json", "error", decodeErr)
 		return s.fresh(guildID), nil
 	}
@@ -310,7 +310,7 @@ func pruneCorruptBackups(ctx context.Context, s3 *s3client.Client, log *slog.Log
 	defer cancel()
 	objects, err := s3.ListObjects(ctx, corruptPrefix+"/")
 	if err != nil {
-		log.Error("Failed to list corrupt state backups", "error", err)
+		log.ErrorContext(ctx, "Failed to list corrupt state backups", "error", err)
 		return err
 	}
 	var expired []string
@@ -325,9 +325,9 @@ func pruneCorruptBackups(ctx context.Context, s3 *s3client.Client, log *slog.Log
 		return nil
 	}
 	if err := s3.DeleteKeys(ctx, expired...); err != nil {
-		log.Error("Failed to delete expired corrupt state backups", "error", err)
+		log.ErrorContext(ctx, "Failed to delete expired corrupt state backups", "error", err)
 		return err
 	}
-	log.Info("Deleted expired corrupt state backups", "keys", expired)
+	log.InfoContext(ctx, "Deleted expired corrupt state backups", "keys", expired)
 	return nil
 }

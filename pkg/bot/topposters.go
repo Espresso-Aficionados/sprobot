@@ -217,7 +217,7 @@ func (b *Bot) handleTopPosters(ctx context.Context, e *events.ApplicationCommand
 	}
 	guildID := *e.GuildID()
 
-	b.Log.Info("Top posters", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Top posters", "user_id", e.User().ID, "guild_id", guildID)
 
 	// Check ManageMessages permission
 	if member := e.Member(); member == nil || member.Permissions&discord.PermissionManageMessages == 0 {
@@ -381,7 +381,7 @@ func (b *Bot) handleTopPostersFilterAdd(ctx context.Context, e *events.Applicati
 		return
 	}
 
-	b.Log.Info("Top posters filter add", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Top posters filter add", "user_id", e.User().ID, "guild_id", guildID)
 
 	var added []string
 	st.mu.Lock()
@@ -405,7 +405,7 @@ func (b *Bot) handleTopPostersFilterAdd(ctx context.Context, e *events.Applicati
 	}
 
 	if err := b.topPostersConfig.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist topposters filter", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist topposters filter", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save filter.")
 		return
 	}
@@ -425,7 +425,7 @@ func (b *Bot) handleTopPostersFilterRemove(ctx context.Context, e *events.Applic
 		return
 	}
 
-	b.Log.Info("Top posters filter remove", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Top posters filter remove", "user_id", e.User().ID, "guild_id", guildID)
 
 	var removed []string
 	st.mu.Lock()
@@ -452,7 +452,7 @@ func (b *Bot) handleTopPostersFilterRemove(ctx context.Context, e *events.Applic
 	}
 
 	if err := b.topPostersConfig.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist topposters filter removal", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist topposters filter removal", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save changes.")
 		return
 	}
@@ -461,7 +461,7 @@ func (b *Bot) handleTopPostersFilterRemove(ctx context.Context, e *events.Applic
 }
 
 func (b *Bot) handleTopPostersFilterList(ctx context.Context, e *events.ApplicationCommandInteractionCreate, st *topPostersConfigState) {
-	b.Log.Info("Top posters filter list", "user_id", e.User().ID, "guild_id", *e.GuildID())
+	b.Log.InfoContext(ctx, "Top posters filter list", "user_id", e.User().ID, "guild_id", *e.GuildID())
 
 	st.mu.Lock()
 	users := make([]snowflake.ID, len(st.FilteredUsers))
@@ -504,7 +504,7 @@ func (b *Bot) handleTopPostersFilterList(ctx context.Context, e *events.Applicat
 }
 
 func (b *Bot) handleTopPostersFilterClear(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, st *topPostersConfigState) {
-	b.Log.Info("Top posters filter clear", "user_id", e.User().ID, "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Top posters filter clear", "user_id", e.User().ID, "guild_id", guildID)
 
 	st.mu.Lock()
 	count := len(st.FilteredUsers) + len(st.FilteredRoles) + len(st.FilteredChannels)
@@ -519,7 +519,7 @@ func (b *Bot) handleTopPostersFilterClear(ctx context.Context, e *events.Applica
 	}
 
 	if err := b.topPostersConfig.persist(ctx, guildID); err != nil {
-		b.Log.Error("Failed to persist topposters filter clear", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to persist topposters filter clear", "guild_id", guildID, "error", err)
 		botutil.RespondEphemeral(ctx, e, "Failed to save changes.")
 		return
 	}

@@ -207,7 +207,7 @@ func newTestClient(t *testing.T, server *httptest.Server) *Client {
 		endpoint:    endpoint,
 		webEndpoint: sprobot.WebEndpoint,
 		cache:       cache,
-		log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		log:         slog.New(slog.DiscardHandler),
 	}
 }
 

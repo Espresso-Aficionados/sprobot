@@ -179,9 +179,9 @@ func (b *Bot) loadReminders(ctx context.Context) error {
 		switch {
 		case statever.IsNewer(err):
 			refused = append(refused, err)
-			b.Log.Error("Refusing thread reminders a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Refusing thread reminders a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
 		case err != nil:
-			b.Log.Error("Failed to load thread reminders; will retry", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to load thread reminders; will retry", "guild_id", guildID, "error", err)
 		}
 	}
 	return errors.Join(refused...)
@@ -219,7 +219,7 @@ func (b *Bot) ensureRemindersLoaded(ctx context.Context, guildID snowflake.ID) e
 		for _, r := range stored {
 			channels[r.ChannelID] = r
 			if msg := r.settingsError(); msg != "" {
-				b.Log.Warn("Stored thread reminder has invalid settings; re-run /threadbot enable there", "guild_id", guildID, "channel_id", r.ChannelID, "reason", msg)
+				b.Log.WarnContext(ctx, "Stored thread reminder has invalid settings; re-run /threadbot enable there", "guild_id", guildID, "channel_id", r.ChannelID, "reason", msg)
 			}
 		}
 	}
@@ -232,7 +232,7 @@ func (b *Bot) ensureRemindersLoaded(ctx context.Context, guildID snowflake.ID) e
 	b.reminders[guildID] = channels
 	ready := b.readyGuilds[guildID]
 	b.mu.Unlock()
-	b.Log.Info("Loaded thread reminders", "guild_id", guildID, "count", len(channels))
+	b.Log.InfoContext(ctx, "Loaded thread reminders", "guild_id", guildID, "count", len(channels))
 	if ready {
 		b.startGuildReminders(ctx, guildID)
 	}
@@ -277,7 +277,7 @@ func (b *Bot) startGuildReminders(ctx context.Context, guildID snowflake.ID) {
 		// Missing Access.
 		var restErr *rest.Error
 		if _, err := b.Client.Rest.GetChannel(channelID, rest.WithCtx(ctx)); errors.As(err, &restErr) && restErr.Code == rest.JSONErrorCodeUnknownChannel && b.dropReminder(guildID, channelID) {
-			b.Log.Info("Dropped reminder of deleted channel", "guild_id", guildID, "channel_id", channelID)
+			b.Log.InfoContext(ctx, "Dropped reminder of deleted channel", "guild_id", guildID, "channel_id", channelID)
 			dropped = true
 		}
 	}
@@ -311,15 +311,15 @@ func (b *Bot) saveRemindersForGuild(ctx context.Context, guildID snowflake.ID) e
 	b.mu.Unlock()
 
 	if err != nil {
-		b.Log.Error("Failed to marshal thread reminders", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to marshal thread reminders", "guild_id", guildID, "error", err)
 		return err
 	}
 
 	if err := b.S3.SaveThreadReminders(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
-		b.Log.Error("Failed to save thread reminders", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save thread reminders", "guild_id", guildID, "error", err)
 		return err
 	}
-	b.Log.Info("Saved thread reminders", "guild_id", guildID, "count", len(toSave))
+	b.Log.InfoContext(ctx, "Saved thread reminders", "guild_id", guildID, "count", len(toSave))
 	return nil
 }
 
@@ -401,7 +401,7 @@ func (b *Bot) stopReminderGoroutine(r *threadReminder) {
 func (b *Bot) onChannelDelete(ctx context.Context, e *events.GuildChannelDelete) {
 	if b.dropReminder(e.GuildID, e.ChannelID) {
 		b.saveRemindersForGuild(ctx, e.GuildID)
-		b.Log.Info("Dropped reminder of deleted channel", "guild_id", e.GuildID, "channel_id", e.ChannelID)
+		b.Log.InfoContext(ctx, "Dropped reminder of deleted channel", "guild_id", e.GuildID, "channel_id", e.ChannelID)
 	}
 }
 
@@ -524,7 +524,7 @@ func (b *Bot) buildThreadsEmbed(ctx context.Context, guildID, channelID snowflak
 	}
 	b.mu.Unlock()
 
-	b.Log.Info("Built thread embed", "guild_id", guildID, "channel_id", channelID, "threads", total, "cached_counts", cachedCount)
+	b.Log.InfoContext(ctx, "Built thread embed", "guild_id", guildID, "channel_id", channelID, "threads", total, "cached_counts", cachedCount)
 	embed := threadsEmbed(guildID, channelID, threads, total, time.Now())
 	return &embed, nil
 }
@@ -582,7 +582,7 @@ func threadsEmbed(guildID, channelID snowflake.ID, threads []threadInfo, total i
 func (b *Bot) repostReminder(ctx context.Context, r *threadReminder) bool {
 	embed, err := b.buildThreadsEmbed(ctx, r.GuildID, r.ChannelID)
 	if err != nil {
-		b.Log.Error("Failed to build thread reminder", "guild_id", r.GuildID, "channel_id", r.ChannelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to build thread reminder", "guild_id", r.GuildID, "channel_id", r.ChannelID, "error", err)
 		return false
 	}
 	if embed == nil {
@@ -610,7 +610,7 @@ func (b *Bot) repostReminder(ctx context.Context, r *threadReminder) bool {
 
 	sent, err := botutil.PostWithRetry(ctx, b.Client.Rest, r.ChannelID, msg, b.Log)
 	if err != nil {
-		b.Log.Error("Failed to repost thread reminder after retries", "channel_id", r.ChannelID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to repost thread reminder after retries", "channel_id", r.ChannelID, "error", err)
 		return false
 	}
 
@@ -660,9 +660,9 @@ func (b *Bot) loadMemberCounts(ctx context.Context) error {
 		switch {
 		case statever.IsNewer(err):
 			refused = append(refused, err)
-			b.Log.Error("Refusing thread member counts a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Refusing thread member counts a newer build wrote; leaving them untouched", "guild_id", guildID, "error", err)
 		case err != nil:
-			b.Log.Error("Failed to load thread member counts; will retry on next use", "guild_id", guildID, "error", err)
+			b.Log.ErrorContext(ctx, "Failed to load thread member counts; will retry on next use", "guild_id", guildID, "error", err)
 		}
 	}
 	return errors.Join(refused...)
@@ -709,7 +709,7 @@ func (b *Bot) ensureMemberCountsLoaded(ctx context.Context, guildID snowflake.ID
 		b.memberCounts[guildID] = cache
 	}
 	b.mu.Unlock()
-	b.Log.Info("Loaded thread member counts", "guild_id", guildID, "count", len(cache.Counts))
+	b.Log.InfoContext(ctx, "Loaded thread member counts", "guild_id", guildID, "count", len(cache.Counts))
 	return nil
 }
 
@@ -740,15 +740,15 @@ func (b *Bot) saveMemberCountsForGuild(ctx context.Context, guildID snowflake.ID
 		data, err = statever.Stamp(data)
 	}
 	if err != nil {
-		b.Log.Error("Failed to marshal thread member counts", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to marshal thread member counts", "guild_id", guildID, "error", err)
 		return err
 	}
 
 	if err := b.S3.SaveThreadMemberCounts(ctx, fmt.Sprintf("%d", guildID), data); err != nil {
-		b.Log.Error("Failed to save thread member counts", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save thread member counts", "guild_id", guildID, "error", err)
 		return err
 	}
-	b.Log.Info("Saved thread member counts", "guild_id", guildID)
+	b.Log.InfoContext(ctx, "Saved thread member counts", "guild_id", guildID)
 	return nil
 }
 
@@ -759,7 +759,7 @@ func (b *Bot) refreshMemberCounts(ctx context.Context, guildID snowflake.ID, thr
 	if err := b.ensureMemberCountsLoaded(ctx, guildID); err != nil {
 		// Counts fetched now couldn't be saved without overwriting the stored
 		// ones, so member_count is shown until the load succeeds.
-		b.Log.Error("Failed to load thread member counts; showing capped counts", "guild_id", guildID, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to load thread member counts; showing capped counts", "guild_id", guildID, "error", err)
 		return
 	}
 
@@ -770,13 +770,13 @@ func (b *Bot) refreshMemberCounts(ctx context.Context, guildID snowflake.ID, thr
 	b.mu.Unlock()
 
 	if len(toFetch) == 0 {
-		b.Log.Info("Member counts fresh, skipping refresh", "guild_id", guildID, "threads", len(threadIDs))
+		b.Log.InfoContext(ctx, "Member counts fresh, skipping refresh", "guild_id", guildID, "threads", len(threadIDs))
 		return
 	}
 
 	// List Thread Members is ordered by user ID, not join time, so there is no
 	// watermark to fetch only new members: each refresh lists the whole thread.
-	b.Log.Info("Refreshing thread member counts", "guild_id", guildID, "fetching", len(toFetch))
+	b.Log.InfoContext(ctx, "Refreshing thread member counts", "guild_id", guildID, "fetching", len(toFetch))
 	var fetched int
 	for _, threadID := range toFetch {
 		n := b.countThreadMembers(ctx, threadID)
@@ -793,7 +793,7 @@ func (b *Bot) refreshMemberCounts(ctx context.Context, guildID snowflake.ID, thr
 		if hadPrev {
 			// How far the event-adjusted count was off. Persistent drift on
 			// live counts means Discord skips events for some changes.
-			b.Log.Info("Thread member count drift", "guild_id", guildID, "thread_id", threadID,
+			b.Log.InfoContext(ctx, "Thread member count drift", "guild_id", guildID, "thread_id", threadID,
 				"cached", prev, "fetched", n, "drift", n-prev,
 				"live", countTTL(prevFetched, sessionStart) == memberCountLiveTTL)
 		}
@@ -801,7 +801,7 @@ func (b *Bot) refreshMemberCounts(ctx context.Context, guildID snowflake.ID, thr
 	b.mu.Lock()
 	cache.prune(time.Now())
 	b.mu.Unlock()
-	b.Log.Info("Finished refreshing thread member counts", "guild_id", guildID, "fetched", fetched, "failed", len(toFetch)-fetched)
+	b.Log.InfoContext(ctx, "Finished refreshing thread member counts", "guild_id", guildID, "fetched", fetched, "failed", len(toFetch)-fetched)
 	b.saveMemberCountsForGuild(ctx, guildID)
 }
 
@@ -823,7 +823,7 @@ func (b *Bot) countThreadMembers(ctx context.Context, threadID snowflake.ID) int
 			if errors.Is(page.Err, rest.ErrNoMorePages) {
 				break
 			}
-			b.Log.Error("Failed to count thread members", "thread_id", threadID, "error", page.Err)
+			b.Log.ErrorContext(ctx, "Failed to count thread members", "thread_id", threadID, "error", page.Err)
 			return 0
 		}
 		n += len(page.Items)
@@ -833,6 +833,6 @@ func (b *Bot) countThreadMembers(ctx context.Context, threadID snowflake.ID) int
 		// Members come ordered by user ID.
 		after = page.Items[len(page.Items)-1].UserID
 	}
-	b.Log.Info("Fetched thread member count", "thread_id", threadID, "count", n)
+	b.Log.InfoContext(ctx, "Fetched thread member count", "thread_id", threadID, "count", n)
 	return n
 }
