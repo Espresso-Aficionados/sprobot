@@ -130,11 +130,11 @@ func newEventLogBot(t *testing.T) (*Bot, *discordStub) {
 	b.eventLog = newGuildStateStore(b.S3, b.Log, "eventlog",
 		func() *eventLogState { return &eventLogState{} },
 		func(st *eventLogState) *sync.Mutex { return &st.mu })
-	b.eventLog.set(10, &eventLogState{ChannelID: 15})
+	b.eventLog.set(t.Context(), 10, &eventLogState{ChannelID: 15})
 	b.renameLogs = newGuildStateStore(b.S3, b.Log, "renamelogs",
 		func() *renameLogState { return &renameLogState{} },
 		func(st *renameLogState) *sync.Mutex { return &st.mu })
-	b.renameLogs.set(10, &renameLogState{Destination: 16, Monitored: []snowflake.ID{5}})
+	b.renameLogs.set(t.Context(), 10, &renameLogState{Destination: 16, Monitored: []snowflake.ID{5}})
 	return b, stub
 }
 

@@ -33,7 +33,7 @@ func messageFrom(userID snowflake.ID, roleIDs ...snowflake.ID) discord.Message {
 // after a while, not on every message.
 func TestEnsureAutoRoleBacksOffAfterFailure(t *testing.T) {
 	b, api, _ := newRoleTestBot(t)
-	b.autoRole.set(roleTestGuild, &autoRoleState{RoleID: roleTestMember})
+	b.autoRole.set(t.Context(), roleTestGuild, &autoRoleState{RoleID: roleTestMember})
 	api.setRespond(func(string) (int, string) {
 		return restError(http.StatusForbidden, 50013, "Missing Permissions")
 	})
@@ -66,7 +66,7 @@ func TestEnsureAutoRoleRefusesUngrantableRole(t *testing.T) {
 	addTestRole(b, discord.Role{ID: modRole, Position: 5, Permissions: discord.PermissionManageMessages})
 
 	for _, roleID := range []snowflake.ID{modRole, unknownRole} {
-		b.autoRole.set(roleTestGuild, &autoRoleState{RoleID: roleID})
+		b.autoRole.set(t.Context(), roleTestGuild, &autoRoleState{RoleID: roleID})
 		b.ensureAutoRole(t.Context(), roleTestGuild, messageFrom(20))
 		b.onMemberJoin(t.Context(), memberJoin(20))
 		if n := api.count(roleCall("PUT", 20, roleID)); n != 0 {
@@ -77,7 +77,7 @@ func TestEnsureAutoRoleRefusesUngrantableRole(t *testing.T) {
 
 func TestEnsureAutoRoleSkipsMembersWithTheRole(t *testing.T) {
 	b, api, _ := newRoleTestBot(t)
-	b.autoRole.set(roleTestGuild, &autoRoleState{RoleID: roleTestMember})
+	b.autoRole.set(t.Context(), roleTestGuild, &autoRoleState{RoleID: roleTestMember})
 	b.ensureAutoRole(t.Context(), roleTestGuild, messageFrom(20, roleTestMember))
 	b.ensureAutoRole(t.Context(), roleTestGuild, messageFrom(21))
 	if n := api.count(roleCall("PUT", 20, roleTestMember)); n != 0 {

@@ -126,21 +126,21 @@ func (b *Bot) onSessionReady(context.Context, *events.Ready) {
 	b.mu.Unlock()
 }
 
-func (b *Bot) onThreadMemberAdd(_ context.Context, e *events.ThreadMemberAdd) {
-	b.adjustMemberCount(e.GuildID, e.ThreadID, 1)
+func (b *Bot) onThreadMemberAdd(ctx context.Context, e *events.ThreadMemberAdd) {
+	b.adjustMemberCount(ctx, e.GuildID, e.ThreadID, 1)
 }
 
-func (b *Bot) onThreadMemberRemove(_ context.Context, e *events.ThreadMemberRemove) {
-	b.adjustMemberCount(e.GuildID, e.ThreadID, -1)
+func (b *Bot) onThreadMemberRemove(ctx context.Context, e *events.ThreadMemberRemove) {
+	b.adjustMemberCount(ctx, e.GuildID, e.ThreadID, -1)
 }
 
-func (b *Bot) adjustMemberCount(guildID, threadID snowflake.ID, delta int) {
+func (b *Bot) adjustMemberCount(ctx context.Context, guildID, threadID snowflake.ID, delta int) {
 	b.mu.Lock()
 	cache := b.memberCounts[guildID]
 	applied := cache != nil && cache.adjust(threadID, delta)
 	b.mu.Unlock()
 	if applied {
-		b.Log.Info("Adjusted thread member count", "guild_id", guildID, "thread_id", threadID, "delta", delta)
+		b.Log.InfoContext(ctx, "Adjusted thread member count", "guild_id", guildID, "thread_id", threadID, "delta", delta)
 	}
 }
 
@@ -296,7 +296,7 @@ func (b *Bot) startGuildReminders(ctx context.Context, guildID snowflake.ID) {
 	}
 	b.mu.Unlock()
 	if dropped {
-		b.saveRemindersForGuild(ctx, guildID)
+		_ = b.saveRemindersForGuild(ctx, guildID) // it logs its own failures
 	}
 }
 
@@ -406,7 +406,7 @@ func (b *Bot) stopReminderGoroutine(r *threadReminder) {
 // startGuildReminders.
 func (b *Bot) onChannelDelete(ctx context.Context, e *events.GuildChannelDelete) {
 	if b.dropReminder(e.GuildID, e.ChannelID) {
-		b.saveRemindersForGuild(ctx, e.GuildID)
+		_ = b.saveRemindersForGuild(ctx, e.GuildID) // it logs its own failures
 		b.Log.InfoContext(ctx, "Dropped reminder of deleted channel", "guild_id", e.GuildID, "channel_id", e.ChannelID)
 	}
 }
@@ -624,7 +624,7 @@ func (b *Bot) repostReminder(ctx context.Context, r *threadReminder) bool {
 	r.LastMessageID = sent.ID
 	r.LastPostTime = time.Now()
 	b.mu.Unlock()
-	b.saveRemindersForGuild(ctx, r.GuildID)
+	_ = b.saveRemindersForGuild(ctx, r.GuildID) // it logs its own failures
 	return true
 }
 
@@ -652,7 +652,7 @@ func (b *Bot) editReminder(ctx context.Context, r *threadReminder, embed discord
 	b.mu.Lock()
 	r.LastPostTime = time.Now()
 	b.mu.Unlock()
-	b.saveRemindersForGuild(ctx, r.GuildID)
+	_ = b.saveRemindersForGuild(ctx, r.GuildID) // it logs its own failures
 	return true
 }
 
@@ -808,7 +808,7 @@ func (b *Bot) refreshMemberCounts(ctx context.Context, guildID snowflake.ID, thr
 	cache.prune(time.Now())
 	b.mu.Unlock()
 	b.Log.InfoContext(ctx, "Finished refreshing thread member counts", "guild_id", guildID, "fetched", fetched, "failed", len(toFetch)-fetched)
-	b.saveMemberCountsForGuild(ctx, guildID)
+	_ = b.saveMemberCountsForGuild(ctx, guildID) // it logs its own failures
 }
 
 // threadMembersPageSize is the most members List Thread Members returns at a

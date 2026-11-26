@@ -7,7 +7,7 @@ type Link struct {
 }
 
 var WikiLinks = []Link{
-	{"coffee-reccomendations", "https://espressoaf.com/recommendations/coffee.html", []string{"beans"}},
+	{"coffee-reccomendations", "https://espressoaf.com/recommendations/coffee.html", []string{"beans"}}, //nolint:misspell // the shortcut's name, as users type it
 	{"entry-level-machines", "https://espressoaf.com/recommendations/entry-machines.html", nil},
 	{"midrange-machines", "https://espressoaf.com/recommendations/midrange-machines.html", nil},
 	{"entry-level-grinders", "https://espressoaf.com/recommendations/entry-grinders.html", nil},
@@ -18,7 +18,7 @@ var WikiLinks = []Link{
 	{"puck-prep", "https://espressoaf.com/guides/puckprep.html", []string{"wdt"}},
 	{"espresso-profiling", "https://espressoaf.com/guides/profiling.html", []string{"profiles"}},
 	{"water", "https://espressoaf.com/guides/water.html", nil},
-	{"reccomended-accessories", "https://espressoaf.com/guides/accessories.html", nil},
+	{"reccomended-accessories", "https://espressoaf.com/guides/accessories.html", nil}, //nolint:misspell // the shortcut's name, as users type it
 	{"machine-maintenance", "https://espressoaf.com/guides/maintenance.html", nil},
 	{"coffee-storage", "https://espressoaf.com/guides/storage.html", nil},
 	{"burr-alignment", "https://espressoaf.com/guides/alignment.html", nil},

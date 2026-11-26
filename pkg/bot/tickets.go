@@ -467,7 +467,7 @@ func (b *Bot) handleTicketCloseConfirm(ctx context.Context, e *events.ComponentI
 	opener := ticketOpenerFromMessage(e.Message)
 	b.Log.InfoContext(ctx, "Ticket close confirm", "user_id", e.User().ID, "channel_id", e.Channel().ID(), "opener_id", opener)
 
-	e.UpdateMessage(discord.MessageUpdate{
+	if err := e.UpdateMessage(discord.MessageUpdate{
 		Embeds: &[]discord.Embed{{Description: "Are you sure you want to close this ticket?"}},
 		Components: &[]discord.LayoutComponent{
 			discord.NewActionRow(
@@ -475,7 +475,9 @@ func (b *Bot) handleTicketCloseConfirm(ctx context.Context, e *events.ComponentI
 				discord.NewSecondaryButton("Cancel", ticketCloseCustomID("ticket_close_no", opener)),
 			),
 		},
-	}, rest.WithCtx(ctx))
+	}, rest.WithCtx(ctx)); err != nil {
+		b.Log.ErrorContext(ctx, "Failed to ask for ticket close confirmation", "error", err)
+	}
 }
 
 func (b *Bot) handleTicketCloseCancel(ctx context.Context, e *events.ComponentInteractionCreate, opener snowflake.ID) {
@@ -494,12 +496,14 @@ func (b *Bot) handleTicketCloseCancel(ctx context.Context, e *events.ComponentIn
 		desc = fmt.Sprintf(cfg.TicketIntro, fmt.Sprintf("<@%d>", opener))
 	}
 
-	e.UpdateMessage(discord.MessageUpdate{
+	if err := e.UpdateMessage(discord.MessageUpdate{
 		Embeds: &[]discord.Embed{{Description: desc}},
 		Components: &[]discord.LayoutComponent{
 			discord.NewActionRow(ticketCloseButton(cfg)),
 		},
-	}, rest.WithCtx(ctx))
+	}, rest.WithCtx(ctx)); err != nil {
+		b.Log.ErrorContext(ctx, "Failed to restore ticket close button", "error", err)
+	}
 }
 
 func (b *Bot) handleTicketClose(ctx context.Context, e *events.ComponentInteractionCreate, opener snowflake.ID) {

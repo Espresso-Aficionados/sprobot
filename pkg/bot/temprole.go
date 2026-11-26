@@ -502,7 +502,9 @@ func (b *Bot) handleTempRole(ctx context.Context, e *events.ApplicationCommandIn
 		Description: fmt.Sprintf("%s gave <@&%d> to %s for %s (expires <t:%d:R>)", userMention(e.User().ID), roleID, userMention(targetUser.ID), formatDuration(cfgEntry.Duration), expiry.Unix()),
 	})
 
-	e.CreateMessage(tempRoleAnnouncement(roleID, targetUser.ID, cfgEntry.Duration, expiry), rest.WithCtx(ctx))
+	if err := e.CreateMessage(tempRoleAnnouncement(roleID, targetUser.ID, cfgEntry.Duration, expiry), rest.WithCtx(ctx)); err != nil {
+		b.Log.ErrorContext(ctx, "Failed to send temp role announcement", "error", err)
+	}
 }
 
 // tempRoleAnnouncement is /temprole's public reply. It pings only the user who
@@ -524,7 +526,9 @@ func (b *Bot) handleTempRoleAutocomplete(ctx context.Context, e *events.Autocomp
 
 	cfgSt := b.tempRoleConfig.get(*guildID)
 	if cfgSt == nil {
-		e.AutocompleteResult(nil, rest.WithCtx(ctx))
+		if err := e.AutocompleteResult(nil, rest.WithCtx(ctx)); err != nil {
+			b.Log.WarnContext(ctx, "Failed to send temp role autocomplete results", "error", err)
+		}
 		return
 	}
 
@@ -554,7 +558,9 @@ func (b *Bot) handleTempRoleAutocomplete(ctx context.Context, e *events.Autocomp
 		}
 	}
 
-	e.AutocompleteResult(choices, rest.WithCtx(ctx))
+	if err := e.AutocompleteResult(choices, rest.WithCtx(ctx)); err != nil {
+		b.Log.WarnContext(ctx, "Failed to send temp role autocomplete results", "error", err)
+	}
 }
 
 // --- /config temprole handlers ---
@@ -573,7 +579,7 @@ func (b *Bot) handleTempRoleConfig(ctx context.Context, e *events.ApplicationCom
 	st := b.tempRoleConfig.get(*guildID)
 	if st == nil {
 		st = &tempRoleConfigState{}
-		b.tempRoleConfig.set(*guildID, st)
+		b.tempRoleConfig.set(ctx, *guildID, st)
 	}
 
 	subCmd := data.SubCommandName

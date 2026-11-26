@@ -258,7 +258,7 @@ func newStarboardTest(t *testing.T) (*Bot, *fakeStarboardAPI, *starboardState, *
 		Settings: starboardSettings{OutputChannelID: sbOutput, Emoji: "⭐", Threshold: 2},
 		Entries:  map[snowflake.ID]starboardEntry{},
 	}
-	b.starboard.set(sbGuild, st)
+	b.starboard.set(t.Context(), sbGuild, st)
 	return b, api, st, fakeS3
 }
 
@@ -621,7 +621,9 @@ func TestStarboardSourceDeleteRetriesFailedPostDelete(t *testing.T) {
 	api.mu.Lock()
 	api.deleteStatus = 0
 	api.mu.Unlock()
-	b.retryStarboardDeletes(t.Context())
+	if err := b.retryStarboardDeletes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if deletes := api.calls().deletes; !slices.Equal(deletes, []string{fmt.Sprintf("%d/8000", sbOutput)}) {
 		t.Errorf("deletes = %v, want the post deleted on retry", deletes)
 	}
@@ -681,7 +683,9 @@ func TestStarboardOldPostDeletedWithSource(t *testing.T) {
 	api.addPost(8000, "⭐ 5 | #coffee")
 	st.Entries[old] = starboardEntry{ChannelID: sbSource, Count: 5, StarboardMsgID: 8000, PostChannelID: sbOutput}
 
-	b.saveStarboard(t.Context())
+	if err := b.saveStarboard(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	b.onStarboardSourceDelete(t.Context(), messageDelete(old))
 	if deletes := api.calls().deletes; !slices.Equal(deletes, []string{fmt.Sprintf("%d/8000", sbOutput)}) {
 		t.Errorf("deletes = %v, want the old post deleted", deletes)

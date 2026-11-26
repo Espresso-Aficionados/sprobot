@@ -42,7 +42,7 @@ func TestFetchBlocksLoopbackAtDial(t *testing.T) {
 	c := newTestClient(t, server)
 
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("internal"))
+		_, _ = w.Write([]byte("internal"))
 	}))
 	defer target.Close()
 
@@ -66,7 +66,7 @@ func TestFetchBlocksRedirectTarget(t *testing.T) {
 	c := newTestClient(t, server)
 
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("internal"))
+		_, _ = w.Write([]byte("internal"))
 	}))
 	defer target.Close()
 	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +135,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for objKey := range f.objects {
 			if strings.HasPrefix(objKey, fullPrefix) {
 				bareKey := strings.TrimPrefix(objKey, "/"+bucket+"/")
-				contents.WriteString(fmt.Sprintf("<Contents><Key>%s</Key></Contents>", bareKey))
+				fmt.Fprintf(&contents, "<Contents><Key>%s</Key></Contents>", bareKey)
 			}
 		}
 
@@ -155,7 +155,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		_, _ = w.Write(data)
 
 	case http.MethodHead:
 		data, ok := f.objects[key]
@@ -256,7 +256,7 @@ func TestFetchProfileNotFound(t *testing.T) {
 	c := newTestClient(t, server)
 
 	_, err := c.FetchProfile(context.Background(), sprobot.ProfileTemplate, "123", "999")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -337,7 +337,7 @@ func TestFetchProfileSimpleNotFound(t *testing.T) {
 	c := newTestClient(t, server)
 
 	_, err := c.FetchProfileSimple(context.Background(), "123", "Coffee Setup", "999")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -394,7 +394,9 @@ func TestSaveProfilePopulatesCache(t *testing.T) {
 	c := newTestClient(t, server)
 
 	profile := map[string]string{"Machine": "Linea Mini"}
-	c.SaveProfile(context.Background(), sprobot.ProfileTemplate, "123", "456", profile)
+	if _, _, err := c.SaveProfile(context.Background(), sprobot.ProfileTemplate, "123", "456", profile); err != nil {
+		t.Fatal(err)
+	}
 
 	// Remove from fake S3 to confirm cache is used
 	fake.mu.Lock()
@@ -444,7 +446,7 @@ func TestSaveProfileWithImageDownload(t *testing.T) {
 		img := image.NewRGBA(image.Rect(0, 0, 1, 1))
 		img.Set(0, 0, color.RGBA{255, 0, 0, 255})
 		w.Header().Set("Content-Type", "image/png")
-		png.Encode(w, img)
+		_ = png.Encode(w, img)
 	}))
 	defer imgServer.Close()
 
@@ -470,7 +472,9 @@ func TestSaveProfileWithImageDownload(t *testing.T) {
 	fake.mu.Unlock()
 
 	var saved map[string]string
-	json.Unmarshal(data, &saved)
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
 	if savedImg := saved["Gear Picture"]; savedImg != "" {
 		if !strings.HasPrefix(savedImg, "images/") {
 			t.Errorf("re-hosted image key %q doesn't start with images/", savedImg)
@@ -570,7 +574,9 @@ func TestDeleteProfile(t *testing.T) {
 	seedProfile(t, fake, "test-bucket", "123", "Coffee Setup", "456", profile)
 
 	// Pre-populate cache
-	c.FetchProfile(context.Background(), sprobot.ProfileTemplate, "123", "456")
+	if _, err := c.FetchProfile(context.Background(), sprobot.ProfileTemplate, "123", "456"); err != nil {
+		t.Fatal(err)
+	}
 
 	err := c.DeleteProfile(context.Background(), sprobot.ProfileTemplate, "123", "456")
 	if err != nil {
@@ -579,7 +585,7 @@ func TestDeleteProfile(t *testing.T) {
 
 	// Should be gone from S3
 	_, err = c.FetchProfileSimple(context.Background(), "123", "Coffee Setup", "456")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
 
@@ -599,7 +605,7 @@ func TestSaveModFile(t *testing.T) {
 	// Larger than the old 10 MB cap, which silently truncated.
 	payload := bytes.Repeat([]byte("v"), 11<<20)
 	fileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(payload)
+		_, _ = w.Write(payload)
 	}))
 	defer fileServer.Close()
 
@@ -627,7 +633,7 @@ func TestSaveModFileUnsafeExtension(t *testing.T) {
 	server := httptest.NewServer(fake)
 	defer server.Close()
 	fileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("data"))
+		_, _ = w.Write([]byte("data"))
 	}))
 	defer fileServer.Close()
 
@@ -653,12 +659,12 @@ func TestSaveModFileTooLarge(t *testing.T) {
 
 	for name, handler := range map[string]http.HandlerFunc{
 		"declared length": func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("01234567890"))
+			_, _ = w.Write([]byte("01234567890"))
 		},
 		"chunked": func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("012345"))
+			_, _ = w.Write([]byte("012345"))
 			w.(http.Flusher).Flush()
-			w.Write([]byte("67890"))
+			_, _ = w.Write([]byte("67890"))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -899,7 +905,8 @@ func TestRandomString(t *testing.T) {
 	}
 	// Should be alphanumeric
 	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+		alnum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if !alnum {
 			t.Errorf("randomString contains non-alphanumeric char: %c", c)
 		}
 	}
@@ -940,7 +947,7 @@ func TestFetchStickiesNotFound(t *testing.T) {
 	c := newTestClient(t, server)
 
 	_, err := c.FetchStickies(context.Background(), "999")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -998,7 +1005,7 @@ func TestSaveStickyFile(t *testing.T) {
 	defer server.Close()
 
 	fileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("fake-file-data"))
+		_, _ = w.Write([]byte("fake-file-data"))
 	}))
 	defer fileServer.Close()
 
@@ -1160,7 +1167,7 @@ func TestFetchGuildJSONNotFound(t *testing.T) {
 	c := newTestClient(t, server)
 
 	_, err := c.FetchGuildJSON(context.Background(), "testprefix", "missing")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -1291,10 +1298,10 @@ func TestOpenImage(t *testing.T) {
 		t.Errorf("OpenImage = %q (size %d), want \"data\" (size 4)", got, size)
 	}
 
-	if _, _, err := c.OpenImage(context.Background(), "images/1/missing.png"); err != ErrNotFound {
+	if _, _, err := c.OpenImage(context.Background(), "images/1/missing.png"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing object: err = %v, want ErrNotFound", err)
 	}
-	if _, _, err := c.OpenImage(context.Background(), "https://example.com/a.png"); err != ErrNotFound {
+	if _, _, err := c.OpenImage(context.Background(), "https://example.com/a.png"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("external URL: err = %v, want ErrNotFound", err)
 	}
 }
@@ -1307,7 +1314,7 @@ func TestSaveProfileImageVersion(t *testing.T) {
 
 	imgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		img := image.NewRGBA(image.Rect(0, 0, 1, 1))
-		png.Encode(w, img)
+		_ = png.Encode(w, img)
 	}))
 	defer imgServer.Close()
 
@@ -1317,12 +1324,16 @@ func TestSaveProfileImageVersion(t *testing.T) {
 		fake.mu.Lock()
 		defer fake.mu.Unlock()
 		var p map[string]string
-		json.Unmarshal(fake.objects["/test-bucket/profiles/123/Coffee Setup/456.json"], &p)
+		if err := json.Unmarshal(fake.objects["/test-bucket/profiles/123/Coffee Setup/456.json"], &p); err != nil {
+			t.Fatal(err)
+		}
 		return p
 	}
 
 	// New upload sets a version.
-	c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{"Gear Picture": imgServer.URL + "/a.png"})
+	if _, _, err := c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{"Gear Picture": imgServer.URL + "/a.png"}); err != nil {
+		t.Fatal(err)
+	}
 	first := saved()
 	v1 := first[sprobot.ImageVersionKey]
 	if v1 == "" {
@@ -1330,21 +1341,27 @@ func TestSaveProfileImageVersion(t *testing.T) {
 	}
 
 	// Re-saving the already-hosted key with its version keeps it.
-	c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{
+	if _, _, err := c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{
 		"Gear Picture": first["Gear Picture"], sprobot.ImageVersionKey: v1, "Machine": "Rocket",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if got := saved()[sprobot.ImageVersionKey]; got != v1 {
 		t.Errorf("unchanged image: version = %q, want %q", got, v1)
 	}
 
 	// A failed upload preserves the previous image and its version.
-	c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{"Gear Picture": "http://[::1]:0/bad"})
+	if _, _, err := c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{"Gear Picture": "http://[::1]:0/bad"}); err != nil {
+		t.Fatal(err)
+	}
 	if got := saved(); got["Gear Picture"] != first["Gear Picture"] || got[sprobot.ImageVersionKey] != v1 {
 		t.Errorf("failed upload: image = %q version = %q, want previous image and %q", got["Gear Picture"], got[sprobot.ImageVersionKey], v1)
 	}
 
 	// Removing the image drops the version.
-	c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{"Machine": "Rocket", sprobot.ImageVersionKey: v1})
+	if _, _, err := c.SaveProfile(context.Background(), tmpl, "123", "456", map[string]string{"Machine": "Rocket", sprobot.ImageVersionKey: v1}); err != nil {
+		t.Fatal(err)
+	}
 	if got, ok := saved()[sprobot.ImageVersionKey]; ok {
 		t.Errorf("no image: version = %q, want absent", got)
 	}
@@ -1359,7 +1376,7 @@ func TestSaveProfileDeletesReplacedImage(t *testing.T) {
 	defer server.Close()
 
 	imgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		png.Encode(w, image.NewRGBA(image.Rect(0, 0, 1, 1)))
+		_ = png.Encode(w, image.NewRGBA(image.Rect(0, 0, 1, 1)))
 	}))
 	defer imgServer.Close()
 
@@ -1436,7 +1453,7 @@ func TestSaveFileKeysMatchViewer(t *testing.T) {
 	server := httptest.NewServer(fake)
 	defer server.Close()
 	fileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("\x89PNG\r\n\x1a\ndata")) // a PNG's signature: shortcuts re-host images only
+		_, _ = w.Write([]byte("\x89PNG\r\n\x1a\ndata")) // a PNG's signature: shortcuts re-host images only
 	}))
 	defer fileServer.Close()
 

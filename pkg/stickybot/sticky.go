@@ -89,7 +89,7 @@ func (b *Bot) loadStickies(ctx context.Context) error {
 // retryFailed retries what failed against S3: loads, saves and file
 // deletions. It fails if any of them is still outstanding.
 func (b *Bot) retryFailed(ctx context.Context) error {
-	b.loadStickies(ctx) // refusals are logged; only startup exits on them
+	_ = b.loadStickies(ctx) // refusals are logged; only startup exits on them
 	b.saveUnsavedStickies(ctx)
 	b.retryFileDeletes(ctx)
 	return b.outstanding()

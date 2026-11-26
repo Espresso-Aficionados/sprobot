@@ -88,7 +88,7 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		_, _ = w.Write(data) // a failed write reaches the client as a short body
 
 	case http.MethodHead:
 		data, ok := f.Objects[key]
@@ -139,7 +139,7 @@ func (f *FakeS3) copyObject(w http.ResponseWriter, key, src string) {
 	f.touch(key)
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
-	io.WriteString(w, xml.Header+`<CopyObjectResult><ETag>"fake"</ETag></CopyObjectResult>`)
+	_, _ = io.WriteString(w, xml.Header+`<CopyObjectResult><ETag>"fake"</ETag></CopyObjectResult>`) // a failed write reaches the client as a short body
 }
 
 // touch sets key's last-modified time to now.
@@ -184,8 +184,9 @@ func (f *FakeS3) list(w http.ResponseWriter, bucketPath string, q url.Values) {
 
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
-	io.WriteString(w, xml.Header)
-	xml.NewEncoder(w).Encode(result)
+	// A failed write reaches the client as a short or invalid body.
+	_, _ = io.WriteString(w, xml.Header)
+	_ = xml.NewEncoder(w).Encode(result)
 }
 
 type listBucketResult struct {

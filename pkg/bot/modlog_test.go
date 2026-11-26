@@ -304,7 +304,9 @@ func TestSaveModFilesBoundedAndOrdered(t *testing.T) {
 		mu.Unlock()
 		// Earlier files take longer, so they finish out of order.
 		var i int
-		fmt.Sscanf(att.Filename, "f%d", &i)
+		if _, err := fmt.Sscanf(att.Filename, "f%d", &i); err != nil {
+			t.Error(err)
+		}
 		time.Sleep(time.Duration(7-i) * 3 * time.Millisecond)
 		mu.Lock()
 		running--

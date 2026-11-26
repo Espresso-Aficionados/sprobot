@@ -251,7 +251,7 @@ func TestHandleIndexNonRootReturns404(t *testing.T) {
 
 func TestRender404SetsStatus(t *testing.T) {
 	rec := httptest.NewRecorder()
-	render404(rec)
+	render404(t.Context(), rec)
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
@@ -264,7 +264,7 @@ func TestRender404SetsStatus(t *testing.T) {
 
 func TestRenderPageInvalidName(t *testing.T) {
 	rec := httptest.NewRecorder()
-	renderPage(rec, "nonexistent.html", nil)
+	renderPage(t.Context(), rec, "nonexistent.html", nil)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
@@ -284,7 +284,7 @@ func TestStatusRecorder(t *testing.T) {
 func TestAccessLogMiddleware(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	wrapped := accessLog(handler)
@@ -325,7 +325,7 @@ func TestAccessLogSaysWhenTheResponseWasNotSent(t *testing.T) {
 	}
 
 	buf.Reset()
-	accessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })).
+	accessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })).
 		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
 	if got := buf.String(); !strings.Contains(got, "level=INFO") || strings.Contains(got, "write_error") {
 		t.Errorf("log = %q, want a plain INFO line for a response that was sent", got)

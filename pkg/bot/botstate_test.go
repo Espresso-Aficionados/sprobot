@@ -72,8 +72,12 @@ func TestStateStoresListsEveryStore(t *testing.T) {
 // gateway, and saveState must then write all of it.
 func TestLoadStateThenSaveStateCoversEveryStoreAndGuild(t *testing.T) {
 	b, h := newStateBot(t)
-	b.loadState(t.Context())
-	b.saveState(t.Context())
+	if err := b.loadState(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.saveState(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	for name, f := range storeFields(b) {
 		key := f.Elem().FieldByName("s3Key").String()
@@ -98,11 +102,15 @@ func TestSaveStateSkipsGuildsBotIsNotIn(t *testing.T) {
 	b.TestGuildIDsOverride = []snowflake.ID{devGuild}
 	prodTickets := fmt.Sprintf("/test-bucket/tickets/%d.json", prodGuild)
 	h.put(prodTickets, `{"counter":5}`)
-	b.loadState(t.Context())
+	if err := b.loadState(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	// Meanwhile the prod instance opens a ticket.
 	h.put(prodTickets, `{"counter":6}`)
 
-	b.saveState(t.Context())
+	if err := b.saveState(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	for name, f := range storeFields(b) {
 		key := f.Elem().FieldByName("s3Key").String()
@@ -140,7 +148,9 @@ func TestServedGuildsIncludesUnreadyAndUnavailable(t *testing.T) {
 // its change is lost.
 func TestStopLoopsWaitsForRunningLoop(t *testing.T) {
 	b, h := newStateBot(t)
-	b.loadState(t.Context())
+	if err := b.loadState(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	b.Ready.Store(true)
 	guildID := botutil.AllowedGuildIDs[0]
 
@@ -165,7 +175,9 @@ func TestStopLoopsWaitsForRunningLoop(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		b.stopLoops()
-		b.saveState(t.Context())
+		if err := b.saveState(t.Context()); err != nil {
+			t.Error(err)
+		}
 		close(done)
 	}()
 	select {

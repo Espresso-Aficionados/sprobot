@@ -29,9 +29,11 @@ func (b *Bot) handleWiki(ctx context.Context, e *events.ApplicationCommandIntera
 
 	for _, link := range sprobot.WikiLinks {
 		if link.Shortcut == page {
-			e.CreateMessage(discord.MessageCreate{
+			if err := e.CreateMessage(discord.MessageCreate{
 				Content: link.URL,
-			}, rest.WithCtx(ctx))
+			}, rest.WithCtx(ctx)); err != nil {
+				b.Log.ErrorContext(ctx, "Failed to send wiki link", "error", err)
+			}
 			return
 		}
 	}
@@ -81,5 +83,7 @@ func (b *Bot) handleAutocomplete(ctx context.Context, e *events.AutocompleteInte
 		}
 	}
 
-	e.AutocompleteResult(choices, rest.WithCtx(ctx))
+	if err := e.AutocompleteResult(choices, rest.WithCtx(ctx)); err != nil {
+		b.Log.WarnContext(ctx, "Failed to send wiki autocomplete results", "error", err)
+	}
 }

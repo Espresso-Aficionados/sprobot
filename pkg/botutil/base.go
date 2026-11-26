@@ -1,6 +1,7 @@
 package botutil
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net"
@@ -143,28 +144,28 @@ func (b *BaseBot) GuildIDs() []snowflake.ID {
 // own, so it first waits for b.Ready: without that, an empty cache read too
 // early looked like every guild ready, and commands registered for none. A
 // resumed session then has no guilds to wait for: it sends no GUILD_CREATE.
-func (b *BaseBot) WaitForGuilds(timeout time.Duration) {
+func (b *BaseBot) WaitForGuilds(ctx context.Context, timeout time.Duration) {
 	deadline := time.After(timeout)
 	for !b.Ready.Load() {
 		select {
 		case <-deadline:
-			b.Log.Warn("Timed out waiting for the gateway session to be ready")
+			b.Log.WarnContext(ctx, "Timed out waiting for the gateway session to be ready")
 			return
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
 	if b.InResumedSession() {
-		b.Log.Info("Resumed: guilds from the handed-off session", "count", len(b.resumed.Guilds))
+		b.Log.InfoContext(ctx, "Resumed: guilds from the handed-off session", "count", len(b.resumed.Guilds))
 		return
 	}
 	for {
 		if len(b.Client.Caches.UnreadyGuildIDs()) == 0 {
-			b.Log.Info("All guilds ready", "count", b.Client.Caches.GuildsLen())
+			b.Log.InfoContext(ctx, "All guilds ready", "count", b.Client.Caches.GuildsLen())
 			return
 		}
 		select {
 		case <-deadline:
-			b.Log.Warn("Timed out waiting for guilds", "unready", len(b.Client.Caches.UnreadyGuildIDs()))
+			b.Log.WarnContext(ctx, "Timed out waiting for guilds", "unready", len(b.Client.Caches.UnreadyGuildIDs()))
 			return
 		case <-time.After(100 * time.Millisecond):
 		}

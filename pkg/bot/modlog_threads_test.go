@@ -653,7 +653,7 @@ func TestModLogConfigSetRequiresForum(t *testing.T) {
 		func() *modLogState { return &modLogState{} },
 		func(st *modLogState) *sync.Mutex { return &st.mu })
 	st := &modLogState{ChannelID: 600}
-	b.modLog.set(testModLogGuild, st)
+	b.modLog.set(t.Context(), testModLogGuild, st)
 
 	var response string
 	b.handleModLogConfig(t.Context(), slashInteraction(t, discord.ChannelTypeGuildText, &response))

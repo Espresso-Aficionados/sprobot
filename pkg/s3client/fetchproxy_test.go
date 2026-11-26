@@ -60,7 +60,7 @@ func (p *recordingProxy) serve(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, p.redirect, http.StatusFound)
 			return
 		}
-		w.Write([]byte(p.body))
+		_, _ = w.Write([]byte(p.body))
 		return
 	}
 	upstream, err := net.Dial("tcp", p.tunnelTo)
@@ -75,8 +75,9 @@ func (p *recordingProxy) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	go func() { io.Copy(upstream, buf); upstream.(*net.TCPConn).CloseWrite() }()
-	io.Copy(conn, upstream)
+	// Either side failing just ends the tunnel, and with it the request under test.
+	go func() { _, _ = io.Copy(upstream, buf); _ = upstream.(*net.TCPConn).CloseWrite() }()
+	_, _ = io.Copy(conn, upstream)
 }
 
 func (p *recordingProxy) seen() []string {
@@ -135,7 +136,7 @@ func TestFetchThroughHTTPProxy(t *testing.T) {
 // tunnel.
 func TestFetchThroughConnectProxy(t *testing.T) {
 	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("tls image " + r.Host))
+		_, _ = w.Write([]byte("tls image " + r.Host))
 	}))
 	t.Cleanup(target.Close)
 	_, port, _ := net.SplitHostPort(target.Listener.Addr().String())
@@ -188,7 +189,7 @@ func TestValidateImageURLLeavesProxiedHostsToTheProxy(t *testing.T) {
 // net/http never proxies) is dialed directly and refused.
 func TestFetchProxyExemptsOnlyTheProxy(t *testing.T) {
 	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("internal"))
+		_, _ = w.Write([]byte("internal"))
 	}))
 	t.Cleanup(internal.Close)
 	p := (&recordingProxy{redirect: internal.URL + "/secret.png"}).start(t)
@@ -288,7 +289,7 @@ func TestSaveShortcutImageRefusesNonImages(t *testing.T) {
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("<!doctype html><html><body>not an image</body></html>"))
+		_, _ = w.Write([]byte("<!doctype html><html><body>not an image</body></html>"))
 	}))
 	t.Cleanup(page.Close)
 	c := newTestClient(t, server)

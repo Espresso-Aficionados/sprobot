@@ -328,9 +328,11 @@ func (b *Bot) handleTopPosters(ctx context.Context, e *events.ApplicationCommand
 		Description: description,
 	}
 
-	e.CreateMessage(discord.MessageCreate{
+	if err := e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
-	}, rest.WithCtx(ctx))
+	}, rest.WithCtx(ctx)); err != nil {
+		b.Log.ErrorContext(ctx, "Failed to send top posters response", "error", err)
+	}
 }
 
 // --- /config topposters handlers ---

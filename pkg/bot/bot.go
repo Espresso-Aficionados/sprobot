@@ -422,7 +422,7 @@ func (b *Bot) Run() error {
 		b.cacheSelfUser(start)
 	}
 
-	b.WaitForGuilds(30 * time.Second)
+	b.WaitForGuilds(start, 30*time.Second)
 
 	b.ensureTicketPanels(start)
 	b.ensureSelfrolePanels(start)
@@ -439,7 +439,7 @@ func (b *Bot) Run() error {
 	b.startLoop(5*time.Minute, saveShortcutsJob, b.shortcuts.save)
 	b.startLoop(5*time.Minute, saveTicketsJob, b.tickets.save)
 	b.startLoop(5*time.Minute, saveWelcomeJob, b.welcome.save)
-	b.startLoop(5*time.Minute, saveCachesJob, func(context.Context) error { return b.saveCaches() }) // local files only; also prunes expired messages
+	b.startLoop(5*time.Minute, saveCachesJob, b.saveCaches) // local files only; also prunes expired messages
 	b.startLoop(1*time.Hour, pruneCorruptBackupsJob, func(ctx context.Context) error { return pruneCorruptBackups(ctx, b.S3, b.Log, time.Now()) })
 	b.startLoop(5*time.Minute, saveStarboardJob, b.saveStarboard)
 	b.startLoop(5*time.Minute, retryStarboardDeletesJob, b.retryStarboardDeletes)
@@ -455,7 +455,7 @@ func (b *Bot) Run() error {
 	handoff := b.HandOffGateway(stop, shutdownErr)
 	b.stopLoops()
 	stateErr := b.saveState(stop)
-	cacheErr := b.saveCaches() // it logs its own failures
+	cacheErr := b.saveCaches(stop) // it logs its own failures
 	// A resume continues from exactly what was saved: only then.
 	b.SaveHandoff(stop, handoff, stateErr == nil && cacheErr == nil)
 	return shutdownErr

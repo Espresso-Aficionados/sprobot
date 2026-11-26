@@ -115,7 +115,7 @@ func (s *discordStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.status)
-	io.WriteString(w, resp.body)
+	_, _ = io.WriteString(w, resp.body)
 }
 
 // reset forgets the requests recorded so far.

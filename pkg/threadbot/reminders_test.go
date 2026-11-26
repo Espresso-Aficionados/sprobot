@@ -91,10 +91,14 @@ func TestZeroSettingsSurviveReload(t *testing.T) {
 	b.reminders[guildID] = map[snowflake.ID]*threadReminder{
 		100: {ChannelID: 100, GuildID: guildID, MinIdleMins: 0, MaxIdleMins: 10, MsgThreshold: 0, TimeThresholdMins: 60, Buffer: 0},
 	}
-	b.saveRemindersForGuild(t.Context(), guildID)
+	if err := b.saveRemindersForGuild(t.Context(), guildID); err != nil {
+		t.Fatal(err)
+	}
 
 	b2 := newTestBot(t, c)
-	b2.loadReminders(t.Context())
+	if err := b2.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	r := b2.reminders[guildID][100]
 	if r == nil {
 		t.Fatal("reminder not reloaded")
@@ -113,7 +117,9 @@ func TestLoadRemindersNotFound(t *testing.T) {
 	b := newTestBot(t, c)
 
 	// Should not panic or error on missing data
-	b.loadReminders(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	guildID := snowflake.ID(1013566342345019512)
 	if channels, ok := b.reminders[guildID]; ok && len(channels) > 0 {
@@ -146,7 +152,9 @@ func TestLoadRemindersFromS3(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadReminders(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	guildID := snowflake.ID(1013566342345019512)
 	channels, ok := b.reminders[guildID]
@@ -189,7 +197,9 @@ func TestSaveRemindersForGuild(t *testing.T) {
 		},
 	}
 
-	b.saveRemindersForGuild(t.Context(), guildID)
+	if err := b.saveRemindersForGuild(t.Context(), guildID); err != nil {
+		t.Fatal(err)
+	}
 
 	// Verify written to S3
 	fake.Mu.Lock()
@@ -226,7 +236,9 @@ func TestSaveRemindersForGuildNoData(t *testing.T) {
 	b := newTestBot(t, c)
 
 	// Saving for a guild that isn't in the map should not panic
-	b.saveRemindersForGuild(t.Context(), 999)
+	if err := b.saveRemindersForGuild(t.Context(), 999); err != nil {
+		t.Fatal(err)
+	}
 
 	fake.Mu.Lock()
 	_, ok := fake.Objects["/test-bucket/threadreminders/999.json"]
@@ -262,11 +274,15 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 		},
 	}
 
-	b.saveRemindersForGuild(t.Context(), guildID)
+	if err := b.saveRemindersForGuild(t.Context(), guildID); err != nil {
+		t.Fatal(err)
+	}
 
 	// Load into a fresh bot
 	b2 := newTestBot(t, c)
-	b2.loadReminders(t.Context())
+	if err := b2.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	channels, ok := b2.reminders[guildID]
 	if !ok {
@@ -315,7 +331,9 @@ func TestSaveAllReminders(t *testing.T) {
 		100: {ChannelID: 100, GuildID: guild1, Enabled: true, MinIdleMins: 30, MaxIdleMins: 720, MsgThreshold: 30},
 	}
 
-	b.saveAllReminders(t.Context())
+	if err := b.saveAllReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	fake.Mu.Lock()
 	_, ok := fake.Objects["/test-bucket/threadreminders/1013566342345019512.json"]
@@ -399,7 +417,9 @@ func TestLoadRemindersInvalidJSON(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadReminders(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	// Left unloaded, so the stored file isn't saved over.
 	guildID := snowflake.ID(1013566342345019512)
@@ -525,7 +545,9 @@ func TestLoadMemberCountsNotFound(t *testing.T) {
 	c := testutil.NewTestS3Client(t, server)
 	b := newTestBot(t, c)
 
-	b.loadMemberCounts(t.Context())
+	if err := b.loadMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	// Nothing stored: the guild starts with an empty cache it may save.
 	guildID := snowflake.ID(1013566342345019512)
@@ -554,7 +576,9 @@ func TestLoadMemberCountsFromS3(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadMemberCounts(t.Context())
+	if err := b.loadMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	guildID := snowflake.ID(1013566342345019512)
 	loaded, ok := b.memberCounts[guildID]
@@ -585,7 +609,9 @@ func TestSaveMemberCounts(t *testing.T) {
 		Fetched: map[snowflake.ID]time.Time{snowflake.ID(111): time.Now().Truncate(time.Second)},
 	}
 
-	b.saveMemberCounts(t.Context())
+	if err := b.saveMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	fake.Mu.Lock()
 	data, ok := fake.Objects["/test-bucket/threadmembercounts/1013566342345019512.json"]
@@ -616,7 +642,9 @@ func TestLoadMemberCountsInvalidJSON(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadMemberCounts(t.Context())
+	if err := b.loadMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	// Left unloaded, so the stored file isn't saved over.
 	guildID := snowflake.ID(1013566342345019512)
@@ -639,11 +667,15 @@ func TestSaveRemindersMultipleChannels(t *testing.T) {
 		200: {ChannelID: 200, GuildID: guildID, EnabledBy: 222, Enabled: false, MinIdleMins: 60, MaxIdleMins: 1440, MsgThreshold: 50},
 	}
 
-	b.saveRemindersForGuild(t.Context(), guildID)
+	if err := b.saveRemindersForGuild(t.Context(), guildID); err != nil {
+		t.Fatal(err)
+	}
 
 	// Load and verify both
 	b2 := newTestBot(t, c)
-	b2.loadReminders(t.Context())
+	if err := b2.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	channels := b2.reminders[guildID]
 	if len(channels) != 2 {

@@ -216,7 +216,7 @@ func TestSaveTopPostersPrunesWhatItStores(t *testing.T) {
 	b.topPosters = newGuildStateStore[guildPostCounts](b.S3, b.Log, "topposters", nil,
 		func(gc *guildPostCounts) *sync.Mutex { return &gc.mu })
 	today := time.Now().UTC().Format("2006-01-02")
-	b.topPosters.set(1, &guildPostCounts{
+	b.topPosters.set(t.Context(), 1, &guildPostCounts{
 		Counts: map[string]map[string]int{
 			"2026-01-01": {"1": 5},
 			today:        {"2": 3},
@@ -224,7 +224,9 @@ func TestSaveTopPostersPrunesWhatItStores(t *testing.T) {
 		Usernames: map[string]string{"1": "alice", "2": "bob"},
 	})
 
-	b.saveTopPosters(t.Context())
+	if err := b.saveTopPosters(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	fake.Mu.Lock()
 	body, ok := fake.Objects["/test-bucket/topposters/1.json"]

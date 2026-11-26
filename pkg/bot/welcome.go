@@ -259,18 +259,12 @@ func (b *Bot) handleWelcomeTest(ctx context.Context, e *events.ApplicationComman
 	ch, err := b.Client.Rest.CreateDMChannel(e.User().ID, rest.WithCtx(ctx))
 	if err != nil {
 		b.Log.ErrorContext(ctx, "Failed to create DM channel for welcome test", "user_id", e.User().ID, "guild_id", *guildID, "error", err)
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-			Content: "Failed to send test DM.",
-			Flags:   discord.MessageFlagEphemeral,
-		}, rest.WithCtx(ctx))
+		botutil.FollowupEphemeral(ctx, b.Client, e.Token(), "Failed to send test DM.")
 		return
 	}
 	if _, err := b.Client.Rest.CreateMessage(ch.ID(), discord.MessageCreate{Content: msg}, rest.WithCtx(ctx)); err != nil {
 		b.Log.ErrorContext(ctx, "Failed to send welcome test DM", "user_id", e.User().ID, "guild_id", *guildID, "error", err)
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-			Content: "Failed to send test DM.",
-			Flags:   discord.MessageFlagEphemeral,
-		}, rest.WithCtx(ctx))
+		botutil.FollowupEphemeral(ctx, b.Client, e.Token(), "Failed to send test DM.")
 		return
 	}
 
@@ -278,10 +272,7 @@ func (b *Bot) handleWelcomeTest(ctx context.Context, e *events.ApplicationComman
 	if !enabled {
 		note = " (currently disabled — new members will not receive this)"
 	}
-	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), discord.MessageCreate{
-		Content: fmt.Sprintf("Welcome DM sent. Check your DMs!%s", note),
-		Flags:   discord.MessageFlagEphemeral,
-	}, rest.WithCtx(ctx))
+	botutil.FollowupEphemeral(ctx, b.Client, e.Token(), fmt.Sprintf("Welcome DM sent. Check your DMs!%s", note))
 }
 
 func (b *Bot) handleWelcomeEnable(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {

@@ -69,7 +69,9 @@ func TestLoadStickiesKeepsZeroSettings(t *testing.T) {
 		"min_idle_mins": 0, "max_idle_mins": 10, "msg_threshold": 0, "time_threshold_mins": 5, "buffer": 0}}`)
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, server))
-	b.loadStickies(t.Context())
+	if err := b.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	s := b.stickies[1013566342345019512][111]
 	if s == nil {
@@ -89,7 +91,9 @@ func TestLoadStickiesNotFound(t *testing.T) {
 	b := newTestBot(t, c)
 
 	// Should not panic or error on missing data
-	b.loadStickies(t.Context())
+	if err := b.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	guildID := snowflake.ID(1013566342345019512)
 	if channels, ok := b.stickies[guildID]; ok && len(channels) > 0 {
@@ -122,7 +126,9 @@ func TestLoadStickiesFromS3(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadStickies(t.Context())
+	if err := b.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	guildID := snowflake.ID(1013566342345019512)
 	channels, ok := b.stickies[guildID]
@@ -243,7 +249,9 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 
 	// Load into a fresh bot
 	b2 := newTestBot(t, c)
-	b2.loadStickies(t.Context())
+	if err := b2.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	channels, ok := b2.stickies[guildID]
 	if !ok {
@@ -331,7 +339,9 @@ func TestLoadFailureBlocksChangesUntilRetry(t *testing.T) {
 	fake.Fail[path] = http.StatusForbidden
 	fake.Mu.Unlock()
 
-	b.loadStickies(t.Context())
+	if err := b.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	newSticky := func() *stickyMessage {
 		return &stickyMessage{ChannelID: 500, GuildID: testGuildID, Active: true, MaxIdleMins: 10, MsgThreshold: 1}
 	}
@@ -374,7 +384,9 @@ func TestRetryFailedLoadsUnloadedGuild(t *testing.T) {
 	fake.Fail[path] = http.StatusForbidden
 	fake.Mu.Unlock()
 
-	b.loadStickies(t.Context())
+	if err := b.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := b.stickies[testGuildID]; ok {
 		t.Fatal("guild loaded although its fetch failed")
 	}
@@ -580,7 +592,9 @@ func TestLoadStickiesInvalidJSON(t *testing.T) {
 	fake.Mu.Unlock()
 
 	b := newTestBot(t, c)
-	b.loadStickies(t.Context())
+	if err := b.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	// Not loaded, so nothing saves over the stored stickies; another allowed
 	// guild with none stored still loads.
@@ -635,7 +649,9 @@ func TestSaveStickiesMultipleChannels(t *testing.T) {
 
 	// Load and verify both
 	b2 := newTestBot(t, c)
-	b2.loadStickies(t.Context())
+	if err := b2.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	channels := b2.stickies[guildID]
 	if len(channels) != 2 {

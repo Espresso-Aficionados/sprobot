@@ -45,7 +45,7 @@ func TestWikiLinksUniqueShortcuts(t *testing.T) {
 func TestWikiLinksWithHints(t *testing.T) {
 	// Verify specific links have the expected hints
 	hintsExpected := map[string][]string{
-		"coffee-reccomendations": {"beans"},
+		"coffee-reccomendations": {"beans"}, //nolint:misspell // the shortcut's name, as users type it
 		"coffee-scales":          {"weight"},
 		"puck-prep":              {"wdt"},
 		"espresso-profiling":     {"profiles"},

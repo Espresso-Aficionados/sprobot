@@ -156,7 +156,9 @@ func TestFailedFileDeletesAreRetried(t *testing.T) {
 	fakeS3.Mu.Lock()
 	delete(fakeS3.Fail, "/test-bucket/"+key)
 	fakeS3.Mu.Unlock()
-	b.retryFailed(t.Context())
+	if err := b.retryFailed(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if left := stored(); len(left) != 0 {
 		t.Errorf("files left %q after the retry, want none", left)
