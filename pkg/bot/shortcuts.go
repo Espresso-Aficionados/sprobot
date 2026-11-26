@@ -140,9 +140,11 @@ func (b *Bot) handleShortcut(ctx context.Context, e *events.ApplicationCommandIn
 	} else {
 		embed.Description = response
 	}
-	e.CreateMessage(discord.MessageCreate{
+	if err := e.CreateMessage(discord.MessageCreate{
 		Embeds: []discord.Embed{embed},
-	}, rest.WithCtx(ctx))
+	}, rest.WithCtx(ctx)); err != nil {
+		b.Log.ErrorContext(ctx, "Failed to send shortcut response", "error", err)
+	}
 }
 
 // expandShortcutVars replaces template placeholders in a shortcut response.
@@ -199,7 +201,9 @@ func (b *Bot) handleShortcutAutocomplete(ctx context.Context, e *events.Autocomp
 
 	st := b.shortcuts.get(*guildID)
 	if st == nil {
-		e.AutocompleteResult(nil, rest.WithCtx(ctx))
+		if err := e.AutocompleteResult(nil, rest.WithCtx(ctx)); err != nil {
+			b.Log.WarnContext(ctx, "Failed to send shortcut autocomplete results", "error", err)
+		}
 		return
 	}
 
@@ -211,7 +215,9 @@ func (b *Bot) handleShortcutAutocomplete(ctx context.Context, e *events.Autocomp
 	for _, name := range names {
 		choices = append(choices, discord.AutocompleteChoiceString{Name: name, Value: name})
 	}
-	e.AutocompleteResult(choices, rest.WithCtx(ctx))
+	if err := e.AutocompleteResult(choices, rest.WithCtx(ctx)); err != nil {
+		b.Log.WarnContext(ctx, "Failed to send shortcut autocomplete results", "error", err)
+	}
 }
 
 func (b *Bot) handleShortcutConfig(ctx context.Context, e *events.ApplicationCommandInteractionCreate) {

@@ -441,7 +441,9 @@ func (b *Bot) handleMarketProgress(ctx context.Context, e *events.ApplicationCom
 		if ephemeral {
 			msg.Flags = discord.MessageFlagEphemeral
 		}
-		b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx))
+		if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx)); err != nil {
+			b.Log.ErrorContext(ctx, "Failed to send market progress follow-up", "error", err)
+		}
 		return
 	}
 	if searchErr != nil {
@@ -461,7 +463,9 @@ func (b *Bot) handleMarketProgress(ctx context.Context, e *events.ApplicationCom
 	if ephemeral {
 		msg.Flags = discord.MessageFlagEphemeral
 	}
-	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx))
+	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx)); err != nil {
+		b.Log.ErrorContext(ctx, "Failed to send market progress follow-up", "error", err)
+	}
 }
 
 // marketProgress is what /market progress shows about a user.
@@ -639,7 +643,9 @@ func (b *Bot) handleMarketLeaderboard(ctx context.Context, e *events.Application
 	if ephemeral {
 		msg.Flags = discord.MessageFlagEphemeral
 	}
-	b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx))
+	if _, err := b.Client.Rest.CreateFollowupMessage(b.Client.ApplicationID, e.Token(), msg, rest.WithCtx(ctx)); err != nil {
+		b.Log.ErrorContext(ctx, "Failed to send market leaderboard follow-up", "error", err)
+	}
 }
 
 // --- /config market handlers ---

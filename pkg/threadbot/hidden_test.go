@@ -51,7 +51,9 @@ func TestHiddenThreadsExcludedPersistedAndPruned(t *testing.T) {
 	api.addThread("201", 5, 5)
 	api.addThread("202", 5, 5)
 
-	b.loadHiddenThreads(t.Context())
+	if err := b.loadHiddenThreads(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if changed, err := b.setHidden(t.Context(), guildID, 202, true); !changed || err != nil {
 		t.Fatalf("hide: changed=%v err=%v", changed, err)
@@ -70,7 +72,9 @@ func TestHiddenThreadsExcludedPersistedAndPruned(t *testing.T) {
 
 	// A restart reloads the hidden list from S3.
 	b2 := newTestBot(t, s3c)
-	b2.loadHiddenThreads(t.Context())
+	if err := b2.loadHiddenThreads(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := mustHiddenSet(t, b2, guildID)[202]; !ok {
 		t.Fatal("hidden thread not reloaded from S3")
 	}
@@ -81,7 +85,9 @@ func TestHiddenThreadsExcludedPersistedAndPruned(t *testing.T) {
 		t.Error("deleted thread still hidden")
 	}
 	b3 := newTestBot(t, s3c)
-	b3.loadHiddenThreads(t.Context())
+	if err := b3.loadHiddenThreads(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if len(mustHiddenSet(t, b3, guildID)) != 0 {
 		t.Error("thread delete was not persisted")
 	}
@@ -114,7 +120,9 @@ func TestSetHiddenRollsBackFailedSave(t *testing.T) {
 	defer srv.Close()
 	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
 	guildID := snowflake.ID(1013566342345019512)
-	b.loadHiddenThreads(t.Context())
+	if err := b.loadHiddenThreads(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	fs.failPut.Store(true)
 	if changed, err := b.setHidden(t.Context(), guildID, 300, true); changed || err == nil {
@@ -130,7 +138,9 @@ func TestSetHiddenRollsBackFailedSave(t *testing.T) {
 		t.Fatalf("retry: changed=%v err=%v", changed, err)
 	}
 	b2 := newTestBot(t, testutil.NewTestS3Client(t, srv))
-	b2.loadHiddenThreads(t.Context())
+	if err := b2.loadHiddenThreads(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := mustHiddenSet(t, b2, guildID)[300]; !ok {
 		t.Error("retried hide was not persisted")
 	}
@@ -157,7 +167,9 @@ func TestSetHiddenNeverOverwritesUnloadedList(t *testing.T) {
 	// stored list.
 	fs.failGet.Store(true)
 	b := newTestBot(t, s3c)
-	b.loadHiddenThreads(t.Context())
+	if err := b.loadHiddenThreads(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := b.setHidden(t.Context(), devGuild, 20, true); !errors.Is(err, errHiddenNotLoaded) {
 		t.Fatalf("hide while unloaded: err=%v, want errHiddenNotLoaded", err)
 	}

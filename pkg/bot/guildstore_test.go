@@ -129,12 +129,12 @@ func TestGuildStateStoreGetSet(t *testing.T) {
 		t.Error("expected nil for missing guild")
 	}
 
-	store.set(testGuild, &testState{Value: "hello"})
+	store.set(t.Context(), testGuild, &testState{Value: "hello"})
 	if got := value(store.get(testGuild)); got != "hello" {
 		t.Errorf("Value = %q, want %q", got, "hello")
 	}
 
-	store.set(testGuild, &testState{Value: "second"})
+	store.set(t.Context(), testGuild, &testState{Value: "second"})
 	if got := value(store.get(testGuild)); got != "second" {
 		t.Errorf("Value after overwrite = %q, want %q", got, "second")
 	}
@@ -158,13 +158,13 @@ func TestGuildStateStoreGetOrCreate(t *testing.T) {
 
 func TestGuildStateStoreEach(t *testing.T) {
 	store, _ := newTestStore(t)
-	store.set(100, &testState{Value: "a"})
-	store.set(200, &testState{Value: "b"})
+	store.set(t.Context(), 100, &testState{Value: "a"})
+	store.set(t.Context(), 200, &testState{Value: "b"})
 
 	seen := make(map[snowflake.ID]string)
 	store.each(func(guildID snowflake.ID, st *testState) {
 		seen[guildID] = st.Value
-		store.set(guildID, st) // each holds no store lock while calling fn
+		store.set(t.Context(), guildID, st) // each holds no store lock while calling fn
 	})
 
 	if len(seen) != 2 || seen[100] != "a" || seen[200] != "b" {
@@ -177,7 +177,9 @@ func TestGuildStateStoreLoadMissingUsesOnMissing(t *testing.T) {
 	store.onMissing = func(guildID snowflake.ID, st *testState) { st.Value = fmt.Sprintf("default %d", guildID) }
 	store.postLoad = func(*testState) { t.Error("postLoad called without data") }
 
-	store.load(t.Context(), []snowflake.ID{testGuild})
+	if err := store.load(t.Context(), []snowflake.ID{testGuild}); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := value(store.get(testGuild)); got != "default 123" {
 		t.Errorf("Value = %q, want onMissing's default", got)
@@ -190,7 +192,9 @@ func TestGuildStateStoreLoadDecodesAndRunsPostLoad(t *testing.T) {
 	store.onMissing = func(snowflake.ID, *testState) { t.Error("onMissing called for existing data") }
 	store.postLoad = func(st *testState) { st.Value += " +postLoad" }
 
-	store.load(t.Context(), []snowflake.ID{testGuild})
+	if err := store.load(t.Context(), []snowflake.ID{testGuild}); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := value(store.get(testGuild)); got != "saved +postLoad" {
 		t.Errorf("Value = %q, want the saved value after postLoad", got)
@@ -206,12 +210,14 @@ func TestGuildStateStoreFetchErrorRefusesWritesUntilRetry(t *testing.T) {
 	h.setHook(failGets(testObject(testGuild)))
 	store.onMissing = func(_ snowflake.ID, st *testState) { st.Value = "default" }
 
-	store.load(t.Context(), []snowflake.ID{testGuild, other})
+	if err := store.load(t.Context(), []snowflake.ID{testGuild, other}); err != nil {
+		t.Fatal(err)
+	}
 
 	if st := store.get(testGuild); st != nil {
 		t.Fatalf("failed guild has state %q, want none", value(st))
 	}
-	store.set(testGuild, &testState{Value: "fresh"})
+	store.set(t.Context(), testGuild, &testState{Value: "fresh"})
 	if st := store.get(testGuild); st != nil {
 		t.Errorf("set installed state %q for a failed guild", value(st))
 	}
@@ -276,7 +282,9 @@ func TestGuildStateStoreDecodeErrorBacksUpThenUsesDefaults(t *testing.T) {
 	h.put(testObject(testGuild), `{"value":`)
 	store.onMissing = func(_ snowflake.ID, st *testState) { st.Value = "default" }
 
-	store.load(t.Context(), []snowflake.ID{testGuild})
+	if err := store.load(t.Context(), []snowflake.ID{testGuild}); err != nil {
+		t.Fatal(err)
+	}
 
 	backups := corruptBackups(h)
 	if len(backups) != 1 {
@@ -299,7 +307,9 @@ func TestGuildStateStoreDecodeErrorBackupFailureIsALoadFailure(t *testing.T) {
 	h.put(testObject(testGuild), `{"value":`)
 	h.setHook(func(r *http.Request) bool { return !strings.HasPrefix(r.URL.Path, "/test-bucket/corrupt/") })
 
-	store.load(t.Context(), []snowflake.ID{testGuild})
+	if err := store.load(t.Context(), []snowflake.ID{testGuild}); err != nil {
+		t.Fatal(err)
+	}
 
 	if st := store.get(testGuild); st != nil {
 		t.Fatalf("state %q installed without a backup", value(st))
@@ -309,7 +319,9 @@ func TestGuildStateStoreDecodeErrorBackupFailureIsALoadFailure(t *testing.T) {
 	}
 
 	h.setHook(nil)
-	store.retryFailedLoads(t.Context())
+	if err := store.retryFailedLoads(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if store.get(testGuild) == nil {
 		t.Error("no state after the retry backed up the data")
 	}
@@ -324,17 +336,23 @@ func TestGuildStateStoreCorruptBackupsExpire(t *testing.T) {
 	h.put(testObject(testGuild), `{"value":`)
 	const undated = "/test-bucket/corrupt/test/notes.json"
 	h.put(undated, "{}")
-	store.load(t.Context(), []snowflake.ID{testGuild})
+	if err := store.load(t.Context(), []snowflake.ID{testGuild}); err != nil {
+		t.Fatal(err)
+	}
 	if len(corruptBackups(h)) != 1 {
 		t.Fatal("no backup written")
 	}
 
-	pruneCorruptBackups(t.Context(), store.s3, store.log, time.Now())
+	if err := pruneCorruptBackups(t.Context(), store.s3, store.log, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	if len(corruptBackups(h)) != 1 {
 		t.Fatal("backup deleted before its retention ended")
 	}
 
-	pruneCorruptBackups(t.Context(), store.s3, store.log, time.Now().Add(corruptRetention+time.Minute))
+	if err := pruneCorruptBackups(t.Context(), store.s3, store.log, time.Now().Add(corruptRetention+time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	if backups := corruptBackups(h); len(backups) != 0 {
 		t.Errorf("backups kept past their retention: %v", backups)
 	}
@@ -351,8 +369,8 @@ func TestGuildStateStoreSkipsGuildsNotServed(t *testing.T) {
 	store, h := newTestStore(t)
 	const served, notServed snowflake.ID = 100, 200
 	store.setGuilds(func() []snowflake.ID { return []snowflake.ID{served} })
-	store.set(served, &testState{Value: "a"})
-	store.set(notServed, &testState{Value: "b"})
+	store.set(t.Context(), served, &testState{Value: "a"})
+	store.set(t.Context(), notServed, &testState{Value: "b"})
 
 	var seen []snowflake.ID
 	store.each(func(guildID snowflake.ID, _ *testState) { seen = append(seen, guildID) })
@@ -360,7 +378,9 @@ func TestGuildStateStoreSkipsGuildsNotServed(t *testing.T) {
 		t.Errorf("each visited %v, want only %d", seen, served)
 	}
 
-	store.save(t.Context())
+	if err := store.save(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := h.object(testObject(served)); !ok {
 		t.Error("served guild not saved")
 	}
@@ -380,12 +400,14 @@ func TestGuildStateStoreS3CallsTimeOut(t *testing.T) {
 	t.Cleanup(func() { close(release) }) // before the server closes, which waits for handlers
 	h.setHook(func(*http.Request) bool { <-release; return true })
 
-	store.set(testGuild, &testState{Value: "x"})
+	store.set(t.Context(), testGuild, &testState{Value: "x"})
 	const other snowflake.ID = 456
 	done := make(chan error, 1)
 	go func() {
 		_ = store.persist(t.Context(), testGuild)
-		store.load(t.Context(), []snowflake.ID{other})
+		if err := store.load(t.Context(), []snowflake.ID{other}); err != nil {
+			t.Error(err)
+		}
 		done <- store.persist(t.Context(), testGuild) // waits for the first persist's lock
 	}()
 	select {
@@ -407,7 +429,7 @@ func TestGuildStateStoreS3CallsTimeOut(t *testing.T) {
 func TestGuildStateStorePersistLandsInOrder(t *testing.T) {
 	store, h := newTestStore(t)
 	st := &testState{Value: "old"}
-	store.set(testGuild, st)
+	store.set(t.Context(), testGuild, st)
 
 	var puts atomic.Int32
 	firstArrived := make(chan struct{})
@@ -457,7 +479,9 @@ func TestGuildStateStorePersistLandsInOrder(t *testing.T) {
 func TestGuildStateStoreConcurrentUse(t *testing.T) {
 	store, h := newTestStore(t)
 	h.setHook(failGets(testObject(7)))
-	store.load(t.Context(), []snowflake.ID{7})
+	if err := store.load(t.Context(), []snowflake.ID{7}); err != nil {
+		t.Fatal(err)
+	}
 
 	var wg sync.WaitGroup
 	for i := range 8 {
@@ -465,7 +489,7 @@ func TestGuildStateStoreConcurrentUse(t *testing.T) {
 		wg.Go(func() {
 			for range 20 {
 				store.getOrCreate(guildID)
-				store.set(guildID, &testState{Value: "x"})
+				store.set(t.Context(), guildID, &testState{Value: "x"})
 				if st := store.get(guildID); st != nil {
 					st.mu.Lock()
 					st.Value = "y"
@@ -477,8 +501,10 @@ func TestGuildStateStoreConcurrentUse(t *testing.T) {
 		wg.Go(func() {
 			for range 5 {
 				store.each(func(snowflake.ID, *testState) {})
-				store.save(t.Context())
-				store.retryFailedLoads(t.Context())
+				if err := store.save(t.Context()); err != nil {
+					t.Error(err)
+				}
+				_ = store.retryFailedLoads(t.Context()) // fails: guild 7's GETs do
 			}
 		})
 	}

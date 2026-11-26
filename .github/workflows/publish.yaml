@@ -171,9 +171,7 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          cache-from: |
-            type=gha,scope=${{ matrix.platform }}
-            type=gha,scope=${{ matrix.cache-scope }}
+          cache-from: type=gha,scope=${{ matrix.cache-scope }}
           cache-to: type=gha,mode=max,scope=${{ matrix.cache-scope }}
 
       - name: Export digest

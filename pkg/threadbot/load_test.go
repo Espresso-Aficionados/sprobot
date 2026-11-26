@@ -51,7 +51,9 @@ func TestRemindersNeverSavedOverFailedLoad(t *testing.T) {
 	b := newThreadListBot(t, api)
 	b.S3 = testutil.NewTestS3Client(t, srv)
 	defer b.stopAllReminderGoroutines()
-	b.loadReminders(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	// The reminders pass's job fails while the guild is unloaded.
 	if err := b.retryAndSaveReminders(t.Context()); err == nil {
 		t.Error("retryAndSaveReminders succeeded while a guild is unloaded")
@@ -109,16 +111,22 @@ func TestMemberCountsNeverSavedOverFailedLoad(t *testing.T) {
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
 	b.Client = &bot.Client{Rest: rest.New(rest.NewClient("test", rest.WithURL(apiSrv.URL)))}
-	b.loadHiddenThreads(t.Context()) // only the counts fail to load
+	if err := b.loadHiddenThreads(t.Context()); err != nil { // only the counts fail to load
+		t.Fatal(err)
+	}
 	fs.failGet.Store(true)
-	b.loadMemberCounts(t.Context())
+	if err := b.loadMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	// Unloaded: member_count is shown, nothing is fetched or saved.
 	e, err := b.buildThreadsEmbed(t.Context(), devGuild, 500)
 	if e == nil || err != nil || !strings.Contains(e.Description, "50 members") {
 		t.Fatalf("embed while unloaded = %+v, %v; want member_count shown", e, err)
 	}
-	b.saveMemberCounts(t.Context())
+	if err := b.saveMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if api.fetchCount("101") != 0 {
 		t.Error("count fetched while the stored counts were unloaded")
 	}
@@ -151,9 +159,15 @@ func TestLoadersCoverAllowedGuilds(t *testing.T) {
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, srv))
 	b.TestGuildIDsOverride = []snowflake.ID{} // nothing cached yet
-	b.loadReminders(t.Context())
-	b.loadMemberCounts(t.Context())
-	b.loadHiddenThreads(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.loadMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.loadHiddenThreads(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -185,16 +199,24 @@ func TestPeriodicSavesSkipGuildsBotIsNotIn(t *testing.T) {
 	fake.Objects[prodCountsKey] = []byte(`{"counts":{},"fetched":{}}`)
 
 	b := newTestBot(t, testutil.NewTestS3Client(t, srv)) // in the dev guild only
-	b.loadReminders(t.Context())
-	b.loadMemberCounts(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.loadMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	// Meanwhile the prod instance enables a reminder and saves it.
 	prodState := []byte(`{"111":{"channel_id":"111","guild_id":"726985544038612993"}}`)
 	fake.Mu.Lock()
 	fake.Objects[prodRemindersKey] = prodState
 	fake.Mu.Unlock()
 
-	b.saveAllReminders(t.Context())
-	b.saveMemberCounts(t.Context())
+	if err := b.saveAllReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.saveMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	fake.Mu.Lock()
 	defer fake.Mu.Unlock()
@@ -225,12 +247,16 @@ func TestLoadRacesWithEvents(t *testing.T) {
 			b.onMessage(t.Context(), &events.MessageCreate{GenericMessage: &events.GenericMessage{
 				GuildID: &guildID, ChannelID: 500, Message: discord.Message{Author: discord.User{ID: 9}},
 			}})
-			b.adjustMemberCount(guildID, 101, 1)
+			b.adjustMemberCount(t.Context(), guildID, 101, 1)
 			b.onSessionReady(t.Context(), &events.Ready{EventReady: gateway.EventReady{}})
 		}
 	}()
-	b.loadReminders(t.Context())
-	b.loadMemberCounts(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.loadMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	<-done
 }
 
@@ -281,7 +307,9 @@ func TestGuildReadyStartsLoopsAndDropsDeletedChannels(t *testing.T) {
 	seedReminders(fake)
 	defer b.stopAllReminderGoroutines()
 
-	b.loadReminders(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if got := running(b, devGuild); len(got) != 4 || got[500] || got[600] || got[700] || got[900] {
 		t.Fatalf("after load: running = %v, want four loaded and none running", got)
 	}
@@ -296,7 +324,9 @@ func TestGuildReadyStartsLoopsAndDropsDeletedChannels(t *testing.T) {
 	}
 
 	restarted := newTestBot(t, b.S3)
-	restarted.loadReminders(t.Context())
+	if err := restarted.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	got := running(restarted, devGuild)
 	if _, ok := got[600]; ok || len(got) != 3 {
 		t.Errorf("stored reminders after restart = %v, want 500, 700 and 900", got)
@@ -317,7 +347,9 @@ func TestResumedSessionStartsLoops(t *testing.T) {
 	seedReminders(fake)
 	defer b.stopAllReminderGoroutines()
 
-	b.loadReminders(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	started := time.Now().Add(-time.Hour).Truncate(time.Second)
 	b.SetResumed(&botutil.GatewaySession{StartedAt: started, Guilds: []snowflake.ID{devGuild}})
 	b.seedResumedSession(t.Context())
@@ -354,10 +386,14 @@ func TestLateLoadStartsReadyGuild(t *testing.T) {
 	defer b.stopAllReminderGoroutines()
 
 	fs.failGet.Store(true)
-	b.loadReminders(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	b.onGuildReady(t.Context(), guildReady(devGuild))
 	fs.failGet.Store(false)
-	b.loadReminders(t.Context())
+	if err := b.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := running(b, devGuild); len(got) != 3 || !got[500] || !got[700] || !got[900] {
 		t.Errorf("running = %v, want 500, 700 and 900 running and 600 dropped", got)
@@ -425,7 +461,9 @@ func TestReminderSavesLandInOrder(t *testing.T) {
 
 	first := make(chan struct{})
 	go func() {
-		b.saveRemindersForGuild(t.Context(), devGuild)
+		if err := b.saveRemindersForGuild(t.Context(), devGuild); err != nil {
+			t.Error(err)
+		}
 		close(first)
 	}()
 	<-s3.started // the snapshot with 500 and 600 is in flight
@@ -434,7 +472,9 @@ func TestReminderSavesLandInOrder(t *testing.T) {
 	b.mu.Unlock()
 	second := make(chan struct{})
 	go func() {
-		b.saveRemindersForGuild(t.Context(), devGuild)
+		if err := b.saveRemindersForGuild(t.Context(), devGuild); err != nil {
+			t.Error(err)
+		}
 		close(second)
 	}()
 	select {

@@ -165,7 +165,9 @@ func TestForumReminderPromptsLiveThreadWithoutReadingHistory(t *testing.T) {
 	id := addForumThread(t, b, stub, 2*time.Hour, 2, true)
 	b.onForumThreadMessage(t.Context(), threadMessage(b, id, 30)) // the owner adding detail
 
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	want := []string{fmt.Sprintf("GET /channels/%d", id), fmt.Sprintf("POST /channels/%d/messages", id)}
 	if got := stub.routesCalled(); !slices.Equal(got, want) {
@@ -173,7 +175,9 @@ func TestForumReminderPromptsLiveThreadWithoutReadingHistory(t *testing.T) {
 	}
 
 	stub.reset()
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if got := stub.routesCalled(); len(got) != 0 {
 		t.Errorf("prompted thread checked again: %v", got)
 	}
@@ -184,7 +188,9 @@ func TestForumReminderSkipsThreadRepliedToWhileOnline(t *testing.T) {
 	id := addForumThread(t, b, stub, 2*time.Hour, 1, true)
 	b.onForumThreadMessage(t.Context(), threadMessage(b, id, 31))
 
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := stub.routesCalled(); len(got) != 0 {
 		t.Errorf("calls = %v, want none for a thread with a reply", got)
@@ -197,7 +203,9 @@ func TestForumReminderReadsHistoryOnlyWhenUnknown(t *testing.T) {
 	stub.on(fmt.Sprintf("GET /channels/%d/messages", replied), 200, `[{"id":"1","channel_id":"1","author":{"id":"31","username":"bob"}},{"id":"2","channel_id":"1","author":{"id":"30","username":"op"}}]`)
 	untouched := addForumThread(t, b, stub, 3*time.Hour, 0, false)
 
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := stub.bodies(fmt.Sprintf("GET /channels/%d/messages", replied)); len(got) != 1 {
 		t.Errorf("read the history of a thread with messages %d times, want 1", len(got))
@@ -213,7 +221,9 @@ func TestForumReminderReadsHistoryOnlyWhenUnknown(t *testing.T) {
 	}
 
 	stub.reset()
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if got := stub.routesCalled(); len(got) != 0 {
 		t.Errorf("settled threads checked again: %v", got)
 	}
@@ -226,7 +236,9 @@ func TestForumReminderStaleCountIsRechecked(t *testing.T) {
 	stub.on(fmt.Sprintf("GET /channels/%d", id), 200, forumThreadJSON(id, 4, false))
 	stub.on(fmt.Sprintf("GET /channels/%d/messages", id), 200, `[{"id":"1","channel_id":"1","author":{"id":"31","username":"bob"}}]`)
 
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := stub.bodies(fmt.Sprintf("POST /channels/%d/messages", id)); len(got) != 0 {
 		t.Error("prompted a thread whose fresh copy shows a reply")
@@ -239,13 +251,17 @@ func TestForumReminderLeavesArchivedThreadAlone(t *testing.T) {
 	// Archived since it was cached, e.g. while the bot was offline.
 	stub.on(fmt.Sprintf("GET /channels/%d", id), 200, forumThreadJSON(id, 0, true))
 
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if got := stub.bodies(fmt.Sprintf("POST /channels/%d/messages", id)); len(got) != 0 {
 		t.Error("posted in (and so unarchived) an archived thread")
 	}
 
 	stub.reset()
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if got := stub.routesCalled(); len(got) != 0 {
 		t.Errorf("archived thread re-checked every round: %v", got)
 	}
@@ -257,10 +273,16 @@ func TestForumReminderRetriesFailedPost(t *testing.T) {
 	post := fmt.Sprintf("POST /channels/%d/messages", id)
 
 	stub.on(post, 500, discordError(0, "Internal Server Error"))
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	stub.on(post, 200, "{}")
-	b.sendForumReminders(t.Context())
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := stub.bodies(post); len(got) != 2 {
 		t.Errorf("posted %d times, want a retry after the failure and nothing after the success", len(got))
@@ -273,8 +295,12 @@ func TestForumReminderGivesUpOnForbiddenThread(t *testing.T) {
 	post := fmt.Sprintf("POST /channels/%d/messages", id)
 	stub.on(post, 403, discordError(50001, "Missing Access"))
 
-	b.sendForumReminders(t.Context())
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := stub.bodies(post); len(got) != 1 {
 		t.Errorf("posted %d times, want no retry after a 403", len(got))
@@ -288,14 +314,20 @@ func TestForumReminderDailySync(t *testing.T) {
 	stub.on(fmt.Sprintf("GET /channels/%d", id), 200, forumThreadJSON(id, 0, false))
 	stub.on("GET /guilds/10/threads/active", 200, `{"threads":[`+forumThreadJSON(id, 0, false)+`],"members":[]}`)
 
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if got := stub.routesCalled(); len(got) != 0 {
 		t.Fatalf("calls before the sync is due: %v", got)
 	}
 
 	b.forumReminders.lastSync = time.Now().Add(-forumReminderSync)
-	b.sendForumReminders(t.Context())
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := stub.bodies("GET /guilds/10/threads/active"); len(got) != 1 {
 		t.Errorf("read the active threads %d times, want once a day", len(got))
@@ -317,7 +349,9 @@ func TestForumReminderSyncReconcilesCache(t *testing.T) {
 	stub.on("GET /guilds/10/threads/active", 200, `{"threads":[`+forumThreadJSON(missed, 0, false)+`],"members":[]}`)
 
 	b.forumReminders.lastSync = time.Now().Add(-forumReminderSync)
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, ok := b.Client.Caches.GuildThread(deleted); ok {
 		t.Error("deleted thread still cached")
@@ -335,7 +369,9 @@ func TestForumReminderSyncReconcilesCache(t *testing.T) {
 	}
 
 	stub.reset()
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if got := stub.routesCalled(); len(got) != 0 {
 		t.Errorf("calls after the sync settled the cache: %v", got)
 	}
@@ -348,8 +384,12 @@ func TestForumReminderDropsThreadGoneBeforeHistoryRead(t *testing.T) {
 	messages := fmt.Sprintf("GET /channels/%d/messages", id)
 	stub.on(messages, 404, discordError(10003, "Unknown Channel"))
 
-	b.sendForumReminders(t.Context())
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := stub.bodies(messages); len(got) != 1 {
 		t.Errorf("read the history of a deleted thread %d times, want 1", len(got))
@@ -366,7 +406,9 @@ func TestForumReminderRereadsWaitingThreadsAfterNewSession(t *testing.T) {
 	b.onForumReminderReady(t.Context(), &events.Ready{})
 	stub.on(fmt.Sprintf("GET /channels/%d/messages", id), 200, `[{"id":"1","channel_id":"1","author":{"id":"31","username":"bob"}}]`)
 
-	b.sendForumReminders(t.Context())
+	if err := b.sendForumReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := stub.bodies(fmt.Sprintf("GET /channels/%d/messages", id)); len(got) != 1 {
 		t.Errorf("read the history %d times after a new session, want 1", len(got))

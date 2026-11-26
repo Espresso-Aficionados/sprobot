@@ -41,7 +41,7 @@ func (b *BaseBot) healthHandler() http.Handler {
 			http.Error(w, fmt.Sprintf("gateway not ready: %v", status), http.StatusServiceUnavailable)
 			return
 		}
-		io.WriteString(w, "ok\n")
+		_, _ = io.WriteString(w, "ok\n") // the probe goes by the status code
 	})
 	return mux
 }

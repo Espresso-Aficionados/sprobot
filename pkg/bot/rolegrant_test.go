@@ -394,7 +394,7 @@ func TestConfigRoleChecksUseRoleCache(t *testing.T) {
 	b, _, _ := newRoleTestBot(t)
 	addTestRole(b, discord.Role{ID: modRole, Position: 20, Permissions: discord.PermissionManageRoles})
 	addTestRole(b, discord.Role{ID: helperRole, Position: 30, Permissions: discord.PermissionManageMessages})
-	b.autoRole.set(roleTestGuild, &autoRoleState{RoleID: roleTestMember})
+	b.autoRole.set(t.Context(), roleTestGuild, &autoRoleState{RoleID: roleTestMember})
 
 	plain := func(id snowflake.ID, pos int) discord.Role {
 		return discord.Role{ID: id, GuildID: roleTestGuild, Position: pos, Permissions: discord.PermissionSendMessages}
@@ -436,7 +436,7 @@ func TestCheckGrantableRoleWithoutCachedBotMember(t *testing.T) {
 	target := discord.Role{ID: 200, GuildID: roleTestGuild, Position: 1, Permissions: discord.PermissionSendMessages}
 
 	api.setRespond(func(string) (int, string) { return restError(http.StatusInternalServerError, 0, "oops") })
-	b.autoRole.set(roleTestGuild, &autoRoleState{})
+	b.autoRole.set(t.Context(), roleTestGuild, &autoRoleState{})
 	e, responses := roleCommand(t, roleTestOwner, nil, autoroleSet(200), resolvedRole(target))
 	b.handleAutoRoleConfig(t.Context(), e)
 	resp := response(t, responses)

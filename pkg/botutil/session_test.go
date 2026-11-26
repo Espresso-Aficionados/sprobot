@@ -1,7 +1,6 @@
 package botutil
 
 import (
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -150,7 +149,7 @@ func TestSaveHandoff(t *testing.T) {
 	}
 }
 
-func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // An interaction replayed by a resume is skipped only once it is past
 // Discord's answer deadline; live ones, and replayed ones still answerable,

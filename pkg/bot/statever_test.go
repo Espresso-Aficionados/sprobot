@@ -38,8 +38,10 @@ func TestGuildStateStoreRefusesNewerState(t *testing.T) {
 	if err := store.persist(t.Context(), testGuild); !errors.Is(err, errNotLoaded) {
 		t.Fatalf("persist = %v, want errNotLoaded", err)
 	}
-	store.retryFailedLoads(t.Context())
-	store.save(t.Context())
+	_ = store.retryFailedLoads(t.Context()) // fails: the refused guild stays unloaded
+	if err := store.save(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if got, _ := h.object(testObject(testGuild)); got != newer {
 		t.Fatalf("stored data = %s, want it untouched", got)
 	}
@@ -74,7 +76,9 @@ func TestEveryStoreSavesStateOldBuildsRead(t *testing.T) {
 	if err := b.loadState(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	b.saveState(t.Context())
+	if err := b.saveState(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	for _, s := range b.stateStores() {
 		decodeOld := s.(interface{ decodeIgnoringVersion([]byte) error }).decodeIgnoringVersion
 		for _, guildID := range botutil.AllowedGuildIDs {
@@ -114,7 +118,9 @@ func TestCacheDirVersion(t *testing.T) {
 	if v, exists, err := cacheDirVersion(b.cacheDir); v != 1 || exists || err != nil {
 		t.Fatalf("empty dir: %d, %v, %v; want version 1, no file", v, exists, err)
 	}
-	b.saveCaches()
+	if err := b.saveCaches(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile(filepath.Join(b.cacheDir, cacheVersionFile))
 	if err != nil || string(data) != "{\"version\":1}\n" {
 		t.Fatalf("version file = %q, %v", data, err)
@@ -122,11 +128,17 @@ func TestCacheDirVersion(t *testing.T) {
 
 	// A newer build's dir: its files are left as they are.
 	vpath := filepath.Join(b.cacheDir, cacheVersionFile)
-	os.WriteFile(vpath, []byte(`{"version":2}`), 0o600)
+	if err := os.WriteFile(vpath, []byte(`{"version":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	msgs := filepath.Join(b.cacheDir, messageCacheFile)
-	os.WriteFile(msgs, []byte(`{"version":2,"items":[]}`), 0o600)
+	if err := os.WriteFile(msgs, []byte(`{"version":2,"items":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	b.msgCache.Put(1, 2, discord.Message{ID: 2, ChannelID: 1})
-	b.saveCaches()
+	if err := b.saveCaches(t.Context()); !statever.IsNewer(err) {
+		t.Fatalf("saveCaches = %v, want a NewerError", err)
+	}
 	if data, _ := os.ReadFile(msgs); string(data) != `{"version":2,"items":[]}` {
 		t.Fatalf("message cache rewritten over a newer build's: %s", data)
 	}
@@ -135,8 +147,12 @@ func TestCacheDirVersion(t *testing.T) {
 	}
 
 	// One that can't be read is this build's to replace.
-	os.WriteFile(vpath, []byte(`{"vers`), 0o600)
-	b.saveCaches()
+	if err := os.WriteFile(vpath, []byte(`{"vers`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.saveCaches(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if data, _ := os.ReadFile(vpath); string(data) != "{\"version\":1}\n" {
 		t.Fatalf("corrupt version file not replaced: %q", data)
 	}
@@ -149,11 +165,15 @@ func TestCheckState(t *testing.T) {
 	if err := b.loadState(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	b.saveState(t.Context())
+	if err := b.saveState(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
 	cb := newCacheTestBot(t)
 	cb.cacheDir = dir
-	cb.saveCaches()
+	if err := cb.saveCaches(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	before := dirListing(t, dir)
 
 	h.fake.Mu.Lock()
@@ -190,7 +210,9 @@ func TestCheckState(t *testing.T) {
 	}
 	h.setHook(nil)
 
-	os.WriteFile(filepath.Join(dir, cacheVersionFile), []byte(`{"version":3}`), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, cacheVersionFile), []byte(`{"version":3}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	r = checkState(t.Context(), b.S3, dir)
 	if code := r.Print(new(bytes.Buffer), new(bytes.Buffer), false); code != 3 {
 		t.Errorf("newer cache dir: exit %d, want 3", code)

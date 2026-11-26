@@ -35,8 +35,12 @@ func TestLoadRefusesNewer(t *testing.T) {
 			if !statever.IsNewer(err) || !strings.Contains(err.Error(), "is state version 2") {
 				t.Fatalf("loads = %v, want one refusal", err)
 			}
-			b.saveAllReminders(t.Context())
-			b.saveMemberCounts(t.Context())
+			if err := b.saveAllReminders(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.saveMemberCounts(t.Context()); err != nil {
+				t.Fatal(err)
+			}
 			if err := b.resetMemberCounts(t.Context(), testGuild, func() {}); obj == memberCountsObject && !statever.IsNewer(err) {
 				t.Errorf("/threadbot refreshcounts: %v, want a refusal", err)
 			}
@@ -66,8 +70,12 @@ func TestSavedVersions(t *testing.T) {
 	if len(b.reminders[testGuild]) != 1 || b.memberCounts[testGuild].Counts[5] != 3 {
 		t.Fatalf("loaded reminders %v, counts %v", b.reminders[testGuild], b.memberCounts[testGuild])
 	}
-	b.saveAllReminders(t.Context())
-	b.saveMemberCounts(t.Context())
+	if err := b.saveAllReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.saveMemberCounts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := b.setHidden(t.Context(), testGuild, 7, true); err != nil {
 		t.Fatal(err)
 	}

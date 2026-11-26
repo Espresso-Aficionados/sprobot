@@ -292,7 +292,7 @@ func (b *Bot) handleEnable(ctx context.Context, e *events.ApplicationCommandInte
 	if !current && old != nil && old.LastMessageID != 0 {
 		_ = b.Client.Rest.DeleteMessage(channelID, old.LastMessageID, rest.WithCtx(ctx))
 	}
-	b.saveRemindersForGuild(ctx, guildID)
+	_ = b.saveRemindersForGuild(ctx, guildID) // it logs its own failures
 
 	b.Log.InfoContext(ctx, "Reminder enabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID, "min_idle", minIdle, "max_idle", maxIdle, "msg_threshold", msgThreshold, "time_threshold", timeThreshold, "buffer", buffer)
 }
@@ -350,7 +350,7 @@ func (b *Bot) handleDisable(ctx context.Context, e *events.ApplicationCommandInt
 	if r.LastMessageID != 0 {
 		_ = b.Client.Rest.DeleteMessage(channelID, r.LastMessageID, rest.WithCtx(ctx))
 	}
-	b.saveRemindersForGuild(ctx, guildID)
+	_ = b.saveRemindersForGuild(ctx, guildID) // it logs its own failures
 	b.Log.InfoContext(ctx, "Reminder disabled", "user_id", e.User().ID, "guild_id", guildID, "channel_id", channelID)
 }
 
@@ -453,6 +453,6 @@ func (b *Bot) resetMemberCounts(ctx context.Context, guildID snowflake.ID, clear
 	b.memberCounts[guildID] = newMemberCountCache()
 	b.mu.Unlock()
 	cleared()
-	b.saveMemberCountsForGuild(ctx, guildID)
+	_ = b.saveMemberCountsForGuild(ctx, guildID) // it logs its own failures
 	return nil
 }

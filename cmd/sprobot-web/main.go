@@ -176,7 +176,7 @@ func newMux(s3 *s3client.Client) *http.ServeMux {
 	mux := http.NewServeMux()
 	// The container healthcheck (`sprobot-web -healthcheck`): the server is up.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		io.WriteString(w, "ok\n")
+		_, _ = io.WriteString(w, "ok\n") // the probe goes by the status code
 	})
 	mux.HandleFunc("GET /", handleIndex)
 	mux.HandleFunc("GET /"+sprobot.AvatarWebPath, handleAvatar)
@@ -191,10 +191,10 @@ func newMux(s3 *s3client.Client) *http.ServeMux {
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
-		render404(w)
+		render404(r.Context(), w)
 		return
 	}
-	renderPage(w, "index.html", nil)
+	renderPage(r.Context(), w, "index.html", nil)
 }
 
 // profileRoute validates a profile route's path values, which go into an S3
@@ -222,7 +222,7 @@ func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		guildID, tmpl, userID, ok := profileRoute(r)
 		if !ok {
-			render404(w)
+			render404(r.Context(), w)
 			return
 		}
 
@@ -232,7 +232,7 @@ func handleProfile(s3 *s3client.Client) http.HandlerFunc {
 			return
 		}
 
-		renderPage(w, "profile.html", buildProfileData(r.Context(), s3, guildID, userID, tmpl, profile))
+		renderPage(r.Context(), w, "profile.html", buildProfileData(r.Context(), s3, guildID, userID, tmpl, profile))
 	}
 }
 
@@ -273,7 +273,7 @@ func handleProfileImage(s3 *s3client.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		guildID, tmpl, userID, ok := profileRoute(r)
 		if !ok || !strings.HasPrefix(r.PathValue("file"), "image") {
-			render404(w)
+			render404(r.Context(), w)
 			return
 		}
 
@@ -300,7 +300,7 @@ func handleProfileImage(s3 *s3client.Client) http.HandlerFunc {
 func serveImageToDiscord(w http.ResponseWriter, r *http.Request, s3 *s3client.Client, urlOrKey string) {
 	contentType := sprobot.InlineContentType(urlOrKey)
 	if !strings.HasPrefix(contentType, "image/") {
-		render404(w)
+		render404(r.Context(), w)
 		return
 	}
 
@@ -332,7 +332,7 @@ func handleFile(s3 *s3client.Client) http.HandlerFunc {
 		kind, guildID, name := r.PathValue("kind"), r.PathValue("guildID"), r.PathValue("name")
 		key, ok := sprobot.FileKey(kind, guildID, name)
 		if !ok {
-			render404(w)
+			render404(r.Context(), w)
 			return
 		}
 
@@ -354,7 +354,7 @@ func handleFileView(s3 *s3client.Client) http.HandlerFunc {
 		name := r.PathValue("name")
 		key, ok := sprobot.FileKey(r.PathValue("kind"), r.PathValue("guildID"), name)
 		if !ok {
-			render404(w)
+			render404(r.Context(), w)
 			return
 		}
 
@@ -388,7 +388,7 @@ func handleFileView(s3 *s3client.Client) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		renderPage(w, "file.html", data)
+		renderPage(r.Context(), w, "file.html", data)
 	}
 }
 
@@ -516,7 +516,7 @@ func truncateBytes(s string, n int) string {
 
 // --- Rendering ---
 
-func renderPage(w http.ResponseWriter, name string, data any) {
+func renderPage(ctx context.Context, w http.ResponseWriter, name string, data any) {
 	t, ok := pageTemplates[name]
 	if !ok {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -525,20 +525,20 @@ func renderPage(w http.ResponseWriter, name string, data any) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, "base.html", data); err != nil {
-		slog.Error("Template execution error", "error", err)
+		slog.ErrorContext(ctx, "Template execution error", "error", err)
 	}
 }
 
-func render404(w http.ResponseWriter) {
+func render404(ctx context.Context, w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNotFound)
-	renderPage(w, "404.html", nil)
+	renderPage(ctx, w, "404.html", nil)
 }
 
 // renderS3Error answers a failed S3 read: 404 if the object doesn't exist,
 // otherwise a logged 502, since the fault is upstream and may pass.
 func renderS3Error(ctx context.Context, w http.ResponseWriter, what string, err error) {
 	if errors.Is(err, s3client.ErrNotFound) {
-		render404(w)
+		render404(ctx, w)
 		return
 	}
 	slog.ErrorContext(ctx, what, "error", err)

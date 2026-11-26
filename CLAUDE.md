@@ -73,15 +73,16 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
 
 ## CI and deploy
 
-- `.github/workflows/test.yaml` runs the Docker `test` target on amd64 and
-  arm64. It runs on pull requests, on pushes to non-default branches
-  (Dependabot branches are excluded; they are tested through their PR), and
-  when `publish.yaml` calls it. A newer run for the same PR or branch cancels
-  the older one. The test container's Go build cache is a host directory
-  kept between runs with `actions/cache` (per platform, keyed on
-  go.mod/go.sum), so unchanged packages neither recompile nor re-test. PRs
-  from amd64 also build the four prod images (not pushed), to catch a broken
-  prod stage before merge. `depcheck.yaml` runs dependency
+- `.github/workflows/test.yaml` calls sadbox/ci's `go.yml`, which builds the
+  Docker `test` target on amd64 and arm64 and runs gofmt, go vet,
+  `go test -race`, golangci-lint (sadbox/ci's default configuration) and
+  govulncheck inside it (checks `go / test (linux/amd64)` and
+  `go / test (linux/arm64)`). It runs on pull requests, on pushes to
+  non-default branches (Dependabot branches are excluded; they are tested
+  through their PR), and when `publish.yaml` calls it. A newer run for the
+  same PR or branch cancels the older one. PRs also build the four prod
+  images for amd64 (not pushed, job `prod images (linux/amd64)`), to catch a
+  broken prod stage before merge. `depcheck.yaml` runs dependency
   review on PRs.
 - `.github/workflows/publish.yaml` runs on pushes to `main` (and by hand,
   `workflow_dispatch`, which always builds). Unless only docs (`*.md`,
@@ -116,6 +117,13 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
   mounts, its environment.
 - The Dockerfile builder is pinned to `golang:1.27.4` (tag and digest). The
   `go` directive in `go.mod` is `1.26.0`.
+- `github.com/gorilla/websocket` (disgo's gateway) is pinned to an untagged
+  commit, `v1.5.4-0.20240701034025-d67f41855da4`, for GO-2026-6278 (its
+  v1.5.3 mask key comes from `math/rand`; govulncheck in go.yml fails on
+  it). Dependabot never moves a pseudo-version: when gorilla tags a release
+  past it, or disgo requires one, move to that tag by hand.
+  `TestGatewayWebsocketThroughConnectProxy` keeps the gateway's dial through
+  egress (a CONNECT proxy from `HTTPS_PROXY`) working.
 - Dependabot opens daily dependency PRs, each version waiting out a 3-day
   cooldown. The dep-review gate (`dep-review.yaml`, sadbox/dep-review)
   reviews and merges what's safe; majors and anything it flags wait for a

@@ -115,16 +115,14 @@ func (b *Bot) Run() error {
 	b.seedResumedSession(start)
 	b.ServeHealth()
 	if err := b.OpenGateway(start); err != nil {
-		b.shutdown(start)
-		return err
+		return errors.Join(err, b.shutdown(start))
 	}
 	defer b.Client.Close(ctx)
 
-	b.WaitForGuilds(30 * time.Second)
+	b.WaitForGuilds(start, 30*time.Second)
 
 	if err := b.registerAllCommands(start); err != nil {
-		b.shutdown(start)
-		return fmt.Errorf("registering commands: %w", err)
+		return errors.Join(fmt.Errorf("registering commands: %w", err), b.shutdown(start))
 	}
 	startSpan.End()
 	go botutil.RunSaveLoop(&b.Ready, 30*time.Second, b.stop, b.Heartbeat)

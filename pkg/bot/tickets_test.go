@@ -289,7 +289,7 @@ func newTicketBot(t *testing.T) (*Bot, *discordStub) {
 	b.tickets = newGuildStateStore(b.S3, b.Log, "tickets",
 		func() *ticketState { return &ticketState{Counter: 1} },
 		func(st *ticketState) *sync.Mutex { return &st.mu })
-	b.tickets.set(10, &ticketState{Counter: 1})
+	b.tickets.set(t.Context(), 10, &ticketState{Counter: 1})
 	stub.on("POST /channels/50/threads", 201, `{"id":"70","type":12,"guild_id":"10","parent_id":"50","name":"ticket-1","thread_metadata":{}}`)
 	return b, stub
 }

@@ -720,7 +720,7 @@ func messageExpired(id snowflake.ID, now time.Time) bool {
 // pruneMessageCache removes messages past messageRetention from the cache.
 // saveCaches runs it before every save, so the file never holds an expired
 // message for longer than the save interval.
-func (b *Bot) pruneMessageCache() {
+func (b *Bot) pruneMessageCache(ctx context.Context) {
 	now := time.Now()
 	removed := 0
 	b.msgCache.cappedGroupedCache.RemoveIf(func(_ snowflake.ID, msg cachedMessage) bool {
@@ -731,7 +731,7 @@ func (b *Bot) pruneMessageCache() {
 		return expired
 	})
 	if removed > 0 {
-		b.Log.Info("Pruned expired messages from cache", "removed", removed, "remaining", b.msgCache.Len())
+		b.Log.InfoContext(ctx, "Pruned expired messages from cache", "removed", removed, "remaining", b.msgCache.Len())
 	}
 }
 
@@ -755,7 +755,8 @@ func (b *Bot) loadCaches() bool {
 	// than at the first save, which waits for the gateway.
 	if expired > 0 {
 		b.Log.Info("Dropped expired messages from the cache file", "removed", expired)
-		b.saveMessageCache()
+		// New has no context: it runs before Run's startup span.
+		_ = b.saveMessageCache(context.Background()) // it logs its own failures
 	}
 	ok = loadCache(b, guildCacheFile, b.guildCache.cappedGroupedCache, func(g discord.CacheGuild) (discord.CacheGuild, snowflake.ID, snowflake.ID, bool) {
 		return g, 0, g.ID, true
@@ -825,27 +826,27 @@ func loadCache[D, T any](b *Bot, file string, c *cappedGroupedCache[T], entry fu
 // saveCaches prunes expired messages, then writes every persisted cache to
 // the cache dir. The saves run one after another, so only one snapshot is
 // held at a time.
-func (b *Bot) saveCaches() error {
-	b.pruneMessageCache()
+func (b *Bot) saveCaches(ctx context.Context) error {
+	b.pruneMessageCache(ctx)
 	return errors.Join(
-		b.saveMessageCache(),
-		saveCache(b, memberCacheFile, b.memberCache.snapshot()),
-		saveCache(b, guildCacheFile, b.guildCache.snapshot()),
-		saveCache(b, channelCacheFile, b.channelCache.snapshot()),
-		saveCache(b, roleCacheFile, b.roleCache.snapshot()),
-		saveCache(b, emojiCacheFile, b.emojiCache.snapshot()),
-		saveCache(b, stickerCacheFile, b.stickerCache.snapshot()),
-		saveCache(b, voiceStateCacheFile, b.voiceStateCache.snapshot()),
-		saveCache(b, stageInstanceCacheFile, b.stageInstanceCache.snapshot()),
-		saveCache(b, scheduledEventCacheFile, b.scheduledEventCache.snapshot()),
-		saveCache(b, soundboardSoundCacheFile, b.soundboardSoundCache.snapshot()),
+		b.saveMessageCache(ctx),
+		saveCache(ctx, b, memberCacheFile, b.memberCache.snapshot()),
+		saveCache(ctx, b, guildCacheFile, b.guildCache.snapshot()),
+		saveCache(ctx, b, channelCacheFile, b.channelCache.snapshot()),
+		saveCache(ctx, b, roleCacheFile, b.roleCache.snapshot()),
+		saveCache(ctx, b, emojiCacheFile, b.emojiCache.snapshot()),
+		saveCache(ctx, b, stickerCacheFile, b.stickerCache.snapshot()),
+		saveCache(ctx, b, voiceStateCacheFile, b.voiceStateCache.snapshot()),
+		saveCache(ctx, b, stageInstanceCacheFile, b.stageInstanceCache.snapshot()),
+		saveCache(ctx, b, scheduledEventCacheFile, b.scheduledEventCache.snapshot()),
+		saveCache(ctx, b, soundboardSoundCacheFile, b.soundboardSoundCache.snapshot()),
 	)
 }
 
-func saveCache[T any](b *Bot, file string, items []T) error {
+func saveCache[T any](ctx context.Context, b *Bot, file string, items []T) error {
 	err := writeCacheFile(b.cacheDir, file, items)
 	if err != nil {
-		b.Log.Error("Failed to save cache file", "file", file, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to save cache file", "file", file, "error", err)
 	}
 	return err
 }
@@ -855,17 +856,17 @@ func saveCache[T any](b *Bot, file string, items []T) error {
 // failing (a full disk, say) it would age past messageRetention. A newer
 // build's file is the exception: it is that build's to prune.
 // It returns the save's error.
-func (b *Bot) saveMessageCache() error {
-	saveErr := saveCache(b, messageCacheFile, b.msgCache.snapshot())
+func (b *Bot) saveMessageCache(ctx context.Context) error {
+	saveErr := saveCache(ctx, b, messageCacheFile, b.msgCache.snapshot())
 	if saveErr == nil || statever.IsNewer(saveErr) {
 		return saveErr
 	}
 	err := os.Remove(filepath.Join(b.cacheDir, messageCacheFile))
 	switch {
 	case err == nil:
-		b.Log.Warn("Removed the message cache file after a failed save", "file", messageCacheFile)
+		b.Log.WarnContext(ctx, "Removed the message cache file after a failed save", "file", messageCacheFile)
 	case !errors.Is(err, fs.ErrNotExist):
-		b.Log.Error("Failed to remove the message cache file after a failed save", "file", messageCacheFile, "error", err)
+		b.Log.ErrorContext(ctx, "Failed to remove the message cache file after a failed save", "file", messageCacheFile, "error", err)
 	}
 	return saveErr
 }
@@ -952,10 +953,14 @@ func writeFileAtomic(dir, name string, write func(*bufio.Writer) error) error {
 // memory as JSON.
 func writeJSONArray[T any](w *bufio.Writer, items []T) error {
 	enc := json.NewEncoder(w)
-	w.WriteByte('[')
+	if err := w.WriteByte('['); err != nil {
+		return err
+	}
 	for i, item := range items {
 		if i > 0 {
-			w.WriteByte(',')
+			if err := w.WriteByte(','); err != nil {
+				return err
+			}
 		}
 		if err := enc.Encode(item); err != nil {
 			return err

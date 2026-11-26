@@ -277,14 +277,18 @@ func TestChannelDeleteDropsStoredReminder(t *testing.T) {
 	}
 	b.mu.Unlock()
 	defer b.stopAllReminderGoroutines()
-	b.saveRemindersForGuild(t.Context(), guildID)
+	if err := b.saveRemindersForGuild(t.Context(), guildID); err != nil {
+		t.Fatal(err)
+	}
 
 	b.onChannelDelete(t.Context(), channelDelete(guildID, 500))
 	b.onChannelDelete(t.Context(), channelDelete(guildID, 700))            // no reminder there
 	b.onChannelDelete(t.Context(), channelDelete(726985544038612993, 500)) // guild not loaded
 
 	restarted := newTestBot(t, s3c)
-	restarted.loadReminders(t.Context())
+	if err := restarted.loadReminders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	defer restarted.stopAllReminderGoroutines()
 	restarted.mu.Lock()
 	defer restarted.mu.Unlock()

@@ -43,7 +43,7 @@ func TestPruneMessageCache(t *testing.T) {
 		b.msgCache.Put(m.ChannelID, m.ID, m)
 	}
 
-	b.pruneMessageCache()
+	b.pruneMessageCache(t.Context())
 
 	for _, m := range expired {
 		if _, ok := b.msgCache.Get(m.ChannelID, m.ID); ok {
@@ -92,7 +92,9 @@ func TestSaveCaches_ExcludesExpiredMessages(t *testing.T) {
 		b.msgCache.Put(m.ChannelID, m.ID, m)
 	}
 
-	b.saveCaches()
+	if err := b.saveCaches(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	var saved []snowflake.ID
 	err := readCacheFile(b.cacheDir, messageCacheFile, func(m discord.Message) { saved = append(saved, m.ID) })
@@ -1004,7 +1006,9 @@ func TestMessageCache_KeepsWhatReadersUse(t *testing.T) {
 		}
 	}
 
-	b.saveCaches()
+	if err := b.saveCaches(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	loaded := newCacheTestBot(t)
 	loaded.cacheDir = b.cacheDir
 	loaded.loadCaches()
@@ -1242,7 +1246,7 @@ func newCacheTestBot(t *testing.T) *Bot {
 
 // loadItems loads items into c in order, as loadCaches does from a file.
 func loadItems[T any](c *cappedGroupedCache[T], items []T, key func(T) (groupID, id snowflake.ID)) {
-	c.load(func(add func(snowflake.ID, snowflake.ID, T)) error {
+	_, _ = c.load(func(add func(snowflake.ID, snowflake.ID, T)) error { // fill never fails
 		for _, item := range items {
 			groupID, id := key(item)
 			add(groupID, id, item)
@@ -1279,7 +1283,9 @@ func TestCachesRoundTrip(t *testing.T) {
 	b.scheduledEventCache.Put(guildID, 8, discord.GuildScheduledEvent{ID: 8, GuildID: guildID})
 	b.soundboardSoundCache.Put(guildID, 9, discord.SoundboardSound{SoundID: 9, GuildID: &guildID})
 
-	b.saveCaches()
+	if err := b.saveCaches(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	for flag, file := range persistedCacheFiles {
 		info, err := os.Stat(filepath.Join(b.cacheDir, file))
@@ -1346,7 +1352,9 @@ func TestCachesRoundTrip_KeepsEvictionOrder(t *testing.T) {
 	for _, userID := range []snowflake.ID{50, 30, 10, 40, 20} {
 		b.memberCache.Put(guildID, userID, discord.Member{GuildID: guildID, User: discord.User{ID: userID}})
 	}
-	b.saveCaches()
+	if err := b.saveCaches(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	got := newCacheTestBot(t)
 	got.cacheDir = b.cacheDir
@@ -1481,7 +1489,9 @@ func TestSaveCaches_FailedMessageSaveRemovesFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b.saveCaches()
+	if err := b.saveCaches(t.Context()); err == nil {
+		t.Fatal("saveCaches succeeded with its writes failing")
+	}
 
 	if _, err := os.Stat(filepath.Join(b.cacheDir, messageCacheFile)); !os.IsNotExist(err) {
 		t.Errorf("message cache file still there after a failed save: %v", err)

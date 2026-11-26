@@ -107,7 +107,7 @@ func (b *Bot) Run() error {
 	}
 	defer b.Client.Close(ctx)
 
-	b.WaitForGuilds(30 * time.Second)
+	b.WaitForGuilds(start, 30*time.Second)
 
 	if err := b.registerAllCommands(start); err != nil {
 		b.shutdown(start)

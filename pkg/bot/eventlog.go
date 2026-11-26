@@ -1389,16 +1389,17 @@ func scheduledEventStatusName(s discord.ScheduledEventStatus) string {
 // --- Soundboard Sound events ---
 
 func (b *Bot) onSoundboardSoundCreate(ctx context.Context, e *events.GuildSoundboardSoundCreate) {
+	sound := e.SoundboardSound
 	guildID := snowflake.ID(0)
-	if e.SoundboardSound.GuildID != nil {
-		guildID = *e.SoundboardSound.GuildID
+	if sound.GuildID != nil {
+		guildID = *sound.GuildID
 	}
 	embed := discord.Embed{
 		Title: "Soundboard Sound Created",
 		Color: colorGreen,
 		Fields: []discord.EmbedField{
-			{Name: "Name", Value: e.SoundboardSound.Name, Inline: boolPtr(true)},
-			{Name: "ID", Value: fmt.Sprintf("`%d`", e.SoundboardSound.SoundID), Inline: boolPtr(true)},
+			{Name: "Name", Value: sound.Name, Inline: boolPtr(true)},
+			{Name: "ID", Value: fmt.Sprintf("`%d`", sound.SoundID), Inline: boolPtr(true)},
 		},
 	}
 	b.postEventLog(ctx, guildID, embed)
@@ -1408,22 +1409,23 @@ func (b *Bot) onSoundboardSoundUpdate(ctx context.Context, e *events.GuildSoundb
 	if e.OldGuildSoundboardSound.SoundID == 0 {
 		return
 	}
+	sound := e.SoundboardSound
 	guildID := snowflake.ID(0)
-	if e.SoundboardSound.GuildID != nil {
-		guildID = *e.SoundboardSound.GuildID
+	if sound.GuildID != nil {
+		guildID = *sound.GuildID
 	}
 	var fields []discord.EmbedField
-	if e.OldGuildSoundboardSound.Name != e.SoundboardSound.Name {
+	if e.OldGuildSoundboardSound.Name != sound.Name {
 		fields = append(fields,
 			discord.EmbedField{Name: "Old Name", Value: e.OldGuildSoundboardSound.Name, Inline: boolPtr(true)},
-			discord.EmbedField{Name: "New Name", Value: e.SoundboardSound.Name, Inline: boolPtr(true)},
+			discord.EmbedField{Name: "New Name", Value: sound.Name, Inline: boolPtr(true)},
 		)
 	}
 	if len(fields) == 0 {
 		return
 	}
 	fields = append(fields, discord.EmbedField{
-		Name: "ID", Value: fmt.Sprintf("`%d`", e.SoundboardSound.SoundID), Inline: boolPtr(true),
+		Name: "ID", Value: fmt.Sprintf("`%d`", sound.SoundID), Inline: boolPtr(true),
 	})
 	embed := discord.Embed{
 		Title:  "Soundboard Sound Updated",

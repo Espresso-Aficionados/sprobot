@@ -304,7 +304,7 @@ func newShortcutBot(t *testing.T) (*Bot, *discordStub, *testutil.FakeS3) {
 	b.shortcuts = newGuildStateStore(b.S3, b.Log, "shortcuts",
 		func() *shortcutState { return newShortcutState(map[string]shortcutEntry{}) },
 		func(st *shortcutState) *sync.Mutex { return &st.mu })
-	b.shortcuts.set(10, newShortcutState(map[string]shortcutEntry{
+	b.shortcuts.set(t.Context(), 10, newShortcutState(map[string]shortcutEntry{
 		"a": {Responses: []string{shortcutKeyA}},
 		"b": {Responses: []string{shortcutKeyB}},
 		"c": {Responses: []string{sprobot.WebEndpoint + "files/shortcut/10/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"}},

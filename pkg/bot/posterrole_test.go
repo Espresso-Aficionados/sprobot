@@ -388,7 +388,7 @@ func newPosterTestBot(t *testing.T, threshold int) (*Bot, *roleAPI, *testutil.Fa
 	for _, id := range []snowflake.ID{500, 5} {
 		b.Client.Caches.AddChannel(testChannel(t, fmt.Sprintf(`{"id":"%d","type":0,"guild_id":"%d","name":"chat"}`, id, roleTestGuild)))
 	}
-	b.posterRole.set(roleTestGuild, st)
+	b.posterRole.set(t.Context(), roleTestGuild, st)
 	return b, api, fakeS3, st
 }
 
@@ -413,7 +413,8 @@ func TestCountMessageClaimsOneSearchPerUser(t *testing.T) {
 	if s == nil {
 		t.Fatal("first message from an untracked user didn't start a search")
 	}
-	if st.countMessage(20, now) != nil || st.countMessage(20, now) != nil {
+	second, third := st.countMessage(20, now), st.countMessage(20, now)
+	if second != nil || third != nil {
 		t.Error("a second search started while one was in flight")
 	}
 	if st.countMessage(21, now) == nil {
@@ -772,7 +773,7 @@ func TestCheckPosterRoleForgetsMembersWithTheRole(t *testing.T) {
 		Counts:   map[string]int{"2": 12, "3": 4},
 		Fetched:  map[string]bool{"2": true, "3": true},
 	}
-	b.posterRole.set(guildID, st)
+	b.posterRole.set(t.Context(), guildID, st)
 
 	b.checkPosterRole(t.Context(), guildID, 100, discord.Message{
 		Author: discord.User{ID: 2},

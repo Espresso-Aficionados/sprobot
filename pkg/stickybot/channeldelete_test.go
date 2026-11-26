@@ -140,7 +140,9 @@ func TestGuildReadyDropsStickiesOfDeletedChannels(t *testing.T) {
 	b, fakeS3 := newFakeBot(t, f)
 	delete(b.stickies, testGuildID)
 	keys := seedStoredStickies(t, fakeS3, 500, 600, 700, 900)
-	b.loadStickies(t.Context())
+	if err := b.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	b.mu.Lock()
 	h := b.stickies[testGuildID][500].handle
 	b.mu.Unlock()
@@ -182,12 +184,16 @@ func TestLateLoadDropsStickiesOfDeletedChannels(t *testing.T) {
 	fakeS3.Fail[storedKey] = http.StatusForbidden
 	fakeS3.Mu.Unlock()
 
-	b.loadStickies(t.Context())
+	if err := b.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	b.onGuildReady(t.Context(), guildReady(testGuildID))
 	fakeS3.Mu.Lock()
 	delete(fakeS3.Fail, storedKey)
 	fakeS3.Mu.Unlock()
-	b.loadStickies(t.Context())
+	if err := b.loadStickies(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	waitFor(t, "the sticky to be dropped", func() bool {
 		b.mu.Lock()

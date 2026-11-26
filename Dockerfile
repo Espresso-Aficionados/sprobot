@@ -79,9 +79,11 @@ CMD ["/threadbot"]
 FROM build-threadbot AS devthreadbot
 CMD ["/threadbot"]
 
-# The test image carries the module cache but no build cache: the packages
-# to compile are only known from our sources, which change on every PR.
-# Instead, CI mounts a Go build cache it keeps between runs at
-# /root/.cache/go-build when it runs this image (see test.yaml).
+# The test image: the Go toolchain, the module cache and the sources in
+# WORKDIR, but no build cache: the packages to compile are only known from
+# our sources, which change on every PR. CI (sadbox/ci's go.yml, called by
+# test.yaml) runs gofmt, go vet, go test -race, golangci-lint and
+# govulncheck inside it with a Go build cache it keeps between runs, and
+# overrides the entrypoint; the CMD is for test.sh.
 FROM base AS test
 CMD ["sh", "-c", "test -z \"$(gofmt -l .)\" || { echo 'gofmt check failed:'; gofmt -l .; exit 1; } && go vet ./... && go test -race ./..."]

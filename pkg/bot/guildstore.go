@@ -92,7 +92,7 @@ func (s *guildStateStore[T]) get(guildID snowflake.ID) *T {
 }
 
 // set replaces the guild's state, unless its load failed.
-func (s *guildStateStore[T]) set(guildID snowflake.ID, st *T) {
+func (s *guildStateStore[T]) set(ctx context.Context, guildID snowflake.ID, st *T) {
 	s.mu.Lock()
 	failed := s.failed[guildID]
 	if !failed {
@@ -100,7 +100,7 @@ func (s *guildStateStore[T]) set(guildID snowflake.ID, st *T) {
 	}
 	s.mu.Unlock()
 	if failed {
-		s.log.Error("Refusing to replace "+s.s3Key+" state that failed to load", "guild_id", guildID)
+		s.log.ErrorContext(ctx, "Refusing to replace "+s.s3Key+" state that failed to load", "guild_id", guildID)
 	}
 }
 
@@ -214,7 +214,7 @@ func (s *guildStateStore[T]) retryFailedLoads(ctx context.Context) error {
 	s.mu.RLock()
 	guildIDs := slices.Collect(maps.Keys(s.failed))
 	s.mu.RUnlock()
-	s.load(ctx, guildIDs) // refusals are logged; only startup exits on them
+	_ = s.load(ctx, guildIDs) // refusals are logged; only startup exits on them
 	s.mu.RLock()
 	unloaded := len(s.failed)
 	s.mu.RUnlock()

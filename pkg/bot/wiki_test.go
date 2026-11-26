@@ -26,7 +26,7 @@ func TestWikiAutocompleteMatchesHint(t *testing.T) {
 
 	found := false
 	for _, c := range choices {
-		if c == "coffee-reccomendations" {
+		if c == "coffee-reccomendations" { //nolint:misspell // the shortcut's name, as users type it
 			found = true
 		}
 	}

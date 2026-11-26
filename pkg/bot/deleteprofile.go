@@ -23,7 +23,7 @@ func (b *Bot) handleDelete(ctx context.Context, e *events.ApplicationCommandInte
 		"guild_id", guildIDStr(e),
 	)
 
-	e.CreateMessage(discord.MessageCreate{
+	if err := e.CreateMessage(discord.MessageCreate{
 		Content: "What would you like to delete?",
 		Flags:   discord.MessageFlagEphemeral,
 		Components: []discord.LayoutComponent{
@@ -42,7 +42,9 @@ func (b *Bot) handleDelete(ctx context.Context, e *events.ApplicationCommandInte
 				),
 			),
 		},
-	}, rest.WithCtx(ctx))
+	}, rest.WithCtx(ctx)); err != nil {
+		b.Log.ErrorContext(ctx, "Failed to send delete menu", "error", err)
+	}
 }
 
 func (b *Bot) handleComponentInteraction(ctx context.Context, e *events.ComponentInteractionCreate) {
@@ -72,10 +74,12 @@ func (b *Bot) handleComponentInteraction(ctx context.Context, e *events.Componen
 
 	if customID == "del_cancel" {
 		content := "No worries!"
-		e.UpdateMessage(discord.MessageUpdate{
+		if err := e.UpdateMessage(discord.MessageUpdate{
 			Content:    &content,
 			Components: &[]discord.LayoutComponent{},
-		}, rest.WithCtx(ctx))
+		}, rest.WithCtx(ctx)); err != nil {
+			b.Log.ErrorContext(ctx, "Failed to cancel delete", "error", err)
+		}
 		return
 	}
 
@@ -84,7 +88,7 @@ func (b *Bot) handleComponentInteraction(ctx context.Context, e *events.Componen
 			switch customID {
 			case fmt.Sprintf("del_profile_%s", tmpl.ShortName):
 				content := "Are you sure?"
-				e.UpdateMessage(discord.MessageUpdate{
+				if err := e.UpdateMessage(discord.MessageUpdate{
 					Content: &content,
 					Components: &[]discord.LayoutComponent{
 						discord.NewActionRow(
@@ -98,12 +102,14 @@ func (b *Bot) handleComponentInteraction(ctx context.Context, e *events.Componen
 							),
 						),
 					},
-				}, rest.WithCtx(ctx))
+				}, rest.WithCtx(ctx)); err != nil {
+					b.Log.ErrorContext(ctx, "Failed to ask for delete confirmation", "error", err)
+				}
 				return
 
 			case fmt.Sprintf("del_image_%s", tmpl.ShortName):
 				content := "Are you sure?"
-				e.UpdateMessage(discord.MessageUpdate{
+				if err := e.UpdateMessage(discord.MessageUpdate{
 					Content: &content,
 					Components: &[]discord.LayoutComponent{
 						discord.NewActionRow(
@@ -117,7 +123,9 @@ func (b *Bot) handleComponentInteraction(ctx context.Context, e *events.Componen
 							),
 						),
 					},
-				}, rest.WithCtx(ctx))
+				}, rest.WithCtx(ctx)); err != nil {
+					b.Log.ErrorContext(ctx, "Failed to ask for delete confirmation", "error", err)
+				}
 				return
 
 			case fmt.Sprintf("del_confirm_profile_%s", tmpl.ShortName):

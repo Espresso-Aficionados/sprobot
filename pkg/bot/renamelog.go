@@ -290,7 +290,7 @@ func (b *Bot) handleRenameLogList(ctx context.Context, e *events.ApplicationComm
 	if dest == 0 {
 		sb.WriteString("**Destination:** not set\n")
 	} else {
-		sb.WriteString(fmt.Sprintf("**Destination:** %s\n", channelMention(dest)))
+		fmt.Fprintf(&sb, "**Destination:** %s\n", channelMention(dest))
 	}
 
 	if len(monitored) == 0 {
@@ -298,7 +298,7 @@ func (b *Bot) handleRenameLogList(ctx context.Context, e *events.ApplicationComm
 	} else {
 		sb.WriteString("**Monitored channels:**\n")
 		for _, m := range monitored {
-			sb.WriteString(fmt.Sprintf("- %s\n", channelMention(m)))
+			fmt.Fprintf(&sb, "- %s\n", channelMention(m))
 		}
 	}
 

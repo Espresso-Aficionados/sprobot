@@ -369,8 +369,8 @@ func newTempRoleTestBot(t *testing.T) (*Bot, *roleAPI) {
 	t.Helper()
 	b, api, _ := newRoleTestBot(t)
 	addTestRole(b, discord.Role{ID: tempTestRole, Position: 5, Permissions: discord.PermissionSendMessages})
-	b.tempRoleConfig.set(roleTestGuild, &tempRoleConfigState{Roles: []tempRoleConfigEntry{{RoleID: tempTestRole, Duration: time.Hour}}})
-	b.tempRoles.set(roleTestGuild, &tempRoleState{})
+	b.tempRoleConfig.set(t.Context(), roleTestGuild, &tempRoleConfigState{Roles: []tempRoleConfigEntry{{RoleID: tempTestRole, Duration: time.Hour}}})
+	b.tempRoles.set(t.Context(), roleTestGuild, &tempRoleState{})
 	return b, api
 }
 
@@ -397,7 +397,9 @@ func TestProcessTempRoleExpiriesRetriesFailedRemovals(t *testing.T) {
 		}
 		return http.StatusNoContent, ""
 	})
-	b.processTempRoleExpiries(t.Context())
+	if err := b.processTempRoleExpiries(t.Context()); err == nil {
+		t.Fatal("processTempRoleExpiries succeeded with a removal failing")
+	}
 
 	if got := timerUsers(st.Entries); !slices.Equal(got, []snowflake.ID{4, 5}) {
 		t.Fatalf("users left = %v, want the failed removal (4) and the live timer (5)", got)
@@ -415,7 +417,9 @@ func TestProcessTempRoleExpiriesRetriesFailedRemovals(t *testing.T) {
 
 	// The next tick retries, and the removal now succeeds.
 	api.setRespond(nil)
-	b.processTempRoleExpiries(t.Context())
+	if err := b.processTempRoleExpiries(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if got := timerUsers(st.Entries); !slices.Equal(got, []snowflake.ID{5}) {
 		t.Errorf("users left = %v, want [5]", got)
 	}
@@ -445,7 +449,9 @@ func TestProcessTempRoleExpiriesYieldsToExtension(t *testing.T) {
 		}
 		return http.StatusNoContent, ""
 	})
-	b.processTempRoleExpiries(t.Context())
+	if err := b.processTempRoleExpiries(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if n := api.count(roleCall("PUT", 20, tempTestRole)); n != 1 {
 		t.Errorf("user 20: %d re-grants, want 1", n)
@@ -467,7 +473,9 @@ func TestTempRoleFailedGrantKeepsPendingRemoval(t *testing.T) {
 	st.Entries = []tempRoleEntry{pending}
 
 	api.setRespond(func(string) (int, string) { return restError(http.StatusForbidden, 50013, "Missing Permissions") })
-	b.processTempRoleExpiries(t.Context())
+	if err := b.processTempRoleExpiries(t.Context()); err == nil {
+		t.Fatal("processTempRoleExpiries succeeded with the removal failing")
+	}
 	resolved := discord.ResolvedData{Users: map[snowflake.ID]discord.User{20: {ID: 20, Username: "member"}}}
 	e, responses := roleCommand(t, roleTestOwner, nil, tempRoleCommand(20, tempTestRole), resolved)
 	b.handleTempRole(t.Context(), e)
@@ -479,7 +487,9 @@ func TestTempRoleFailedGrantKeepsPendingRemoval(t *testing.T) {
 	}
 
 	api.setRespond(nil)
-	b.processTempRoleExpiries(t.Context())
+	if err := b.processTempRoleExpiries(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if len(st.Entries) != 0 {
 		t.Errorf("entries = %+v after the removal succeeded", st.Entries)
 	}
@@ -499,7 +509,9 @@ func TestStaleMessageDoesNotRestartTimer(t *testing.T) {
 		Member:    &discord.Member{RoleIDs: []snowflake.ID{tempTestRole}},
 		CreatedAt: time.Now(),
 	}
-	b.processTempRoleExpiries(t.Context())
+	if err := b.processTempRoleExpiries(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	b.checkTempRolesOnMessage(t.Context(), roleTestGuild, msg)
 	if len(st.Entries) != 0 {
@@ -587,7 +599,7 @@ func TestTempRoleConfigAddRejectsModeratorRole(t *testing.T) {
 func TestEnsureTempRoleTimerRefusedWhenTimersNotLoaded(t *testing.T) {
 	b, _, _ := newRoleTestBot(t)
 	addTestRole(b, discord.Role{ID: tempTestRole, Position: 5, Permissions: discord.PermissionSendMessages})
-	b.tempRoleConfig.set(roleTestGuild, &tempRoleConfigState{Roles: []tempRoleConfigEntry{{RoleID: tempTestRole, Duration: time.Hour}}})
+	b.tempRoleConfig.set(t.Context(), roleTestGuild, &tempRoleConfigState{Roles: []tempRoleConfigEntry{{RoleID: tempTestRole, Duration: time.Hour}}})
 	b.tempRoles.mu.Lock()
 	b.tempRoles.failed[roleTestGuild] = true
 	b.tempRoles.mu.Unlock()
