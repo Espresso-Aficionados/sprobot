@@ -13,6 +13,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 	"github.com/sadbox/svc/telemetry"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -103,6 +104,8 @@ func eventName(e bot.Event) string {
 // it), with event.handler the listener's name, and h gets the span's context.
 func TraceEvent[E bot.Event](handler string, h func(context.Context, E)) func(E) {
 	return func(e E) {
+		handlersRunning.Add(1)
+		defer handlersRunning.Add(-1)
 		ctx, span := otel.Tracer(scope).Start(context.Background(), "event "+eventName(e),
 			trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(eventHandler.String(handler)))
 		defer span.End()
@@ -167,7 +170,13 @@ func CustomIDLabel(customID string, names []string) string {
 // traceInteraction runs handle as one interaction, in a span named
 // "interaction <kind> <name>", and records its duration. handle gets the
 // span's context.
-func traceInteraction(kind, name string, handle func(context.Context)) {
+func traceInteraction(kind, name string, id snowflake.ID, handle func(context.Context)) {
+	if staleReplay(id.Time(), time.Now()) {
+		slog.Info("Skipped an interaction replayed after a resume: too old to answer", "type", kind, "name", name, "age", time.Since(id.Time()).Round(time.Millisecond))
+		return
+	}
+	handlersRunning.Add(1)
+	defer handlersRunning.Add(-1)
 	attrs := []attribute.KeyValue{interactionType.String(kind), interactionName.String(name)}
 	ctx, span := otel.Tracer(scope).Start(context.Background(), "interaction "+kind+" "+name,
 		trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attrs...))
@@ -185,7 +194,7 @@ func traceInteraction(kind, name string, handle func(context.Context)) {
 // command name.
 func TraceCommands(h func(context.Context, *events.ApplicationCommandInteractionCreate)) func(*events.ApplicationCommandInteractionCreate) {
 	return func(e *events.ApplicationCommandInteractionCreate) {
-		traceInteraction("command", commandLabel(e.Data.CommandName()), func(ctx context.Context) { h(ctx, e) })
+		traceInteraction("command", commandLabel(e.Data.CommandName()), e.ID(), func(ctx context.Context) { h(ctx, e) })
 	}
 }
 
@@ -193,7 +202,7 @@ func TraceCommands(h func(context.Context, *events.ApplicationCommandInteraction
 // command name.
 func TraceAutocomplete(h func(context.Context, *events.AutocompleteInteractionCreate)) func(*events.AutocompleteInteractionCreate) {
 	return func(e *events.AutocompleteInteractionCreate) {
-		traceInteraction("autocomplete", commandLabel(e.Data.CommandName), func(ctx context.Context) { h(ctx, e) })
+		traceInteraction("autocomplete", commandLabel(e.Data.CommandName), e.ID(), func(ctx context.Context) { h(ctx, e) })
 	}
 }
 
@@ -201,7 +210,7 @@ func TraceAutocomplete(h func(context.Context, *events.AutocompleteInteractionCr
 // ID's prefix among names.
 func TraceComponents(names []string, h func(context.Context, *events.ComponentInteractionCreate)) func(*events.ComponentInteractionCreate) {
 	return func(e *events.ComponentInteractionCreate) {
-		traceInteraction("component", CustomIDLabel(e.Data.CustomID(), names), func(ctx context.Context) { h(ctx, e) })
+		traceInteraction("component", CustomIDLabel(e.Data.CustomID(), names), e.ID(), func(ctx context.Context) { h(ctx, e) })
 	}
 }
 
@@ -209,7 +218,7 @@ func TraceComponents(names []string, h func(context.Context, *events.ComponentIn
 // ID's prefix among names.
 func TraceModals(names []string, h func(context.Context, *events.ModalSubmitInteractionCreate)) func(*events.ModalSubmitInteractionCreate) {
 	return func(e *events.ModalSubmitInteractionCreate) {
-		traceInteraction("modal", CustomIDLabel(e.Data.CustomID, names), func(ctx context.Context) { h(ctx, e) })
+		traceInteraction("modal", CustomIDLabel(e.Data.CustomID, names), e.ID(), func(ctx context.Context) { h(ctx, e) })
 	}
 }
 

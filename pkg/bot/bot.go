@@ -13,6 +13,7 @@ import (
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/gateway"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/sadbox/svc/telemetry"
 
@@ -92,7 +93,10 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 		b.Log.Error("Failed to read the cache dir's version; the next save rewrites it", "error", err)
 	}
 	b.removeRetiredCacheFiles()
-	b.loadCaches()
+	if !b.loadCaches() {
+		// A resume sends no GUILD_CREATE: the caches are all it would have.
+		b.DropResume("a cache file failed to load")
+	}
 
 	client, err := disgo.New(cfg.Token,
 		botutil.RESTClient(),
@@ -114,7 +118,9 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
 			gateway.WithCloseHandler(b.OnGatewayClose),
 		),
+		bot.WithGatewayConfigOpts(b.GatewayResumeOpts()...),
 		bot.WithEventListenerFunc(b.OnReady),
+		bot.WithEventListenerFunc(b.OnResumed),
 		bot.WithEventListenerFunc(b.OnGuildJoin),
 		bot.WithEventListenerFunc(botutil.TraceEvent("onGuildLeave", b.onGuildLeave)),
 		bot.WithEventListenerFunc(botutil.TraceCommands(b.onCommand)),
@@ -169,7 +175,7 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 		return nil, err
 	}
 
-	b.Client = client
+	b.SetClient(client)
 	return b, nil
 }
 
@@ -354,9 +360,10 @@ func (b *Bot) retryFailedLoads(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// saveState saves every per-guild state store. Each logs its own failures.
-func (b *Bot) saveState(ctx context.Context) {
-	_ = errors.Join(
+// saveState saves every per-guild state store. Each logs its own failures;
+// the joined error says whether any failed.
+func (b *Bot) saveState(ctx context.Context) error {
+	return errors.Join(
 		b.autoRole.save(ctx),
 		b.eventLog.save(ctx),
 		b.modLog.save(ctx),
@@ -411,6 +418,9 @@ func (b *Bot) Run() error {
 		return err
 	}
 	defer b.Client.Close(ctx)
+	if b.InResumedSession() {
+		b.cacheSelfUser(start)
+	}
 
 	b.WaitForGuilds(30 * time.Second)
 
@@ -440,8 +450,27 @@ func (b *Bot) Run() error {
 	shutdownErr := b.WaitForShutdown("Bot")
 	stop, stopSpan := botutil.StartSpan("shutdown")
 	defer stopSpan.End()
+	// No event arrives after this, so the caches saved below are exactly
+	// what the session's events left: what a resume continues from.
+	handoff := b.HandOffGateway(stop, shutdownErr)
 	b.stopLoops()
-	b.saveState(stop)
-	_ = b.saveCaches() // it logs its own failures
+	stateErr := b.saveState(stop)
+	cacheErr := b.saveCaches() // it logs its own failures
+	// A resume continues from exactly what was saved: only then.
+	b.SaveHandoff(stop, handoff, stateErr == nil && cacheErr == nil)
 	return shutdownErr
+}
+
+// cacheSelfUser fills the self-user cache, which only READY sets: a resumed
+// session has none (checkGrantableRole's fallback reads it).
+func (b *Bot) cacheSelfUser(ctx context.Context) {
+	if _, ok := b.Client.Caches.SelfUser(); ok {
+		return
+	}
+	u, err := b.Client.Rest.GetCurrentUser("", rest.WithCtx(ctx))
+	if err != nil {
+		b.Log.WarnContext(ctx, "Failed to fetch the bot's own user after a resume", "error", err)
+		return
+	}
+	b.Client.Caches.SetSelfUser(*u)
 }

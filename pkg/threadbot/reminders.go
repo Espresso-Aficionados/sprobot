@@ -245,19 +245,25 @@ func (b *Bot) ensureRemindersLoaded(ctx context.Context, guildID snowflake.ID) e
 // guilds the gateway says the bot is in. GuildReady fires again for every new
 // gateway session.
 func (b *Bot) onGuildReady(ctx context.Context, e *events.GuildReady) {
-	if !botutil.GuildAllowed(e.GuildID) {
+	b.guildReady(ctx, e.GuildID)
+}
+
+// guildReady marks guildID ready and starts its reminder loops: on its
+// GuildReady, or for a resumed session (seedResumedSession).
+func (b *Bot) guildReady(ctx context.Context, guildID snowflake.ID) {
+	if !botutil.GuildAllowed(guildID) {
 		return
 	}
 	b.mu.Lock()
 	if b.readyGuilds == nil {
 		b.readyGuilds = make(map[snowflake.ID]bool)
 	}
-	b.readyGuilds[e.GuildID] = true
-	_, loaded := b.reminders[e.GuildID]
+	b.readyGuilds[guildID] = true
+	_, loaded := b.reminders[guildID]
 	b.mu.Unlock()
 	// Otherwise the load failed, and the retry that loads them starts them.
 	if loaded {
-		b.startGuildReminders(ctx, e.GuildID)
+		b.startGuildReminders(ctx, guildID)
 	}
 }
 

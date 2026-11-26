@@ -15,7 +15,7 @@ import (
 var allVars = []string{
 	"SPROBOT_DISCORD_TOKEN", "SPROBOT_HEALTHCHECK_ENDPOINT",
 	"S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_BUCKET", "WEB_ENDPOINT", "PORT",
-	"EGRESS_FETCH_GATEWAY",
+	"EGRESS_FETCH_GATEWAY", "GATEWAY_SESSION_DIR",
 }
 
 // setEnv clears every variable the loaders read, then sets env.
@@ -103,6 +103,29 @@ func TestLoadBotFetchGateway(t *testing.T) {
 	_, err = LoadBot("SPROBOT")
 	if got := problems(t, err); len(got) != 1 || !strings.HasPrefix(got[0], "EGRESS_FETCH_GATEWAY ") {
 		t.Fatalf("problems = %q, want one for EGRESS_FETCH_GATEWAY", got)
+	}
+}
+
+// GATEWAY_SESSION_DIR turns gateway session handoffs on; unset, they are
+// off. A relative or unclean path stops the bot starting.
+func TestLoadBotGatewaySessionDir(t *testing.T) {
+	env := prodLike()
+	setEnv(t, env)
+	if cfg, err := LoadBot("SPROBOT"); err != nil || cfg.GatewaySessionDir != "" {
+		t.Fatalf("unset: LoadBot = %+v, %v; want handoffs off", cfg, err)
+	}
+	env["GATEWAY_SESSION_DIR"] = "/gateway"
+	setEnv(t, env)
+	if cfg, err := LoadBot("SPROBOT"); err != nil || cfg.GatewaySessionDir != "/gateway" {
+		t.Fatalf("LoadBot = %+v, %v", cfg, err)
+	}
+	for _, v := range []string{"gateway", "/gateway/", "/run/../gateway"} {
+		env["GATEWAY_SESSION_DIR"] = v
+		setEnv(t, env)
+		_, err := LoadBot("SPROBOT")
+		if got := problems(t, err); len(got) != 1 || !strings.HasPrefix(got[0], "GATEWAY_SESSION_DIR ") {
+			t.Fatalf("%q: problems = %q, want one for GATEWAY_SESSION_DIR", v, got)
+		}
 	}
 }
 

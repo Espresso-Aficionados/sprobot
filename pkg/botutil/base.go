@@ -31,6 +31,11 @@ type BaseBot struct {
 	TestGuildIDsOverride []snowflake.ID // override for tests without a gateway
 	gatewayFailed        chan error     // receives the error when the gateway closes for good
 
+	sessionDir   string                    // GATEWAY_SESSION_DIR: handoffs on when set (session.go)
+	resumed      *GatewaySession           // the session taken at startup, being resumed
+	sessionStart atomic.Pointer[time.Time] // this process's READY
+	readySeen    atomic.Bool               // a READY has arrived
+
 	ignoredGuildsMu sync.Mutex
 	ignoredGuilds   map[snowflake.ID]bool // guilds outside AllowedGuildIDs already warned about
 }
@@ -45,11 +50,24 @@ func NewBaseBot(cfg envconfig.Bot) (*BaseBot, error) {
 		return nil, err
 	}
 
-	return &BaseBot{
+	b := &BaseBot{
 		S3:            s3,
 		Log:           slog.Default(),
 		gatewayFailed: make(chan error, 1),
-	}, nil
+		sessionDir:    cfg.GatewaySessionDir,
+	}
+	b.takeResumableSession()
+	return b, nil
+}
+
+// SetClient sets the bot's client, once built (with GatewayResumeOpts), and
+// pre-registers a resumed session's pending guilds (see preRegister).
+func (b *BaseBot) SetClient(c *bot.Client) {
+	b.Client = c
+	b.checkResumedApp()
+	if b.resumed != nil {
+		preRegister(c.Caches, b.resumed.Pending)
+	}
 }
 
 // Heartbeat is the 30-second heartbeat tick: while the gateway is
@@ -97,8 +115,9 @@ func gatewayCloseFatal(err error, reconnect bool) bool {
 }
 
 // GuildIDs returns the IDs of the guilds in the gateway cache that are in
-// AllowedGuildIDs: the guilds to register commands and load state for.
-// In tests without a gateway, set TestGuildIDsOverride.
+// AllowedGuildIDs: the guilds to register commands and load state for. A
+// resumed session adds the guilds it was in: no GUILD_CREATE fills the cache
+// on a resume. In tests without a gateway, set TestGuildIDsOverride.
 func (b *BaseBot) GuildIDs() []snowflake.ID {
 	if b.TestGuildIDsOverride != nil {
 		return b.TestGuildIDsOverride
@@ -112,12 +131,32 @@ func (b *BaseBot) GuildIDs() []snowflake.ID {
 			ids = append(ids, g.ID)
 		}
 	}
+	if b.resumed != nil {
+		ids = unionAllowed(ids, b.resumed.Guilds)
+	}
 	return ids
 }
 
 // WaitForGuilds blocks until all guilds are ready or the timeout expires.
+// The gateway's Open returns on READY or RESUMED, but their handlers (the
+// cache's guild list, then OnReady or OnResumed) run in goroutines of their
+// own, so it first waits for b.Ready: without that, an empty cache read too
+// early looked like every guild ready, and commands registered for none. A
+// resumed session then has no guilds to wait for: it sends no GUILD_CREATE.
 func (b *BaseBot) WaitForGuilds(timeout time.Duration) {
 	deadline := time.After(timeout)
+	for !b.Ready.Load() {
+		select {
+		case <-deadline:
+			b.Log.Warn("Timed out waiting for the gateway session to be ready")
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if b.InResumedSession() {
+		b.Log.Info("Resumed: guilds from the handed-off session", "count", len(b.resumed.Guilds))
+		return
+	}
 	for {
 		if len(b.Client.Caches.UnreadyGuildIDs()) == 0 {
 			b.Log.Info("All guilds ready", "count", b.Client.Caches.GuildsLen())
@@ -132,9 +171,17 @@ func (b *BaseBot) WaitForGuilds(timeout time.Duration) {
 	}
 }
 
-// OnReady is the shared ready handler for all bots.
+// OnReady is the shared ready handler for all bots: a new gateway session,
+// including one Discord started because it refused a resume.
 func (b *BaseBot) OnReady(e *events.Ready) {
-	b.Log.Info("Logged in")
+	now := time.Now()
+	b.sessionStart.Store(&now)
+	if b.resumed != nil && !b.readySeen.Swap(true) {
+		b.Log.Info("Logged in: Discord refused the resume, so this is a new session")
+	} else {
+		b.readySeen.Store(true)
+		b.Log.Info("Logged in")
+	}
 	for _, g := range e.Guilds {
 		b.warnIfNotAllowed(g.ID)
 	}

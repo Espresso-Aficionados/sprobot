@@ -16,6 +16,7 @@ import (
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
@@ -299,6 +300,43 @@ func TestGuildReadyStartsLoopsAndDropsDeletedChannels(t *testing.T) {
 	got := running(restarted, devGuild)
 	if _, ok := got[600]; ok || len(got) != 3 {
 		t.Errorf("stored reminders after restart = %v, want 500, 700 and 900", got)
+	}
+}
+
+// A resumed session sends no GuildReady: its guilds' loops start, and their
+// deleted channels drop, from the handed-off session, and the session keeps
+// its own start (member counts fetched since stay live).
+func TestResumedSessionStartsLoops(t *testing.T) {
+	api := newFakeThreadAPI()
+	api.channelErrs["600"] = int(rest.JSONErrorCodeUnknownChannel)
+	b := newThreadListBot(t, api)
+	fake := testutil.NewFakeS3()
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	b.S3 = testutil.NewTestS3Client(t, srv)
+	seedReminders(fake)
+	defer b.stopAllReminderGoroutines()
+
+	b.loadReminders(t.Context())
+	started := time.Now().Add(-time.Hour).Truncate(time.Second)
+	b.SetResumed(&botutil.GatewaySession{StartedAt: started, Guilds: []snowflake.ID{devGuild}})
+	b.seedResumedSession(t.Context())
+	if got := running(b, devGuild); len(got) != 3 || !got[500] || !got[700] || !got[900] {
+		t.Errorf("after resume: running = %v, want 500, 700 and 900 running and 600 dropped", got)
+	}
+	if got := running(b, prodGuild); len(got) != 1 || got[800] {
+		t.Errorf("prod (not in the session): running = %v, want loaded and not running", got)
+	}
+	b.mu.Lock()
+	gotStart := b.sessionStart
+	b.mu.Unlock()
+	if !gotStart.Equal(started) {
+		t.Errorf("sessionStart = %v, want the resumed session's %v", gotStart, started)
+	}
+	// Discord refusing the resume sends GuildReady after all: nothing doubles.
+	b.onGuildReady(t.Context(), guildReady(devGuild))
+	if got := running(b, devGuild); len(got) != 3 {
+		t.Errorf("after a GuildReady too: running = %v, want the same three", got)
 	}
 }
 

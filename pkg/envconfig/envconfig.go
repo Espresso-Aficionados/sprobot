@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -40,6 +41,10 @@ type Bot struct {
 	// FetchGateway is the egress proxy's fetch gateway, which fetches
 	// user-supplied URLs for the bot; "" when there is none (development).
 	FetchGateway string
+	// GatewaySessionDir is where a stopping bot hands its gateway session
+	// to the next process (botutil's session.go); "" turns handoffs off
+	// (development).
+	GatewaySessionDir string
 	Storage
 }
 
@@ -59,14 +64,15 @@ func (e *Error) Error() string {
 }
 
 // LoadBot reads a bot's environment: {prefix}_DISCORD_TOKEN, the optional
-// EGRESS_FETCH_GATEWAY and the storage variables. The retired {prefix}_HEALTHCHECK_ENDPOINT is ignored,
+// EGRESS_FETCH_GATEWAY and GATEWAY_SESSION_DIR, and the storage variables. The retired {prefix}_HEALTHCHECK_ENDPOINT is ignored,
 // like any variable nothing reads, whatever its value.
 func LoadBot(prefix string) (Bot, error) {
 	r := &reader{}
 	cfg := Bot{
-		Token:        r.required(prefix+"_DISCORD_TOKEN", noSpaces),
-		FetchGateway: r.optional("EGRESS_FETCH_GATEWAY", "", plainHTTPURL),
-		Storage:      r.storage(),
+		Token:             r.required(prefix+"_DISCORD_TOKEN", noSpaces),
+		FetchGateway:      r.optional("EGRESS_FETCH_GATEWAY", "", plainHTTPURL),
+		GatewaySessionDir: r.optional("GATEWAY_SESSION_DIR", "", absPath),
+		Storage:           r.storage(),
 	}
 	return cfg, r.err()
 }
@@ -188,6 +194,13 @@ func httpURL(v string) string {
 
 // plainHTTPURL is for the fetch gateway, which speaks plain HTTP on the
 // bot's own network.
+func absPath(v string) string {
+	if !filepath.IsAbs(v) || filepath.Clean(v) != v {
+		return "is not a clean absolute path"
+	}
+	return ""
+}
+
 func plainHTTPURL(v string) string {
 	u, err := url.Parse(v)
 	if err != nil || u.Scheme != "http" || u.Host == "" {

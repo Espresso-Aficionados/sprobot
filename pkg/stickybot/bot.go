@@ -67,7 +67,9 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
 			gateway.WithCloseHandler(b.OnGatewayClose),
 		),
+		bot.WithGatewayConfigOpts(b.GatewayResumeOpts()...),
 		bot.WithEventListenerFunc(b.OnReady),
+		bot.WithEventListenerFunc(b.OnResumed),
 		bot.WithEventListenerFunc(b.OnGuildJoin),
 		bot.WithEventListenerFunc(botutil.TraceEvent("onGuildReady", b.onGuildReady)),
 		bot.WithEventListenerFunc(botutil.TraceCommands(b.onCommand)),
@@ -80,7 +82,7 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 		return nil, err
 	}
 
-	b.Client = client
+	b.SetClient(client)
 	return b, nil
 }
 
@@ -97,6 +99,7 @@ func (b *Bot) Run() error {
 		return err
 	}
 
+	b.seedResumedGuilds()
 	b.ServeHealth()
 	if err := b.OpenGateway(start); err != nil {
 		b.shutdown(start)
@@ -118,8 +121,37 @@ func (b *Bot) Run() error {
 	shutdownErr := b.WaitForShutdown("Stickybot")
 	stop, stopSpan := botutil.StartSpan("shutdown")
 	defer stopSpan.End()
+	// No event arrives after this, so what is saved below is all the
+	// session's events did.
+	handoff := b.HandOffGateway(stop, shutdownErr)
 	b.shutdown(stop)
+	b.SaveHandoff(stop, handoff, b.allSaved())
 	return shutdownErr
+}
+
+// allSaved reports whether every sticky change is saved: a resume continues
+// from the stored stickies, so only then.
+func (b *Bot) allSaved() bool {
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
+	return len(b.unsaved) == 0
+}
+
+// seedResumedGuilds marks the guilds of a resumed session ready, as their
+// GuildReady would have: a resume sends none. Their deleted-channel check
+// isn't needed: the resume replays the channel deletes it missed.
+func (b *Bot) seedResumedGuilds() {
+	s := b.Resumed()
+	if s == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, id := range s.Guilds {
+		if botutil.GuildAllowed(id) {
+			b.readyGuilds[id] = true
+		}
+	}
 }
 
 // shutdown stops the repost loops, waiting out reposts in flight, and retries
