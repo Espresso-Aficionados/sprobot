@@ -13,6 +13,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/s3client"
+	"github.com/Espresso-Aficionados/sprobot/pkg/sprobot"
 )
 
 // profileNameRetry is how long to wait before retrying a failed name update,
@@ -27,7 +28,13 @@ type profileNames struct {
 	owners map[string]*profileOwner // profileKey -> what we know of this user's profiles
 	listed map[snowflake.ID]bool    // guilds whose stored profiles have been listed
 	locks  sync.Map                 // profileKey -> *sync.Mutex
+	// stored is whether each profile is stored, from the listing and the
+	// saves and deletes since (false: deleted); sprobot_profiles counts it.
+	stored map[storedProfileKey]bool
 }
+
+// storedProfileKey is one user's profile in a guild; template is its short name.
+type storedProfileKey struct{ guild, template, user string }
 
 type profileOwner struct {
 	none      bool     // the user has no profiles in this guild
@@ -74,6 +81,47 @@ func (b *Bot) profileDeleted(guildID, userID string) {
 	p.owners[profileKey(guildID, userID)] = &profileOwner{}
 }
 
+// profileStored records whether the user's profile of the template (its
+// short name) is stored, after a save or delete. Call it with the profile
+// lock held.
+func (b *Bot) profileStored(guildID, template, userID string, stored bool) {
+	p := &b.profileNames
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stored == nil {
+		p.stored = make(map[storedProfileKey]bool)
+	}
+	p.stored[storedProfileKey{guildID, template, userID}] = stored
+}
+
+// counts is the number of profiles stored in the guilds of guildIDs, by
+// template short name, every template of theirs present. ok is false unless
+// each of them with templates has been listed and one has.
+func (p *profileNames) counts(guildIDs []snowflake.ID, templates map[snowflake.ID][]sprobot.Template) (counts map[string]int, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	counts = make(map[string]int)
+	guilds := make(map[string]bool)
+	for _, id := range guildIDs {
+		if len(templates[id]) == 0 {
+			continue
+		}
+		if !p.listed[id] {
+			return nil, false
+		}
+		guilds[id.String()] = true
+		for _, tmpl := range templates[id] {
+			counts[tmpl.ShortName] = 0
+		}
+	}
+	for k, stored := range p.stored {
+		if stored && guilds[k.guild] {
+			counts[k.template]++
+		}
+	}
+	return counts, len(guilds) > 0
+}
+
 // profileOwnersFromKeys maps the stored profile keys of a guild,
 // profiles/{guild}/{template}/{user}.json, to each user's templates. Keys of
 // templates the guild doesn't use are ignored.
@@ -103,8 +151,10 @@ func profileOwnersFromKeys(guildID string, keys []string, templates []string) ma
 func (b *Bot) loadProfileOwners(ctx context.Context, guildIDs []snowflake.ID) {
 	for _, guildID := range guildIDs {
 		var templates []string
+		shortNames := make(map[string]string)
 		for _, tmpl := range b.templates[guildID] {
 			templates = append(templates, tmpl.Name)
+			shortNames[tmpl.Name] = tmpl.ShortName
 		}
 		if len(templates) == 0 {
 			continue
@@ -132,11 +182,20 @@ func (b *Bot) loadProfileOwners(ctx context.Context, guildIDs []snowflake.ID) {
 		if p.listed == nil {
 			p.listed = make(map[snowflake.ID]bool)
 		}
+		if p.stored == nil {
+			p.stored = make(map[storedProfileKey]bool)
+		}
 		for userStr, tmpls := range owners {
 			// Anything recorded since the listing was taken is newer.
 			key := profileKey(guildStr, userStr)
 			if p.owners[key] == nil {
 				p.owners[key] = &profileOwner{templates: tmpls}
+			}
+			for _, tmpl := range tmpls {
+				k := storedProfileKey{guildStr, shortNames[tmpl], userStr}
+				if _, recorded := p.stored[k]; !recorded {
+					p.stored[k] = true
+				}
 			}
 		}
 		p.listed[guildID] = true

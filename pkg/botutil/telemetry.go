@@ -34,8 +34,9 @@ import (
 //	sadbox_job_*{job_name="gateway_ready"}   one success per 30s tick while
 //	    the gateway is ready: the bot's liveness signal
 //
-// plus http_client_* for peer_service discord, s3 and fetch. No
-// Discord ID, name or content goes into a label or a span attribute.
+// plus http_client_* for peer_service discord, s3 and fetch, and each bot's
+// own counts (its telemetry.go). No Discord ID, name or content goes into a
+// label or a span attribute.
 const scope = "github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 
 // gatewayReadyJob succeeds on every heartbeat tick that finds the gateway
@@ -72,6 +73,60 @@ var instruments = sync.OnceValues(func() (metric.Float64Histogram, metric.Int64C
 	}
 	return d, c
 })
+
+// Counter is a process-wide count exported as an observable counter, as
+// svc/telemetry's job runs are: every series it knows of, from Seed or Add,
+// is reported at every export, zeros included, so a series seeded at startup
+// reads 0 from the first export and its first increment is a step
+// increase() sees. One made in a package-level var, before telemetry.Start,
+// loses nothing to the global's delegation.
+type Counter struct {
+	mu     sync.Mutex
+	series map[attribute.Distinct]*counterSeries
+}
+
+type counterSeries struct {
+	attrs attribute.Set
+	n     int64
+}
+
+// NewCounter makes the counter called name; Prometheus adds _total.
+func NewCounter(name, unit, description string) *Counter {
+	c := &Counter{series: make(map[attribute.Distinct]*counterSeries)}
+	if _, err := otel.Meter(scope).Int64ObservableCounter(name,
+		metric.WithUnit(unit),
+		metric.WithDescription(description),
+		metric.WithInt64Callback(c.observe),
+	); err != nil {
+		otel.Handle(err)
+	}
+	return c
+}
+
+// Add adds n to the series of attrs.
+func (c *Counter) Add(n int64, attrs ...attribute.KeyValue) {
+	set := attribute.NewSet(attrs...)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s := c.series[set.Equivalent()]
+	if s == nil {
+		s = &counterSeries{attrs: set}
+		c.series[set.Equivalent()] = s
+	}
+	s.n += n
+}
+
+// Seed makes the series of attrs exported, at 0 until an Add.
+func (c *Counter) Seed(attrs ...attribute.KeyValue) { c.Add(0, attrs...) }
+
+func (c *Counter) observe(_ context.Context, o metric.Int64Observer) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range c.series {
+		o.Observe(s.n, metric.WithAttributeSet(s.attrs))
+	}
+	return nil
+}
 
 // RESTClient is disgo's default REST client (its 20s timeout), traced and
 // timed as calls to "discord".

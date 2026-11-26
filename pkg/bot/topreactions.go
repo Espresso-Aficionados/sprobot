@@ -232,6 +232,21 @@ func (st *starboardState) unlock()                        { st.mu.Unlock() }
 func (st *starboardState) getBlacklist() []snowflake.ID   { return st.Settings.Blacklist }
 func (st *starboardState) setBlacklist(bl []snowflake.ID) { st.Settings.Blacklist = bl }
 
+// entryCounts counts the entries with a post and those without, leaving out
+// deleted sources, whose posts are going. Caller holds mu.
+func (st *starboardState) entryCounts() (posted, pending int) {
+	for _, e := range st.Entries {
+		switch {
+		case e.SourceDeleted:
+		case e.StarboardMsgID != 0:
+			posted++
+		default:
+			pending++
+		}
+	}
+	return posted, pending
+}
+
 // startWork returns msgID's work record, creating it. Must be called with mu held.
 func (st *starboardState) startWork(msgID snowflake.ID) *starboardWork {
 	if st.work == nil {
@@ -778,6 +793,7 @@ func (b *Bot) createStarboardPost(ctx context.Context, guildID, msgID snowflake.
 		b.deleteStarboardPost(ctx, guildID, msgID, settings.OutputChannelID, sent.ID)
 		return postFailed
 	}
+	starboardPosts.Add(1)
 	if err := b.starboard.persist(ctx, guildID); err != nil {
 		b.Log.ErrorContext(ctx, "Failed to persist starboard after post", "guild_id", guildID, "error", err)
 	}

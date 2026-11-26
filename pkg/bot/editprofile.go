@@ -105,6 +105,7 @@ func (b *Bot) handleEditModalSubmit(ctx context.Context, e *events.ModalSubmitIn
 	existing, err := b.S3.FetchProfile(saveCtx, tmpl, guildStr, userStr)
 	if err != nil && !errors.Is(err, s3client.ErrNotFound) {
 		b.Log.ErrorContext(saveCtx, "Failed to fetch profile before saving", "user_id", userStr, "guild_id", guildStr, "error", err)
+		recordProfileEdit(tmpl, err)
 		b.ephemeralFollowup(ctx, e.Token(), profileLoadFailed)
 		return
 	}
@@ -129,11 +130,13 @@ func (b *Bot) handleEditModalSubmit(ctx context.Context, e *events.ModalSubmitIn
 	}
 
 	_, userErr, err := b.S3.SaveProfile(saveCtx, tmpl, guildStr, userStr, profile)
+	recordProfileEdit(tmpl, err)
 	if err != nil {
 		b.Log.ErrorContext(saveCtx, "Failed to save profile", "error", err)
 		b.ephemeralFollowup(ctx, e.Token(), "Oops! Something went wrong.")
 		return
 	}
+	b.profileStored(guildStr, tmpl.ShortName, userStr, true)
 
 	if e.Member() != nil {
 		b.profileSaved(guildStr, userStr, username)

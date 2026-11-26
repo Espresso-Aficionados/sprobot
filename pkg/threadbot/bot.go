@@ -120,6 +120,9 @@ func (b *Bot) Run() error {
 	defer b.Client.Close(ctx)
 
 	b.WaitForGuilds(start, 30*time.Second)
+	if _, err := b.registerStats(); err != nil {
+		b.Log.WarnContext(start, "Stats gauges off", "error", err)
+	}
 
 	if err := b.registerAllCommands(start); err != nil {
 		return errors.Join(fmt.Errorf("registering commands: %w", err), b.shutdown(start))
