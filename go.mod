@@ -12,7 +12,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/sadbox/svc v0.1.0
-	github.com/sadbox/svc/telemetry v0.1.6
+	github.com/sadbox/svc/telemetry v0.1.7
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
