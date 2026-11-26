@@ -12,6 +12,7 @@ import (
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/Espresso-Aficionados/sprobot/pkg/botutil"
 	"github.com/Espresso-Aficionados/sprobot/pkg/testutil"
 )
 
@@ -216,4 +217,17 @@ func keysOf[V any](m map[string]V) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// A resumed session sends no GuildReady: its allowed guilds are marked ready
+// from the handed-off session, so a late load checks them as after one.
+func TestSeedResumedGuilds(t *testing.T) {
+	b, _ := newFakeBot(t, &fakeDiscord{})
+	b.SetResumed(&botutil.GatewaySession{Guilds: []snowflake.ID{testGuildID, 1}})
+	b.seedResumedGuilds()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.readyGuilds[testGuildID] || b.readyGuilds[1] || len(b.readyGuilds) != 1 {
+		t.Fatalf("readyGuilds = %v, want the allowed guild alone", b.readyGuilds)
+	}
 }

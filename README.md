@@ -137,6 +137,7 @@ See `config/example.env` for the full list. Each program checks its whole enviro
 | `S3_KEY` / `S3_SECRET` / `S3_ENDPOINT` / `S3_BUCKET` | S3-compatible storage credentials (shared by all bots) |
 | `WEB_ENDPOINT` | Profile web URL base, ending in `/` (defaults to `https://bot.espressoaf.com/`; set to `http://localhost:8080/` for dev) |
 | `EGRESS_FETCH_GATEWAY` | The bots only, optional: the egress proxy's fetch gateway (plain `http://host:port`). When set, images from user-supplied URLs (profile and shortcut images) are fetched by the gateway, not by the bot. Unset: the bot fetches them itself |
+| `GATEWAY_SESSION_DIR` | The bots only, optional: an absolute directory where a stopping bot hands its gateway session to the next process, which resumes it, so events sent during a restart are replayed rather than lost (`pkg/botutil/session.go`). Unset (dev): every start identifies, as before |
 | `PORT` | Web server port (default 8080; the prod `sprobot-web` image sets `PORT=9001`) |
 
 ## Deployment

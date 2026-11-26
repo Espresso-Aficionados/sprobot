@@ -737,71 +737,76 @@ func (b *Bot) pruneMessageCache() {
 
 // loadCaches fills the caches from the cache dir, skipping expired messages.
 // New calls it before disgo starts, so nothing else uses the caches yet.
-func (b *Bot) loadCaches() {
+// loadCaches loads every persisted cache and reports whether all of them
+// loaded (a missing file is an empty cache). A resumed gateway session
+// depends on them: it sends no GUILD_CREATE to refill them.
+func (b *Bot) loadCaches() bool {
+	ok := true
 	now := time.Now()
 	expired := 0
-	loadCache(b, messageCacheFile, b.msgCache.cappedGroupedCache, func(m cachedMessage) (cachedMessage, snowflake.ID, snowflake.ID, bool) {
+	ok = loadCache(b, messageCacheFile, b.msgCache.cappedGroupedCache, func(m cachedMessage) (cachedMessage, snowflake.ID, snowflake.ID, bool) {
 		if messageExpired(m.ID, now) {
 			expired++
 			return m, 0, 0, false
 		}
 		return m, m.ChannelID, m.ID, botutil.GuildAllowed(m.GuildID)
-	})
+	}) && ok
 	// Nothing prunes the file while the bot is down. Rewrite it now rather
 	// than at the first save, which waits for the gateway.
 	if expired > 0 {
 		b.Log.Info("Dropped expired messages from the cache file", "removed", expired)
 		b.saveMessageCache()
 	}
-	loadCache(b, guildCacheFile, b.guildCache.cappedGroupedCache, func(g discord.CacheGuild) (discord.CacheGuild, snowflake.ID, snowflake.ID, bool) {
+	ok = loadCache(b, guildCacheFile, b.guildCache.cappedGroupedCache, func(g discord.CacheGuild) (discord.CacheGuild, snowflake.ID, snowflake.ID, bool) {
 		return g, 0, g.ID, true
-	})
+	}) && ok
 	// Members filed under anything but a served guild (see guildMemberCache)
 	// are dropped.
-	loadCache(b, memberCacheFile, b.memberCache, func(m discord.Member) (discord.Member, snowflake.ID, snowflake.ID, bool) {
+	ok = loadCache(b, memberCacheFile, b.memberCache, func(m discord.Member) (discord.Member, snowflake.ID, snowflake.ID, bool) {
 		return m, m.GuildID, m.User.ID, botutil.GuildAllowed(m.GuildID)
-	})
+	}) && ok
 	// Channels are an interface: UnmarshalChannel decodes the concrete type.
-	loadCache(b, channelCacheFile, b.channelCache.cappedGroupedCache, func(w discord.UnmarshalChannel) (discord.GuildChannel, snowflake.ID, snowflake.ID, bool) {
+	ok = loadCache(b, channelCacheFile, b.channelCache.cappedGroupedCache, func(w discord.UnmarshalChannel) (discord.GuildChannel, snowflake.ID, snowflake.ID, bool) {
 		ch, ok := w.Channel.(discord.GuildChannel)
 		if !ok {
 			return nil, 0, 0, false
 		}
 		return ch, 0, ch.ID(), true
-	})
-	loadCache(b, roleCacheFile, b.roleCache, func(r discord.Role) (discord.Role, snowflake.ID, snowflake.ID, bool) {
+	}) && ok
+	ok = loadCache(b, roleCacheFile, b.roleCache, func(r discord.Role) (discord.Role, snowflake.ID, snowflake.ID, bool) {
 		return r, r.GuildID, r.ID, true
-	})
-	loadCache(b, emojiCacheFile, b.emojiCache, func(e discord.Emoji) (discord.Emoji, snowflake.ID, snowflake.ID, bool) {
+	}) && ok
+	ok = loadCache(b, emojiCacheFile, b.emojiCache, func(e discord.Emoji) (discord.Emoji, snowflake.ID, snowflake.ID, bool) {
 		return e, e.GuildID, e.ID, true
-	})
-	loadCache(b, stickerCacheFile, b.stickerCache, func(s discord.Sticker) (discord.Sticker, snowflake.ID, snowflake.ID, bool) {
+	}) && ok
+	ok = loadCache(b, stickerCacheFile, b.stickerCache, func(s discord.Sticker) (discord.Sticker, snowflake.ID, snowflake.ID, bool) {
 		if s.GuildID == nil {
 			return s, 0, s.ID, true
 		}
 		return s, *s.GuildID, s.ID, true
-	})
-	loadCache(b, voiceStateCacheFile, b.voiceStateCache, func(vs discord.VoiceState) (discord.VoiceState, snowflake.ID, snowflake.ID, bool) {
+	}) && ok
+	ok = loadCache(b, voiceStateCacheFile, b.voiceStateCache, func(vs discord.VoiceState) (discord.VoiceState, snowflake.ID, snowflake.ID, bool) {
 		return vs, vs.GuildID, vs.UserID, true
-	})
-	loadCache(b, stageInstanceCacheFile, b.stageInstanceCache, func(s discord.StageInstance) (discord.StageInstance, snowflake.ID, snowflake.ID, bool) {
+	}) && ok
+	ok = loadCache(b, stageInstanceCacheFile, b.stageInstanceCache, func(s discord.StageInstance) (discord.StageInstance, snowflake.ID, snowflake.ID, bool) {
 		return s, s.GuildID, s.ID, true
-	})
-	loadCache(b, scheduledEventCacheFile, b.scheduledEventCache, func(e discord.GuildScheduledEvent) (discord.GuildScheduledEvent, snowflake.ID, snowflake.ID, bool) {
+	}) && ok
+	ok = loadCache(b, scheduledEventCacheFile, b.scheduledEventCache, func(e discord.GuildScheduledEvent) (discord.GuildScheduledEvent, snowflake.ID, snowflake.ID, bool) {
 		return e, e.GuildID, e.ID, true
-	})
-	loadCache(b, soundboardSoundCacheFile, b.soundboardSoundCache, func(s discord.SoundboardSound) (discord.SoundboardSound, snowflake.ID, snowflake.ID, bool) {
+	}) && ok
+	ok = loadCache(b, soundboardSoundCacheFile, b.soundboardSoundCache, func(s discord.SoundboardSound) (discord.SoundboardSound, snowflake.ID, snowflake.ID, bool) {
 		if s.GuildID == nil {
 			return s, 0, s.SoundID, true
 		}
 		return s, *s.GuildID, s.SoundID, true
-	})
+	}) && ok
+	return ok
 }
 
 // loadCache replaces c's contents with the items in file. entry turns each
 // decoded item into the entity and the group and ID to file it under, or
 // returns ok=false to skip it.
-func loadCache[D, T any](b *Bot, file string, c *cappedGroupedCache[T], entry func(D) (entity T, groupID, id snowflake.ID, ok bool)) {
+func loadCache[D, T any](b *Bot, file string, c *cappedGroupedCache[T], entry func(D) (entity T, groupID, id snowflake.ID, ok bool)) bool {
 	n, err := c.load(func(add func(groupID, id snowflake.ID, entity T)) error {
 		return readCacheFile(b.cacheDir, file, func(item D) {
 			if entity, groupID, id, ok := entry(item); ok {
@@ -811,9 +816,10 @@ func loadCache[D, T any](b *Bot, file string, c *cappedGroupedCache[T], entry fu
 	})
 	if err != nil {
 		b.Log.Error("Failed to load cache file", "file", file, "loaded", n, "error", err)
-		return
+		return false
 	}
 	b.Log.Info("Loaded cache file", "file", file, "count", n)
+	return true
 }
 
 // saveCaches prunes expired messages, then writes every persisted cache to

@@ -75,7 +75,9 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 			gateway.WithPresenceOpts(gateway.WithCustomActivity(botutil.PrivacyPolicyStatus)),
 			gateway.WithCloseHandler(b.OnGatewayClose),
 		),
+		bot.WithGatewayConfigOpts(b.GatewayResumeOpts()...),
 		bot.WithEventListenerFunc(b.OnReady),
+		bot.WithEventListenerFunc(b.OnResumed),
 		bot.WithEventListenerFunc(b.OnGuildJoin),
 		bot.WithEventListenerFunc(botutil.TraceEvent("onGuildReady", b.onGuildReady)),
 		bot.WithEventListenerFunc(botutil.TraceCommands(b.onCommand)),
@@ -90,7 +92,7 @@ func New(cfg envconfig.Bot) (*Bot, error) {
 		return nil, err
 	}
 
-	b.Client = client
+	b.SetClient(client)
 	return b, nil
 }
 
@@ -110,6 +112,7 @@ func (b *Bot) Run() error {
 		return err
 	}
 
+	b.seedResumedSession(start)
 	b.ServeHealth()
 	if err := b.OpenGateway(start); err != nil {
 		b.shutdown(start)
@@ -131,16 +134,41 @@ func (b *Bot) Run() error {
 	shutdownErr := b.WaitForShutdown("Threadbot")
 	stop, stopSpan := botutil.StartSpan("shutdown")
 	defer stopSpan.End()
-	b.shutdown(stop)
+	// No event arrives after this, so what is saved below is all the
+	// session's events did. The reposts that shutdown waits out need only
+	// REST.
+	handoff := b.HandOffGateway(stop, shutdownErr)
+	saveErr := b.shutdown(stop)
+	// A resume continues from exactly what was saved: only then.
+	b.SaveHandoff(stop, handoff, saveErr == nil)
 	return shutdownErr
 }
 
+// seedResumedSession sets up a resumed session as its READY and GuildReady
+// events would have: a resume sends neither. The session's start is its
+// own, so member counts fetched since then stay live; each guild's reminder
+// loops start, as on its GuildReady. Safe to repeat: if Discord refuses the
+// resume, those events follow and do it again.
+func (b *Bot) seedResumedSession(ctx context.Context) {
+	s := b.Resumed()
+	if s == nil {
+		return
+	}
+	b.mu.Lock()
+	b.sessionStart = s.StartedAt
+	b.mu.Unlock()
+	for _, id := range s.Guilds {
+		b.guildReady(ctx, id)
+	}
+}
+
 // shutdown stops the repost loops, waiting out reposts in flight, and saves
-// state. It runs before the client closes, which the reposts still need.
-func (b *Bot) shutdown(ctx context.Context) {
+// state, reporting whether a save failed (each failure is logged). It runs
+// before the client closes, which the reposts still need.
+func (b *Bot) shutdown(ctx context.Context) error {
 	close(b.stop)
 	b.stopAllReminderGoroutines()
-	_ = errors.Join(b.saveAllReminders(ctx), b.saveMemberCounts(ctx)) // each failure is logged
+	return errors.Join(b.saveAllReminders(ctx), b.saveMemberCounts(ctx))
 }
 
 func (b *Bot) onMessage(_ context.Context, e *events.MessageCreate) {

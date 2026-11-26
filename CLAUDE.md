@@ -198,6 +198,34 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
   report healthy only while the gateway is ready. A gateway close
   that disgo won't reconnect from (e.g. 4004 bad token, 4014 disallowed
   intents) makes the bot save, wait 10 minutes, and exit non-zero.
+- **Gateway session handoff** (`pkg/botutil/session.go`, on with
+  `GATEWAY_SESSION_DIR`): on SIGTERM a bot closes its gateway with 1012
+  first (`HandOffGateway`), waits for traced handlers still running, does
+  its saves, and writes `session.json` last (`SaveHandoff`); the next
+  process takes it (single use, refused past 60s from the close, Discord's
+  window being 60-120s) and resumes. A resume sends no READY or
+  GUILD_CREATE and replays missed events *before* RESUMED, so:
+  - whatever a bot does on GuildReady or READY that a resumed session
+    still needs is seeded from `Resumed()` **before** the gateway opens
+    (stickybot's ready guilds; threadbot's reminder loops and session
+    start), and must be safe to repeat: a refused resume falls back to
+    READY and GuildReady;
+  - handlers for a *new* session only (modlog's `resetAll`, forum
+    reminders' `forgetWaiting`, the deleted-channel checks) stay on
+    READY/GuildReady: a resume replays what they'd make up for;
+  - `GuildIDs()` adds the session's guilds (no guild cache on a resume),
+    and sprobot resumes only when every cache file loaded and hands off
+    only when every cache saved: its persisted caches are what a resume
+    continues from;
+  - a new event handler must go through `TraceEvent`/`Trace*`, which the
+    handoff counts, so no event is half-handled when the state is saved;
+  - an interaction replayed from the gap and already past Discord's 3s
+    answer deadline is skipped (`traceInteraction`): its handler would act,
+    fail to respond, and the user would likely try again;
+  - every bot hands off only when all its shutdown saves succeeded: a
+    resume continues from exactly what was saved.
+  disgo logs a refused resume at ERROR ("failed to reconnect gateway");
+  it identifies right after, and that line is expected.
 - **Never log a secret** (tokens, S3 keys): envconfig's problems name the
   variable, never its value.
 - **Telemetry** goes through `github.com/sadbox/svc/telemetry` (its README
