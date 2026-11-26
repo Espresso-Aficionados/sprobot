@@ -213,6 +213,10 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
   - handlers for a *new* session only (modlog's `resetAll`, forum
     reminders' `forgetWaiting`, the deleted-channel checks) stay on
     READY/GuildReady: a resume replays what they'd make up for;
+  - guilds out (unavailable or unready) at the handoff are marked unready
+    again before the gateway opens (`preRegister`), as disgo's READY
+    handler does: back from the outage, they dispatch GuildReady, not
+    GuildJoin;
   - `GuildIDs()` adds the session's guilds (no guild cache on a resume),
     and sprobot resumes only when every cache file loaded and hands off
     only when every cache saved: its persisted caches are what a resume

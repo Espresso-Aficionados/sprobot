@@ -60,10 +60,14 @@ func NewBaseBot(cfg envconfig.Bot) (*BaseBot, error) {
 	return b, nil
 }
 
-// SetClient sets the bot's client, once built (with GatewayResumeOpts).
+// SetClient sets the bot's client, once built (with GatewayResumeOpts), and
+// pre-registers a resumed session's pending guilds (see preRegister).
 func (b *BaseBot) SetClient(c *bot.Client) {
 	b.Client = c
 	b.checkResumedApp()
+	if b.resumed != nil {
+		preRegister(c.Caches, b.resumed.Pending)
+	}
 }
 
 // Heartbeat is the 30-second heartbeat tick: while the gateway is

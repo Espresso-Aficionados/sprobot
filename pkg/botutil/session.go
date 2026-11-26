@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
@@ -59,6 +60,10 @@ type GatewaySession struct {
 	// GUILD_CREATE, so a bot without persisted caches knows them only from
 	// here.
 	Guilds []snowflake.ID `json:"guilds"`
+	// Pending are the allowed guilds the bot is in but had no GUILD_CREATE
+	// for: unavailable (a Discord outage) or still unready. A resume
+	// marks them unready again (preRegister), as READY would.
+	Pending []snowflake.ID `json:"pending,omitempty"`
 }
 
 // takeSession reads dir's session file and removes it, so it is used at
@@ -259,6 +264,18 @@ func (b *BaseBot) HandOffGateway(ctx context.Context, shutdownErr error) *Gatewa
 		StartedAt:     b.sessionStarted(),
 		ClosedAt:      closed,
 		Guilds:        b.GuildIDs(),
+		Pending: unionAllowed(nil, slices.Concat(
+			b.Client.Caches.UnavailableGuildIDs(), b.Client.Caches.UnreadyGuildIDs())),
+	}
+}
+
+// preRegister marks the resumed session's pending guilds unready, as
+// disgo's READY handler marks every guild of a new session: a guild that
+// comes back from an outage then dispatches GuildReady, which starts its
+// loops, rather than GuildJoin. A resume sends no READY to do it.
+func preRegister(caches cache.Caches, pending []snowflake.ID) {
+	for _, id := range pending {
+		caches.SetGuildUnready(id, true)
 	}
 }
 
