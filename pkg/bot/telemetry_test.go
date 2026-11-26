@@ -86,7 +86,7 @@ func statPoints(t *testing.T, rec *telemetrytest.Recorder, name, key string) map
 	for _, p := range rec.Points(t, name) {
 		for _, kv := range p.Attrs.ToSlice() {
 			if string(kv.Key) != key {
-				t.Errorf("%s has label %s=%q", name, kv.Key, kv.Value.Emit())
+				t.Errorf("%s has label %s=%q", name, kv.Key, kv.Value.String())
 			}
 		}
 		out[p.Get(key)] = p.Value
