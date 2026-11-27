@@ -32,7 +32,7 @@ jobs:
           password: ${{ github.token }}
 
       - name: Tell Grafana what :latest is
-        uses: sadbox/ci/report-publish@v0.4.0
+        uses: sadbox/ci/report-publish@v0.5.0
         with:
           latest-of: >-
             ghcr.io/espresso-aficionados/sprobot
