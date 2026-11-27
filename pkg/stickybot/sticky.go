@@ -404,12 +404,15 @@ func (b *Bot) repostSticky(ctx context.Context, s *stickyMessage) bool {
 		// thread whose parent was deleted. In a goroutine, since dropping the
 		// sticky stops this loop, which waits for this repost to return.
 		go b.dropDeletedChannelSticky(context.WithoutCancel(ctx), s.GuildID, s.ChannelID)
+		reposts.Add(1, outcomeFailure)
 		return false
 	}
 	if err != nil {
 		b.Log.ErrorContext(ctx, "Failed to repost sticky after retries", "channel_id", s.ChannelID, "error", err)
+		reposts.Add(1, outcomeFailure)
 		return false
 	}
+	reposts.Add(1, outcomeSuccess)
 
 	b.mu.Lock()
 	s.LastMessageID = sent.ID

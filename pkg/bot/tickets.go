@@ -343,6 +343,7 @@ func (b *Bot) handleTicketOpen(ctx context.Context, e *events.ComponentInteracti
 	}
 
 	created = thread.ID()
+	ticketsOpened.Add(1)
 	respond(fmt.Sprintf("Your ticket has been created: <#%d>", thread.ID()))
 
 	b.Log.InfoContext(ctx, "Opened ticket", "guild_id", *guildID, "thread_id", thread.ID(), "user_id", userID, "ticket_num", ticketNum)

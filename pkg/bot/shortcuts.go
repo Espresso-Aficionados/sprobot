@@ -123,6 +123,7 @@ func (b *Bot) handleShortcut(ctx context.Context, e *events.ApplicationCommandIn
 	}
 
 	b.Log.InfoContext(ctx, "Shortcut used", "user_id", e.User().ID, "guild_id", *guildID, "shortcut", name)
+	shortcutUses.Add(1, shortcutAttr(name))
 
 	response = expandShortcutVars(response, e.User().ID)
 
@@ -414,6 +415,7 @@ func (b *Bot) handleShortcutConfigSetModal(ctx context.Context, e *events.ModalS
 		respond(fmt.Sprintf("Maximum of %d shortcuts reached.", maxShortcutsPerGuild))
 		return
 	}
+	shortcutUses.Seed(shortcutAttr(name))
 
 	if err := b.shortcuts.persist(ctx, *guildID); err != nil {
 		b.Log.ErrorContext(workCtx, "Failed to save shortcut data", "guild_id", *guildID, "error", err)

@@ -423,6 +423,10 @@ func (b *Bot) Run() error {
 	}
 
 	b.WaitForGuilds(start, 30*time.Second)
+	b.seedShortcutUses()
+	if _, err := b.registerStats(); err != nil {
+		b.Log.WarnContext(start, "Stats gauges off", "error", err)
+	}
 
 	b.ensureTicketPanels(start)
 	b.ensureSelfrolePanels(start)

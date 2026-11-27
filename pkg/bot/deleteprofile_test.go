@@ -33,8 +33,8 @@ func TestDeleteProfileImageKeepsFields(t *testing.T) {
 	putStored(t, fake, "images/1/Coffee Setup/2.png", []byte("png"))
 	putStored(t, fake, "images/1/Coffee Setup/3.png", []byte("another user"))
 
-	if got := b.deleteProfileImage(context.Background(), tmpl, "1", "2"); got != "Deleted!" {
-		t.Fatalf("reply = %q, want Deleted!", got)
+	if got, err := b.deleteProfileImage(context.Background(), tmpl, "1", "2"); got != "Deleted!" || err != nil {
+		t.Fatalf("reply = %q, %v; want Deleted!", got, err)
 	}
 
 	if hasObject(fake, "images/1/Coffee Setup/2.png") {
@@ -62,8 +62,8 @@ func TestDeleteProfileImageOnlyImageDeletesProfile(t *testing.T) {
 	putStored(t, fake, sprobot.ProfileS3Path("1", tmpl.Name, "2"), body)
 	putStored(t, fake, "images/1/Coffee Setup/2.webp", []byte("webp"))
 
-	if got := b.deleteProfileImage(context.Background(), tmpl, "1", "2"); got != "Deleted!" {
-		t.Fatalf("reply = %q, want Deleted!", got)
+	if got, err := b.deleteProfileImage(context.Background(), tmpl, "1", "2"); got != "Deleted!" || err != nil {
+		t.Fatalf("reply = %q, %v; want Deleted!", got, err)
 	}
 	if n := objectCount(fake); n != 0 {
 		t.Errorf("%d objects left, want the profile and its image both deleted", n)

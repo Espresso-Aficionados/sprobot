@@ -303,6 +303,24 @@ func (s *guildStateStore[T]) served() map[snowflake.ID]*T {
 	return states
 }
 
+// servedLoaded is served, and whether this instance serves a guild and
+// every served guild's state loaded: a total over the states is short while
+// one failed, and means nothing before the gateway says which guilds.
+func (s *guildStateStore[T]) servedLoaded() (map[snowflake.ID]*T, bool) {
+	states := s.served()
+	s.mu.RLock()
+	failed := maps.Clone(s.failed)
+	s.mu.RUnlock()
+	if s.guilds != nil {
+		guildIDs := s.guilds()
+		if len(guildIDs) == 0 {
+			return nil, false
+		}
+		maps.DeleteFunc(failed, func(guildID snowflake.ID, _ bool) bool { return !slices.Contains(guildIDs, guildID) })
+	}
+	return states, len(failed) == 0
+}
+
 // pruneCorruptBackups deletes the copies fetch made of undecodable state once
 // they are older than corruptRetention. Keys it can't date are left alone.
 func pruneCorruptBackups(ctx context.Context, s3 *s3client.Client, log *slog.Logger, now time.Time) error {

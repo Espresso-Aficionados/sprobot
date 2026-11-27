@@ -86,6 +86,7 @@ dependency is entirely on the **member events** and the member cache they fill.
 |---|---|---|
 | Member-join log, welcome DM, auto-role on join | `GUILD_MEMBER_ADD` | `onMemberJoin`, `pkg/bot/autorole.go`; `pkg/bot/welcome.go` |
 | Member-leave log | `GUILD_MEMBER_REMOVE` | `onMemberLeave`, `pkg/bot/eventlog.go` |
+| Server member count metric (`sprobot_members`): one number, the served guilds' `member_count` summed. It comes from `GUILD_CREATE` (no intent), but disgo keeps it current from `GUILD_MEMBER_ADD`/`GUILD_MEMBER_REMOVE`. No member or ID is exported, and no REST call is made. This is a new use of the approved intent, approved by the maintainer on 2026-11-26. | `GUILD_MEMBER_ADD`, `GUILD_MEMBER_REMOVE` (disgo's guild cache) | `memberCount`, `pkg/bot/telemetry.go` |
 | Nickname-change log | `GUILD_MEMBER_UPDATE` + cached previous member | `onMemberUpdate`, `pkg/bot/eventlog.go` |
 | Temp role detected on role add | `GUILD_MEMBER_UPDATE` | `checkTempRolesOnMemberUpdate`, `pkg/bot/temprole.go` |
 | Temp-role expiry mod-log post | Member cache, for the user. The role removal itself doesn't depend on it, but the post is skipped if the member isn't cached. | `pkg/bot/temprole.go` |

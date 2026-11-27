@@ -16,6 +16,7 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/sadbox/svc/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Espresso-Aficionados/sprobot/pkg/telemetrytest"
@@ -258,4 +259,30 @@ func TestCountEvents(t *testing.T) {
 		}
 	}
 	t.Error("no count for event GuildMemberLeave")
+}
+
+// A seeded series reads 0 before its first Add, and each label set is its
+// own series.
+func TestCounter(t *testing.T) {
+	rec := telemetrytest.Install(t)
+	c := NewCounter("test.counter", "{thing}", "Things.")
+	ok, failed := attribute.String("outcome", "success"), attribute.String("outcome", "failure")
+	c.Seed(ok)
+	c.Seed(failed)
+	got := func() map[string]float64 {
+		out := map[string]float64{}
+		for _, p := range rec.Points(t, "test.counter") {
+			out[p.Get("outcome")] = p.Value
+		}
+		return out
+	}
+	if g := got(); len(g) != 2 || g["success"] != 0 || g["failure"] != 0 {
+		t.Fatalf("seeded = %v, want both outcomes at 0", g)
+	}
+	c.Add(1, ok)
+	c.Add(2, ok)
+	c.Seed(ok)
+	if g := got(); g["success"] != 3 || g["failure"] != 0 {
+		t.Errorf("after adds = %v, want success 3, failure 0", g)
+	}
 }

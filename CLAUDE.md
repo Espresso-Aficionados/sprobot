@@ -268,9 +268,18 @@ go build ./... && go vet ./... && go test -race ./...   # what CI runs, plus a g
     `componentNames`/`modalNames` in `pkg/bot/telemetry.go`; a new route's
     prefix goes there, else it is `other`). Gateway events are counted by
     disgo type (`botutil.CountEvents`).
+  - **Feature counts** (profiles, members, starboard, tickets, stickies, reminders)
+    are listed in each bot's `telemetry.go`: counters are a
+    `botutil.Counter` (observable, its fixed series seeded so they read 0
+    from the first export), gauges are read from state at export
+    (`registerStats`, called in `Run`), summed over the guilds the instance
+    serves and left out while one of them is unloaded.
   - **No Discord ID, name, message content, custom ID or request data in a
     span attribute or metric label**; label values are a small fixed set.
-    Test with `pkg/telemetrytest`.
+    The one exception is `sprobot_shortcut_uses_total{shortcut}`: a
+    shortcut's name, staff-written config (`/config shortcuts`), counted
+    only once it matched a configured shortcut, and capped at 50 names a
+    process (the rest `other`). Test with `pkg/telemetrytest`.
 - **Slash commands are registered per guild**, not globally.
 - **Component custom IDs** for sprobot are routed in
   `handleComponentInteraction` (`pkg/bot/deleteprofile.go`).

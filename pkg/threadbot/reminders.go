@@ -600,6 +600,7 @@ func (b *Bot) repostReminder(ctx context.Context, r *threadReminder) bool {
 	// would start a repost loop between bots.
 	if r.LastMessageID != 0 && (b.reminderInBuffer(ctx, r) || botutil.OnlyBotsAfter(ctx, b.Client.Rest, r.ChannelID, r.LastMessageID, b.Log)) {
 		if b.editReminder(ctx, r, *embed) {
+			remindersSent.Add(1, actionEdited)
 			return true
 		}
 		// Edit failed; fall through to delete+repost
@@ -619,6 +620,7 @@ func (b *Bot) repostReminder(ctx context.Context, r *threadReminder) bool {
 		b.Log.ErrorContext(ctx, "Failed to repost thread reminder after retries", "channel_id", r.ChannelID, "error", err)
 		return false
 	}
+	remindersSent.Add(1, actionPosted)
 
 	b.mu.Lock()
 	r.LastMessageID = sent.ID
